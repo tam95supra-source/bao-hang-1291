@@ -1,0 +1,62 @@
+name: Bootstrap source V1
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - bootstrap-source.zip
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "c5de828cad0c2879d9999e15801461b7066d5d0a970b328f8a0ffa2de54c847c  bootstrap-source.zip" | sha256sum -c -
+
+      - name: Import source baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .bootstrap-extracted
+          mkdir .bootstrap-extracted
+          unzip -q -o bootstrap-source.zip -d .bootstrap-extracted
+          test -f .bootstrap-extracted/app/build.gradle.kts
+          test -f .bootstrap-extracted/.github/workflows/ci.yml
+          cp -a .bootstrap-extracted/. ./
+          rm -rf .bootstrap-extracted bootstrap-source.zip
+          rm -f .github/workflows/bootstrap-source.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Import Báo hàng 1291 source V1 baseline"
+          git push origin HEAD:main
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Unit test and assemble debug APK
+        run: gradle --no-daemon testDebugUnitTest assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: bao-hang-1291-debug-bootstrap
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 1
