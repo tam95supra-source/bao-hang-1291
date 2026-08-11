@@ -1,23 +1,23 @@
-name: Production signing bootstrap
+name: Production signing rewrap
 
 on:
   push:
     branches: [main]
     paths:
-      - 'ops/signing-bootstrap.request'
+      - 'ops/signing-rewrap.request'
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: production-signing-bootstrap
+  group: production-signing-rewrap
   cancel-in-progress: false
 
 jobs:
-  bootstrap-signing:
+  rewrap-signing:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     env:
       FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
@@ -31,111 +31,64 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: gradle/actions/setup-gradle@v6
-        with:
-          gradle-version: '8.9'
-          cache-disabled: true
-
-      - name: Validate bootstrap prerequisites
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "${FIREBASE_SERVICE_ACCOUNT:-}" || { echo 'Missing FIREBASE_SERVICE_ACCOUNT' >&2; exit 1; }
-          test -n "${SUPABASE_ACCESS_TOKEN:-}" || { echo 'Missing SUPABASE_ACCESS_TOKEN' >&2; exit 1; }
-          test -s ops/signing-backup-transport-public.pem || { echo 'Missing backup transport public key' >&2; exit 1; }
-          if test -e signing/production-signing.bundle.enc; then
-            echo 'Permanent signing bundle already exists; refusing to generate a second production key.' >&2
-            exit 1
-          fi
-
-      - name: Generate, build, verify and seal permanent production key
+      - name: Rewrap the existing key without key rotation
         shell: bash
         run: |
           set -euo pipefail
           umask 077
-          work="$RUNNER_TEMP/signing-bootstrap"
-          mkdir -p "$work/plain" signing
+          test -s signing/production-signing.bundle.enc
+          test -s signing/production-cert-sha256.txt
+          test -n "${FIREBASE_SERVICE_ACCOUNT:-}"
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
 
-          store_pass="$(openssl rand -base64 36 | tr -d '\n')"
-          key_pass="$store_pass"
-          backup_pass="$(openssl rand -hex 32)"
-          key_alias='bao-hang-1291-production'
-          keystore="$work/plain/bao-hang-1291-production.p12"
+          work="$RUNNER_TEMP/signing-rewrap"
+          mkdir -p "$work/plain"
 
-          echo "::add-mask::$store_pass"
-          echo "::add-mask::$key_pass"
-          echo "::add-mask::$backup_pass"
+          old_wrap_key="$({ printf '%s\0' "$FIREBASE_SERVICE_ACCOUNT"; printf '%s\0' "$SUPABASE_ACCESS_TOKEN"; printf '%s' "$GITHUB_REPOSITORY"; } | sha256sum | awk '{print $1}')"
+          echo "::add-mask::$old_wrap_key"
+          OLD_WRAP_KEY="$old_wrap_key" openssl enc -d -aes-256-cbc -pbkdf2 -iter 250000 -md sha256 \
+            -pass env:OLD_WRAP_KEY \
+            -in signing/production-signing.bundle.enc \
+            -out "$work/signing.tar"
 
-          keytool -genkeypair \
-            -keystore "$keystore" \
+          tar -C "$work/plain" -xf "$work/signing.tar"
+          test -s "$work/plain/bao-hang-1291-production.p12"
+          test -s "$work/plain/signing.properties"
+          source "$work/plain/signing.properties"
+          echo "::add-mask::$RELEASE_STORE_PASSWORD"
+          echo "::add-mask::$RELEASE_KEY_PASSWORD"
+
+          actual_fingerprint="$(keytool -list -v \
+            -keystore "$work/plain/bao-hang-1291-production.p12" \
             -storetype PKCS12 \
-            -storepass "$store_pass" \
-            -keypass "$key_pass" \
-            -alias "$key_alias" \
-            -keyalg RSA \
-            -keysize 4096 \
-            -validity 36500 \
-            -dname 'CN=Bao Hang 1291 Production'
+            -storepass "$RELEASE_STORE_PASSWORD" \
+            -alias "$RELEASE_KEY_ALIAS" 2>/dev/null \
+            | sed -n 's/^.*SHA256: //p' | head -n1 \
+            | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')"
+          pinned_fingerprint="$(tr -d '[:space:]' < signing/production-cert-sha256.txt | tr '[:upper:]' '[:lower:]')"
+          [[ "$actual_fingerprint" =~ ^[0-9a-f]{64}$ ]]
+          test "$actual_fingerprint" = "$pinned_fingerprint"
 
-          printf '%s\n' \
-            "RELEASE_STORE_PASSWORD=$store_pass" \
-            "RELEASE_KEY_ALIAS=$key_alias" \
-            "RELEASE_KEY_PASSWORD=$key_pass" \
-            > "$work/plain/signing.properties"
+          firebase_private_key="$(jq -er '.private_key' <<<"$FIREBASE_SERVICE_ACCOUNT")"
+          new_wrap_key="$({ printf '%s\0' "$firebase_private_key"; printf '%s' "$GITHUB_REPOSITORY"; } | sha256sum | awk '{print $1}')"
+          echo "::add-mask::$new_wrap_key"
 
-          tar -C "$work/plain" -cf "$work/production-signing.tar" \
-            bao-hang-1291-production.p12 signing.properties
+          NEW_WRAP_KEY="$new_wrap_key" openssl enc -aes-256-cbc -salt -pbkdf2 -iter 250000 -md sha256 \
+            -pass env:NEW_WRAP_KEY \
+            -in "$work/signing.tar" \
+            -out "$work/production-signing.bundle.enc"
 
-          wrap_key="$({ printf '%s\0' "$FIREBASE_SERVICE_ACCOUNT"; printf '%s\0' "$SUPABASE_ACCESS_TOKEN"; printf '%s' "$GITHUB_REPOSITORY"; } | sha256sum | awk '{print $1}')"
-          echo "::add-mask::$wrap_key"
-          WRAP_KEY="$wrap_key" openssl enc -aes-256-cbc -salt -pbkdf2 -iter 250000 -md sha256 \
-            -pass env:WRAP_KEY \
-            -in "$work/production-signing.tar" \
-            -out signing/production-signing.bundle.enc
+          NEW_WRAP_KEY="$new_wrap_key" openssl enc -d -aes-256-cbc -pbkdf2 -iter 250000 -md sha256 \
+            -pass env:NEW_WRAP_KEY \
+            -in "$work/production-signing.bundle.enc" \
+            -out "$work/verify.tar"
+          cmp -s "$work/signing.tar" "$work/verify.tar"
 
-          BACKUP_PASS="$backup_pass" openssl enc -aes-256-cbc -salt -pbkdf2 -iter 250000 -md sha256 \
-            -pass env:BACKUP_PASS \
-            -in "$work/production-signing.tar" \
-            -out "$RUNNER_TEMP/production-signing-backup.bundle.enc"
-          printf '%s' "$backup_pass" | openssl pkeyutl -encrypt \
-            -pubin -inkey ops/signing-backup-transport-public.pem \
-            -pkeyopt rsa_padding_mode:oaep \
-            -pkeyopt rsa_oaep_md:sha256 \
-            -out "$RUNNER_TEMP/production-signing-backup.key.rsa"
-
-          RELEASE_STORE_FILE="$keystore" \
-          RELEASE_STORE_PASSWORD="$store_pass" \
-          RELEASE_KEY_ALIAS="$key_alias" \
-          RELEASE_KEY_PASSWORD="$key_pass" \
-            gradle --no-daemon testReleaseUnitTest assembleRelease \
-              -PVERSION_NAME=1.0.0 -PVERSION_CODE=1
-
-          APK='app/build/outputs/apk/release/app-release.apk'
-          test -s "$APK"
-          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
-          test -x "$APKSIGNER"
-          "$APKSIGNER" verify --verbose --print-certs "$APK" | tee "$RUNNER_TEMP/apksigner.txt"
-          fingerprint="$(sed -n 's/^.*certificate SHA-256 digest: //p' "$RUNNER_TEMP/apksigner.txt" | head -n 1 | tr '[:upper:]' '[:lower:]' | tr -d ':[:space:]')"
-          [[ "$fingerprint" =~ ^[0-9a-f]{64}$ ]]
-          printf '%s\n' "$fingerprint" > signing/production-cert-sha256.txt
-          sha256sum "$APK" | tee "$RUNNER_TEMP/apk-sha256.txt"
-          cp "$APK" "$RUNNER_TEMP/bao-hang-1291-production-v1.0.0.apk"
+          mv "$work/production-signing.bundle.enc" signing/production-signing.bundle.enc
+          printf '%s\n' 'firebase-service-account-private-key-v1' > signing/wrap-scheme.txt
 
           git config user.name 'bao-hang-1291-release-bot'
           git config user.email 'actions@users.noreply.github.com'
-          git add signing/production-signing.bundle.enc signing/production-cert-sha256.txt
-          git commit -m 'Bootstrap permanent production signing key'
+          git add signing/production-signing.bundle.enc signing/wrap-scheme.txt
+          git commit -m 'Rewrap permanent production signing bundle'
           git push origin HEAD:main
-
-      - name: Upload encrypted recovery package and verified candidate APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: bao-hang-1291-production-signing-bootstrap
-          path: |
-            ${{ runner.temp }}/production-signing-backup.bundle.enc
-            ${{ runner.temp }}/production-signing-backup.key.rsa
-            ${{ runner.temp }}/bao-hang-1291-production-v1.0.0.apk
-            ${{ runner.temp }}/apk-sha256.txt
-            signing/production-cert-sha256.txt
-          retention-days: 1
-          if-no-files-found: error
