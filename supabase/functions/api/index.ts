@@ -208,7 +208,10 @@ async function syncSheet() {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ secret, events }),
   });
-  if (!response.ok) throw new Error(`Google Sheet ${response.status}: ${await response.text()}`);
+  const responseText = await response.text();
+  if (!response.ok) throw new Error(`Google Sheet ${response.status}: ${responseText}`);
+  const sheetResult = JSON.parse(responseText) as { ok?: boolean; error?: string };
+  if (sheetResult.ok !== true) throw new Error(`Google Sheet từ chối đồng bộ: ${sheetResult.error ?? "Không rõ lỗi"}`);
   const ids = events.map((event) => event.id);
   await admin.from("sheet_export_queue").update({ exported_at: new Date().toISOString() }).in("id", ids);
   const { count } = await admin.from("sheet_export_queue").select("id", { count: "exact", head: true }).is("exported_at", null);
