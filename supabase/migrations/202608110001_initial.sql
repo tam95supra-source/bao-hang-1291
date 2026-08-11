@@ -420,11 +420,18 @@ create policy release_read on public.app_releases for select to authenticated us
 revoke all on all tables in schema public from anon, authenticated;
 grant select on public.profiles to authenticated;
 grant select on public.app_releases to authenticated;
+-- SECURITY DEFINER helpers must not be directly callable by client roles.
+revoke all on function public.current_role() from public, anon, authenticated;
+revoke all on function public.is_invent_admin() from public, anon, authenticated;
+revoke all on function public.issue_json(public.issues) from public, anon, authenticated;
 revoke all on function public.report_shortage_atomic(text,uuid,text) from public, anon, authenticated;
 revoke all on function public.update_issue_atomic(uuid,uuid,text) from public, anon, authenticated;
 revoke all on function public.process_sla() from public, anon, authenticated;
 revoke all on function public.purge_old_data() from public, anon, authenticated;
 revoke all on function public.configure_automation(text,text) from public, anon, authenticated;
+grant execute on function public.current_role() to service_role;
+grant execute on function public.is_invent_admin() to service_role;
+grant execute on function public.issue_json(public.issues) to service_role;
 grant execute on function public.report_shortage_atomic(text,uuid,text) to service_role;
 grant execute on function public.update_issue_atomic(uuid,uuid,text) to service_role;
 grant execute on function public.process_sla() to service_role;
