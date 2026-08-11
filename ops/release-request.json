@@ -1,0 +1,8 @@
+{
+  "action": "validate",
+  "channel": "stable",
+  "versionName": "1.0.0",
+  "versionCode": 1,
+  "mandatory": false,
+  "releaseNotes": "Technical validation only; do not publish."
+}
