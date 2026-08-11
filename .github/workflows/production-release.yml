@@ -1,0 +1,249 @@
+name: Production OTA release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/release-request.json'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: production-ota-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.9'
+          cache-disabled: true
+
+      - name: Validate release request and version monotonicity
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request='ops/release-request.json'
+          test -s "$request"
+          jq -e . "$request" >/dev/null
+
+          channel="$(jq -er '.channel' "$request")"
+          version_name="$(jq -er '.versionName' "$request")"
+          version_code="$(jq -er '.versionCode' "$request")"
+          mandatory="$(jq -er '.mandatory' "$request")"
+
+          test "$channel" = 'stable' || { echo 'Only the stable channel is enabled until beta policy is approved.' >&2; exit 1; }
+          [[ "$version_name" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$version_code" =~ ^[1-9][0-9]*$ ]]
+          jq -e '.mandatory | type == "boolean"' "$request" >/dev/null
+          jq -e '(.releaseNotes // "") | type == "string"' "$request" >/dev/null
+
+          tag="stable-v$version_name"
+          apk_name="bao-hang-1291-stable-$version_name.apk"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; refusing overwrite." >&2
+            exit 1
+          fi
+
+          work="$RUNNER_TEMP/release-request"
+          mkdir -p "$work/previous"
+          previous_tag="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name' 2>/dev/null || true)"
+          if test -n "$previous_tag"; then
+            gh release download "$previous_tag" --pattern 'release-manifest.json' --dir "$work/previous"
+            previous_code="$(jq -er '.versionCode' "$work/previous/release-manifest.json")"
+            [[ "$previous_code" =~ ^[0-9]+$ ]]
+            (( version_code > previous_code )) || {
+              echo "versionCode must be greater than current stable $previous_code" >&2
+              exit 1
+            }
+          fi
+
+          {
+            echo "channel=$channel"
+            echo "version_name=$version_name"
+            echo "version_code=$version_code"
+            echo "mandatory=$mandatory"
+            echo "tag=$tag"
+            echo "apk_name=$apk_name"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore and verify permanent signing key
+        id: signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test -s signing/production-signing.bundle.enc
+          test -s signing/production-cert-sha256.txt
+          test "$(cat signing/wrap-scheme.txt)" = 'firebase-service-account-private-key-v1'
+          test -n "${FIREBASE_SERVICE_ACCOUNT:-}"
+
+          work="$RUNNER_TEMP/production-signing"
+          mkdir -p "$work/plain"
+          firebase_private_key="$(jq -er '.private_key' <<<"$FIREBASE_SERVICE_ACCOUNT")"
+          wrap_key="$({ printf '%s\0' "$firebase_private_key"; printf '%s' "$GITHUB_REPOSITORY"; } | sha256sum | awk '{print $1}')"
+          echo "::add-mask::$wrap_key"
+
+          WRAP_KEY="$wrap_key" openssl enc -d -aes-256-cbc -pbkdf2 -iter 250000 -md sha256 \
+            -pass env:WRAP_KEY \
+            -in signing/production-signing.bundle.enc \
+            -out "$work/signing.tar"
+          tar -C "$work/plain" -xf "$work/signing.tar"
+          test -s "$work/plain/bao-hang-1291-production.p12"
+          test -s "$work/plain/signing.properties"
+
+          source "$work/plain/signing.properties"
+          echo "::add-mask::$RELEASE_STORE_PASSWORD"
+          echo "::add-mask::$RELEASE_KEY_PASSWORD"
+
+          pinned="$(tr -d '[:space:]' < signing/production-cert-sha256.txt | tr '[:upper:]' '[:lower:]')"
+          actual="$(keytool -list -v \
+            -keystore "$work/plain/bao-hang-1291-production.p12" \
+            -storetype PKCS12 \
+            -storepass "$RELEASE_STORE_PASSWORD" \
+            -alias "$RELEASE_KEY_ALIAS" 2>/dev/null \
+            | sed -n 's/^.*SHA256: //p' | head -n1 \
+            | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')"
+          [[ "$pinned" =~ ^[0-9a-f]{64}$ ]]
+          test "$actual" = "$pinned"
+
+          {
+            echo "store_file=$work/plain/bao-hang-1291-production.p12"
+            echo "key_alias=$RELEASE_KEY_ALIAS"
+            echo "pinned_fingerprint=$pinned"
+          } >> "$GITHUB_OUTPUT"
+
+          # Passwords deliberately remain inside this step and are never exported as outputs.
+          printf '%s' "$RELEASE_STORE_PASSWORD" > "$RUNNER_TEMP/release-store-password"
+          printf '%s' "$RELEASE_KEY_PASSWORD" > "$RUNNER_TEMP/release-key-password"
+          chmod 600 "$RUNNER_TEMP/release-store-password" "$RUNNER_TEMP/release-key-password"
+
+      - name: Test, build, sign and verify APK
+        id: build
+        shell: bash
+        env:
+          RELEASE_STORE_FILE: ${{ steps.signing.outputs.store_file }}
+          RELEASE_KEY_ALIAS: ${{ steps.signing.outputs.key_alias }}
+          VERSION_NAME: ${{ steps.request.outputs.version_name }}
+          VERSION_CODE: ${{ steps.request.outputs.version_code }}
+          APK_NAME: ${{ steps.request.outputs.apk_name }}
+          PINNED_FINGERPRINT: ${{ steps.signing.outputs.pinned_fingerprint }}
+        run: |
+          set -euo pipefail
+          RELEASE_STORE_PASSWORD="$(cat "$RUNNER_TEMP/release-store-password")"
+          RELEASE_KEY_PASSWORD="$(cat "$RUNNER_TEMP/release-key-password")"
+          echo "::add-mask::$RELEASE_STORE_PASSWORD"
+          echo "::add-mask::$RELEASE_KEY_PASSWORD"
+
+          RELEASE_STORE_PASSWORD="$RELEASE_STORE_PASSWORD" \
+          RELEASE_KEY_PASSWORD="$RELEASE_KEY_PASSWORD" \
+            gradle --no-daemon testReleaseUnitTest assembleRelease \
+              -PVERSION_NAME="$VERSION_NAME" -PVERSION_CODE="$VERSION_CODE"
+
+          apk='app/build/outputs/apk/release/app-release.apk'
+          test -s "$apk"
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n1)"
+          aapt="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n1)"
+          test -x "$apksigner"
+          test -x "$aapt"
+
+          "$apksigner" verify --verbose --print-certs "$apk" | tee "$RUNNER_TEMP/apksigner.txt"
+          actual_fingerprint="$(sed -n 's/^.*certificate SHA-256 digest: //p' "$RUNNER_TEMP/apksigner.txt" | head -n1 | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')"
+          test "$actual_fingerprint" = "$PINNED_FINGERPRINT"
+
+          package_line="$("$aapt" dump badging "$apk" | head -n1)"
+          package_name="$(sed -n "s/.*name='\([^']*\)'.*/\1/p" <<<"$package_line")"
+          apk_version_code="$(sed -n "s/.*versionCode='\([^']*\)'.*/\1/p" <<<"$package_line")"
+          apk_version_name="$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" <<<"$package_line")"
+          test "$package_name" = 'vn.pickpack1291.baohang'
+          test "$apk_version_code" = "$VERSION_CODE"
+          test "$apk_version_name" = "$VERSION_NAME"
+
+          release_dir="$RUNNER_TEMP/release-assets"
+          mkdir -p "$release_dir"
+          cp "$apk" "$release_dir/$APK_NAME"
+          apk_sha256="$(sha256sum "$release_dir/$APK_NAME" | awk '{print $1}')"
+          printf '%s\n' "$apk_sha256" > "$RUNNER_TEMP/release-apk-sha256"
+          echo "release_dir=$release_dir" >> "$GITHUB_OUTPUT"
+          echo "apk_sha256=$apk_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Create and publish verified stable OTA release
+        shell: bash
+        env:
+          VERSION_NAME: ${{ steps.request.outputs.version_name }}
+          VERSION_CODE: ${{ steps.request.outputs.version_code }}
+          MANDATORY: ${{ steps.request.outputs.mandatory }}
+          TAG: ${{ steps.request.outputs.tag }}
+          APK_NAME: ${{ steps.request.outputs.apk_name }}
+          RELEASE_DIR: ${{ steps.build.outputs.release_dir }}
+          APK_SHA256: ${{ steps.build.outputs.apk_sha256 }}
+          SIGNER_SHA256: ${{ steps.signing.outputs.pinned_fingerprint }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/publish-release"
+          mkdir -p "$work/published"
+          notes="$work/release-notes.txt"
+          jq -r '.releaseNotes // ""' ops/release-request.json > "$notes"
+          if ! test -s "$notes"; then
+            printf '%s\n' "Báo hàng 1291 Stable $VERSION_NAME" > "$notes"
+          fi
+
+          apk_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$APK_NAME"
+          manifest="$RELEASE_DIR/release-manifest.json"
+          jq -n \
+            --argjson versionCode "$VERSION_CODE" \
+            --arg versionName "$VERSION_NAME" \
+            --arg apkUrl "$apk_url" \
+            --arg sha256 "$APK_SHA256" \
+            --argjson mandatory "$MANDATORY" \
+            --arg releaseNotes "$(cat "$notes")" \
+            --arg signerSha256 "$SIGNER_SHA256" \
+            '{versionCode:$versionCode,versionName:$versionName,apkUrl:$apkUrl,sha256:$sha256,mandatory:$mandatory,releaseNotes:$releaseNotes,signerSha256:$signerSha256}' \
+            > "$manifest"
+          jq -e . "$manifest" >/dev/null
+
+          cleanup_failed_release() {
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              gh release delete "$TAG" --cleanup-tag --yes >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup_failed_release ERR
+
+          gh release create "$TAG" \
+            "$RELEASE_DIR/$APK_NAME" \
+            "$manifest" \
+            --target "$GITHUB_SHA" \
+            --title "Báo hàng 1291 Stable $VERSION_NAME" \
+            --notes-file "$notes"
+
+          gh release download "$TAG" --pattern "$APK_NAME" --dir "$work/published"
+          gh release download "$TAG" --pattern 'release-manifest.json' --dir "$work/published"
+          published_sha="$(sha256sum "$work/published/$APK_NAME" | awk '{print $1}')"
+          test "$published_sha" = "$APK_SHA256"
+          cmp -s "$manifest" "$work/published/release-manifest.json"
+
+          latest_tag=''
+          for _ in 1 2 3 4 5; do
+            latest_tag="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name' 2>/dev/null || true)"
+            test "$latest_tag" = "$TAG" && break
+            sleep 2
+          done
+          test "$latest_tag" = "$TAG"
+          trap - ERR
