@@ -17,23 +17,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.9'
+          cache-disabled: true
       - name: Unit test and assemble debug APK
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://example.supabase.co' }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || 'placeholder-anon-key' }}
-          FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID || '1:000000000000:android:0000000000000000' }}
-          FIREBASE_SENDER_ID: ${{ secrets.FIREBASE_SENDER_ID || '000000000000' }}
-          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID || 'bao-hang-1291-placeholder' }}
-          FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY || 'placeholder-api-key' }}
-          UPDATE_MANIFEST_URL: ${{ secrets.UPDATE_MANIFEST_URL || 'https://example.invalid/release-manifest.json' }}
         run: gradle --no-daemon testDebugUnitTest assembleDebug
       - uses: actions/upload-artifact@v4
         if: success()
