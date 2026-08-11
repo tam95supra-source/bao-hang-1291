@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="navy_900">#082A4A</color>
+    <color name="navy_700">#0B4A75</color>
+    <color name="teal_500">#0E9F91</color>
+    <color name="amber_500">#FFB000</color>
+    <color name="red_600">#D92D20</color>
+    <color name="green_600">#118D57</color>
+    <color name="blue_600">#1D63D4</color>
+    <color name="surface">#F5F7FA</color>
+    <color name="white">#FFFFFF</color>
+    <color name="text_primary">#17202A</color>
+    <color name="text_secondary">#51606F</color>
+</resources>
+

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Báo hàng 1291</string>
+    <string name="channel_urgent">Cảnh báo SKU khẩn cấp</string>
+    <string name="channel_updates">Cập nhật trạng thái SKU</string>
+    <string name="channel_background">Đồng bộ nền</string>
+    <string name="overlay_permission_title">Cho phép hiển thị trên ứng dụng khác</string>
+</resources>
+
