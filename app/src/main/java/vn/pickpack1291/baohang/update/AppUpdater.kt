@@ -2,13 +2,14 @@ package vn.pickpack1291.baohang.update
 
 import android.app.AlertDialog
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
-import androidx.appcompat.app.AppCompatActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -61,13 +62,17 @@ class AppUpdater(private val activity: AppCompatActivity) {
 
     private fun fetchManifest(): Release {
         val connection = URI(BuildConfig.UPDATE_MANIFEST_URL).toURL().openConnection().apply {
-            connectTimeout = 10_000; readTimeout = 15_000
+            connectTimeout = 10_000
+            readTimeout = 15_000
         }
         val content = connection.getInputStream().bufferedReader().use { it.readText() }
         val json = JSONObject(content)
         return Release(
-            json.getInt("versionCode"), json.getString("versionName"), json.getString("apkUrl"),
-            json.getString("sha256").lowercase(), json.optBoolean("mandatory", false),
+            json.getInt("versionCode"),
+            json.getString("versionName"),
+            json.getString("apkUrl"),
+            json.getString("sha256").lowercase(),
+            json.optBoolean("mandatory", false),
             json.optString("releaseNotes")
         )
     }
@@ -75,22 +80,65 @@ class AppUpdater(private val activity: AppCompatActivity) {
     private fun download(release: Release): File {
         val target = File(activity.cacheDir, "bao-hang-1291-${release.versionName}.apk")
         val connection = URI(release.apkUrl).toURL().openConnection().apply {
-            connectTimeout = 15_000; readTimeout = 60_000
+            connectTimeout = 15_000
+            readTimeout = 60_000
         }
         connection.getInputStream().use { input -> target.outputStream().use(input::copyTo) }
-        val digest = MessageDigest.getInstance("SHA-256").digest(target.readBytes())
-            .joinToString("") { "%02x".format(it) }
+
+        val digest = sha256(target.readBytes())
         if (!digest.equals(release.sha256, true)) {
             target.delete()
-            error("Sai chữ ký SHA-256; đã hủy file")
+            error("Sai mã kiểm tra SHA-256; đã hủy file")
         }
+
+        runCatching { verifyPackageIdentity(target, release) }
+            .onFailure { target.delete() }
+            .getOrThrow()
+
         return target
     }
+
+    private fun verifyPackageIdentity(file: File, release: Release) {
+        val packageInfo = activity.packageManager.getPackageArchiveInfo(
+            file.absolutePath,
+            PackageManager.GET_SIGNING_CERTIFICATES
+        ) ?: error("Không đọc được gói APK cập nhật")
+
+        if (packageInfo.packageName != activity.packageName) {
+            error("Gói cập nhật không đúng ứng dụng Báo hàng 1291")
+        }
+        if (packageInfo.longVersionCode != release.versionCode.toLong()) {
+            error("Version code của APK không khớp manifest OTA")
+        }
+
+        val expectedSigner = BuildConfig.PRODUCTION_SIGNER_SHA256.trim().lowercase()
+        if (!expectedSigner.matches(Regex("^[0-9a-f]{64}$"))) {
+            error("Thiếu fingerprint production để xác thực OTA")
+        }
+
+        val signingInfo = packageInfo.signingInfo ?: error("APK không có thông tin chữ ký")
+        val signatures = if (signingInfo.hasMultipleSigners()) {
+            signingInfo.apkContentsSigners
+        } else {
+            signingInfo.signingCertificateHistory
+        }
+        val signerMatches = signatures.any { signature ->
+            sha256(signature.toByteArray()).equals(expectedSigner, true)
+        }
+        if (!signerMatches) {
+            error("Chữ ký APK không khớp production; đã hủy cập nhật")
+        }
+    }
+
+    private fun sha256(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { "%02x".format(it) }
 
     private fun install(file: File) {
         val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.fileprovider", file)
         activity.startActivity(
-            Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
+            Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, "application/vnd.android.package-archive")
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         )
     }
