@@ -3,6 +3,7 @@ import java.util.Properties
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("com.google.gms.google-services")
 }
 
 val localSecrets = Properties().apply {
@@ -32,10 +33,6 @@ android {
         buildConfigField("String", "SUPABASE_URL", "\"${secret("SUPABASE_URL", "https://oedasgcdjppjwidhlqdr.supabase.co")}\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"${secret("SUPABASE_ANON_KEY", "sb_publishable_LGgDehtHMSyeJ1XyJDvQiQ_cdlqIKq7")}\"")
         buildConfigField("String", "UPDATE_MANIFEST_URL", "\"${secret("UPDATE_MANIFEST_URL", "https://github.com/tam95supra-source/bao-hang-1291/releases/latest/download/release-manifest.json")}\"")
-        resValue("string", "google_app_id", secret("FIREBASE_APP_ID", "1:000000000000:android:0000000000000000"))
-        resValue("string", "gcm_defaultSenderId", secret("FIREBASE_SENDER_ID", "000000000000"))
-        resValue("string", "project_id", secret("FIREBASE_PROJECT_ID", "bao-hang-1291-placeholder"))
-        resValue("string", "google_api_key", secret("FIREBASE_API_KEY", "CONFIGURE_ME"))
     }
 
     signingConfigs {
