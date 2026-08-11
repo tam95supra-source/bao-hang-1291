@@ -70,7 +70,11 @@ jobs:
 
           work="$RUNNER_TEMP/release-request"
           mkdir -p "$work/previous"
-          previous_tag="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name' 2>/dev/null || true)"
+          previous_tag=''
+          latest_json="$work/latest-release.json"
+          if gh api "repos/$GITHUB_REPOSITORY/releases/latest" >"$latest_json" 2>/dev/null; then
+            previous_tag="$(jq -r '.tag_name // empty' "$latest_json")"
+          fi
           if test -n "$previous_tag"; then
             gh release download "$previous_tag" --pattern 'release-manifest.json' --dir "$work/previous"
             previous_code="$(jq -r '.versionCode' "$work/previous/release-manifest.json")"
@@ -262,8 +266,13 @@ jobs:
           cmp -s "$manifest" "$work/published/release-manifest.json"
 
           latest_tag=''
+          latest_json="$work/latest-release.json"
           for _ in 1 2 3 4 5; do
-            latest_tag="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name' 2>/dev/null || true)"
+            if gh api "repos/$GITHUB_REPOSITORY/releases/latest" >"$latest_json" 2>/dev/null; then
+              latest_tag="$(jq -r '.tag_name // empty' "$latest_json")"
+            else
+              latest_tag=''
+            fi
             test "$latest_tag" = "$TAG" && break
             sleep 2
           done
