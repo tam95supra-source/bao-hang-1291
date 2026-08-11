@@ -14,6 +14,13 @@ val localSecrets = Properties().apply {
 fun secret(name: String, fallback: String = ""): String =
     System.getenv(name) ?: localSecrets.getProperty(name) ?: fallback
 
+val productionSignerFile = rootProject.file("signing/production-cert-sha256.txt")
+val productionSignerSha256 = if (productionSignerFile.isFile) {
+    productionSignerFile.readText().trim().lowercase()
+} else {
+    ""
+}
+
 android {
     namespace = "vn.pickpack1291.baohang"
     compileSdk = 35
@@ -33,6 +40,7 @@ android {
         buildConfigField("String", "SUPABASE_URL", "\"${secret("SUPABASE_URL", "https://oedasgcdjppjwidhlqdr.supabase.co")}\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"${secret("SUPABASE_ANON_KEY", "sb_publishable_LGgDehtHMSyeJ1XyJDvQiQ_cdlqIKq7")}\"")
         buildConfigField("String", "UPDATE_MANIFEST_URL", "\"${secret("UPDATE_MANIFEST_URL", "https://github.com/tam95supra-source/bao-hang-1291/releases/latest/download/release-manifest.json")}\"")
+        buildConfigField("String", "PRODUCTION_SIGNER_SHA256", "\"$productionSignerSha256\"")
     }
 
     signingConfigs {
