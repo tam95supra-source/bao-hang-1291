@@ -3,11 +3,19 @@ name: Android CI
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - '.github/workflows/**'
-      - 'ops/**'
-      - 'bootstrap-source.zip'
+    paths:
+      - 'app/**'
+      - 'build.gradle.kts'
+      - 'settings.gradle.kts'
+      - 'gradle.properties'
+      - 'gradle/**'
   pull_request:
+    paths:
+      - 'app/**'
+      - 'build.gradle.kts'
+      - 'settings.gradle.kts'
+      - 'gradle.properties'
+      - 'gradle/**'
   workflow_dispatch:
 
 concurrency:
