@@ -58,7 +58,7 @@ jobs:
           mkdir -p "$work/plain" signing
 
           store_pass="$(openssl rand -base64 36 | tr -d '\n')"
-          key_pass="$(openssl rand -base64 36 | tr -d '\n')"
+          key_pass="$store_pass"
           key_alias='bao-hang-1291-production'
           keystore="$work/plain/bao-hang-1291-production.p12"
 
