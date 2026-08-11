@@ -1,0 +1,63 @@
+name: One-time patch Google Sheet sync response validation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/patch-sheet-sync.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Require webhook JSON success before exporting queue
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('supabase/functions/api/index.ts')
+          s = p.read_text()
+          old = '''  if (!response.ok) throw new Error(`Google Sheet ${response.status}: ${await response.text()}`);
+          const ids = events.map((event) => event.id);
+          await admin.from("sheet_export_queue").update({ exported_at: new Date().toISOString() }).in("id", ids);
+          const { count } = await admin.from("sheet_export_queue").select("id", { count: "exact", head: true }).is("exported_at", null);
+          return { exported: ids.length, remaining: count ?? 0 };
+          '''
+          new = '''  const responseText = await response.text();
+          if (!response.ok) throw new Error(`Google Sheet ${response.status}: ${responseText}`);
+          let sheetResult: { ok?: boolean; processed?: number; lastId?: number; error?: string };
+          try {
+            sheetResult = JSON.parse(responseText);
+          } catch {
+            throw new Error("Google Sheet phản hồi không phải JSON hợp lệ");
+          }
+          if (sheetResult.ok !== true) {
+            throw new Error(`Google Sheet từ chối đồng bộ: ${sheetResult.error ?? "Không rõ lỗi"}`);
+          }
+          const ids = events.map((event) => event.id);
+          await admin.from("sheet_export_queue").update({ exported_at: new Date().toISOString() }).in("id", ids);
+          const { count } = await admin.from("sheet_export_queue").select("id", { count: "exact", head: true }).is("exported_at", null);
+          return {
+            exported: ids.length,
+            remaining: count ?? 0,
+            sheet_processed: Number(sheetResult.processed ?? ids.length),
+            sheet_last_id: Number(sheetResult.lastId ?? 0),
+          };
+          '''
+          if old not in s:
+              raise SystemExit('Expected syncSheet block not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/api/index.ts
+          git commit -m "Validate Google Sheet webhook response before export"
+          git push origin HEAD:main
