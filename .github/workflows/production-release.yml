@@ -43,21 +43,27 @@ jobs:
           request='ops/release-request.json'
           test -s "$request"
           jq -e . "$request" >/dev/null
+          jq -e '(.channel | type) == "string"' "$request" >/dev/null
+          jq -e '(.versionName | type) == "string"' "$request" >/dev/null
+          jq -e '(.versionCode | type) == "number" and (.versionCode > 0) and (.versionCode == (.versionCode | floor))' "$request" >/dev/null
+          jq -e '(.mandatory | type) == "boolean"' "$request" >/dev/null
+          jq -e '((.releaseNotes // "") | type) == "string"' "$request" >/dev/null
+          jq -e '((.action // "publish") | type) == "string"' "$request" >/dev/null
 
-          channel="$(jq -er '.channel' "$request")"
-          version_name="$(jq -er '.versionName' "$request")"
-          version_code="$(jq -er '.versionCode' "$request")"
-          mandatory="$(jq -er '.mandatory' "$request")"
+          action="$(jq -r '.action // "publish"' "$request")"
+          channel="$(jq -r '.channel' "$request")"
+          version_name="$(jq -r '.versionName' "$request")"
+          version_code="$(jq -r '.versionCode' "$request")"
+          mandatory="$(jq -r '.mandatory' "$request")"
 
+          [[ "$action" = 'validate' || "$action" = 'publish' ]] || { echo 'action must be validate or publish' >&2; exit 1; }
           test "$channel" = 'stable' || { echo 'Only the stable channel is enabled until beta policy is approved.' >&2; exit 1; }
           [[ "$version_name" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [[ "$version_code" =~ ^[1-9][0-9]*$ ]]
-          jq -e '.mandatory | type == "boolean"' "$request" >/dev/null
-          jq -e '(.releaseNotes // "") | type == "string"' "$request" >/dev/null
 
           tag="stable-v$version_name"
           apk_name="bao-hang-1291-stable-$version_name.apk"
-          if gh release view "$tag" >/dev/null 2>&1; then
+          if test "$action" = 'publish' && gh release view "$tag" >/dev/null 2>&1; then
             echo "Release $tag already exists; refusing overwrite." >&2
             exit 1
           fi
@@ -67,7 +73,7 @@ jobs:
           previous_tag="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name' 2>/dev/null || true)"
           if test -n "$previous_tag"; then
             gh release download "$previous_tag" --pattern 'release-manifest.json' --dir "$work/previous"
-            previous_code="$(jq -er '.versionCode' "$work/previous/release-manifest.json")"
+            previous_code="$(jq -r '.versionCode' "$work/previous/release-manifest.json")"
             [[ "$previous_code" =~ ^[0-9]+$ ]]
             (( version_code > previous_code )) || {
               echo "versionCode must be greater than current stable $previous_code" >&2
@@ -76,6 +82,7 @@ jobs:
           fi
 
           {
+            echo "action=$action"
             echo "channel=$channel"
             echo "version_name=$version_name"
             echo "version_code=$version_code"
@@ -130,7 +137,7 @@ jobs:
             echo "pinned_fingerprint=$pinned"
           } >> "$GITHUB_OUTPUT"
 
-          # Passwords deliberately remain inside this step and are never exported as outputs.
+          # Passwords stay in runner-local 0600 files and are never exported as outputs/environment metadata.
           printf '%s' "$RELEASE_STORE_PASSWORD" > "$RUNNER_TEMP/release-store-password"
           printf '%s' "$RELEASE_KEY_PASSWORD" > "$RUNNER_TEMP/release-key-password"
           chmod 600 "$RUNNER_TEMP/release-store-password" "$RUNNER_TEMP/release-key-password"
@@ -180,11 +187,25 @@ jobs:
           mkdir -p "$release_dir"
           cp "$apk" "$release_dir/$APK_NAME"
           apk_sha256="$(sha256sum "$release_dir/$APK_NAME" | awk '{print $1}')"
-          printf '%s\n' "$apk_sha256" > "$RUNNER_TEMP/release-apk-sha256"
           echo "release_dir=$release_dir" >> "$GITHUB_OUTPUT"
           echo "apk_sha256=$apk_sha256" >> "$GITHUB_OUTPUT"
 
+      - name: Record validation proof
+        if: steps.request.outputs.action == 'validate'
+        shell: bash
+        env:
+          VERSION_NAME: ${{ steps.request.outputs.version_name }}
+          VERSION_CODE: ${{ steps.request.outputs.version_code }}
+          APK_SHA256: ${{ steps.build.outputs.apk_sha256 }}
+          SIGNER_SHA256: ${{ steps.signing.outputs.pinned_fingerprint }}
+        run: |
+          set -euo pipefail
+          echo "Production validation PASS version=$VERSION_NAME code=$VERSION_CODE"
+          echo "APK SHA-256: $APK_SHA256"
+          echo "Signer SHA-256: $SIGNER_SHA256"
+
       - name: Create and publish verified stable OTA release
+        if: steps.request.outputs.action == 'publish'
         shell: bash
         env:
           VERSION_NAME: ${{ steps.request.outputs.version_name }}
@@ -231,7 +252,8 @@ jobs:
             "$manifest" \
             --target "$GITHUB_SHA" \
             --title "Báo hàng 1291 Stable $VERSION_NAME" \
-            --notes-file "$notes"
+            --notes-file "$notes" \
+            --latest
 
           gh release download "$TAG" --pattern "$APK_NAME" --dir "$work/published"
           gh release download "$TAG" --pattern 'release-manifest.json' --dir "$work/published"
