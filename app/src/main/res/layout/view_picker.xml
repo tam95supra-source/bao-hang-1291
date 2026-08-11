@@ -24,7 +24,7 @@
         android:inputType="textNoSuggestions"
         android:singleLine="true"
         android:textSize="20sp"
-        android:threshold="1" />
+        android:completionThreshold="1" />
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -82,4 +82,3 @@
         android:divider="#DDE3EA"
         android:dividerHeight="1dp" />
 </LinearLayout>
-
