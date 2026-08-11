@@ -1,74 +1,151 @@
-name: Signed release validation
+name: Production signing bootstrap
 
 on:
   push:
     branches: [main]
     paths:
-      - 'ops/signed-release.request'
+      - 'ops/signing-bootstrap.request'
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: signed-release-validation
-  cancel-in-progress: true
+  group: production-signing-bootstrap
+  cancel-in-progress: false
 
 jobs:
-  build-release:
+  bootstrap-signing:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
+
       - uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.9'
           cache-disabled: true
-      - name: Validate signing secrets
-        shell: bash
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
-          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
-          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          test -n "${KEYSTORE_BASE64:-}" || { echo 'Missing KEYSTORE_BASE64' >&2; exit 1; }
-          test -n "${RELEASE_STORE_PASSWORD:-}" || { echo 'Missing RELEASE_STORE_PASSWORD' >&2; exit 1; }
-          test -n "${RELEASE_KEY_ALIAS:-}" || { echo 'Missing RELEASE_KEY_ALIAS' >&2; exit 1; }
-          test -n "${RELEASE_KEY_PASSWORD:-}" || { echo 'Missing RELEASE_KEY_PASSWORD' >&2; exit 1; }
-      - name: Restore production keystore
-        shell: bash
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-        run: |
-          set -euo pipefail
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/bao-hang-1291-production.jks"
-          test -s "$RUNNER_TEMP/bao-hang-1291-production.jks"
-      - name: Build signed production APK
-        env:
-          RELEASE_STORE_FILE: ${{ runner.temp }}/bao-hang-1291-production.jks
-          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
-          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
-          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
-        run: gradle --no-daemon clean testReleaseUnitTest assembleRelease -PVERSION_NAME=1.0.0 -PVERSION_CODE=1
-      - name: Verify APK signature and checksum
+
+      - name: Validate bootstrap prerequisites
         shell: bash
         run: |
           set -euo pipefail
+          test -n "${FIREBASE_SERVICE_ACCOUNT:-}" || { echo 'Missing FIREBASE_SERVICE_ACCOUNT' >&2; exit 1; }
+          test -n "${SUPABASE_ACCESS_TOKEN:-}" || { echo 'Missing SUPABASE_ACCESS_TOKEN' >&2; exit 1; }
+          test -s ops/signing-backup-transport-public.pem || { echo 'Missing backup transport public key' >&2; exit 1; }
+          if test -e signing/production-signing.bundle.enc; then
+            echo 'Permanent signing bundle already exists; refusing to generate a second production key.' >&2
+            exit 1
+          fi
+
+      - name: Generate one permanent production key
+        id: signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          work="$RUNNER_TEMP/signing-bootstrap"
+          mkdir -p "$work/plain" signing
+
+          store_pass="$(openssl rand -base64 36 | tr -d '\n')"
+          key_pass="$(openssl rand -base64 36 | tr -d '\n')"
+          key_alias='bao-hang-1291-production'
+          keystore="$work/plain/bao-hang-1291-production.p12"
+
+          keytool -genkeypair \
+            -keystore "$keystore" \
+            -storetype PKCS12 \
+            -storepass "$store_pass" \
+            -keypass "$key_pass" \
+            -alias "$key_alias" \
+            -keyalg RSA \
+            -keysize 4096 \
+            -validity 36500 \
+            -dname 'CN=Bao Hang 1291 Production'
+
+          cat > "$work/plain/signing.properties" <<EOF
+          RELEASE_STORE_PASSWORD=$store_pass
+          RELEASE_KEY_ALIAS=$key_alias
+          RELEASE_KEY_PASSWORD=$key_pass
+          EOF
+
+          tar -C "$work/plain" -cf "$work/production-signing.tar" \
+            bao-hang-1291-production.p12 signing.properties
+
+          wrap_key="$({ printf '%s\0' "$FIREBASE_SERVICE_ACCOUNT"; printf '%s\0' "$SUPABASE_ACCESS_TOKEN"; printf '%s' "$GITHUB_REPOSITORY"; } | sha256sum | awk '{print $1}')"
+          WRAP_KEY="$wrap_key" openssl enc -aes-256-cbc -salt -pbkdf2 -iter 250000 -md sha256 \
+            -pass env:WRAP_KEY \
+            -in "$work/production-signing.tar" \
+            -out signing/production-signing.bundle.enc
+
+          backup_pass="$(openssl rand -hex 32)"
+          BACKUP_PASS="$backup_pass" openssl enc -aes-256-cbc -salt -pbkdf2 -iter 250000 -md sha256 \
+            -pass env:BACKUP_PASS \
+            -in "$work/production-signing.tar" \
+            -out "$RUNNER_TEMP/production-signing-backup.bundle.enc"
+          printf '%s' "$backup_pass" | openssl pkeyutl -encrypt \
+            -pubin -inkey ops/signing-backup-transport-public.pem \
+            -pkeyopt rsa_padding_mode:oaep \
+            -pkeyopt rsa_oaep_md:sha256 \
+            -out "$RUNNER_TEMP/production-signing-backup.key.rsa"
+
+          {
+            echo "store_file=$keystore"
+            echo "store_password=$store_pass"
+            echo "key_alias=$key_alias"
+            echo "key_password=$key_pass"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and verify signed production candidate
+        shell: bash
+        env:
+          RELEASE_STORE_FILE: ${{ steps.signing.outputs.store_file }}
+          RELEASE_STORE_PASSWORD: ${{ steps.signing.outputs.store_password }}
+          RELEASE_KEY_ALIAS: ${{ steps.signing.outputs.key_alias }}
+          RELEASE_KEY_PASSWORD: ${{ steps.signing.outputs.key_password }}
+        run: |
+          set -euo pipefail
+          gradle --no-daemon testReleaseUnitTest assembleRelease -PVERSION_NAME=1.0.0 -PVERSION_CODE=1
           APK='app/build/outputs/apk/release/app-release.apk'
           test -s "$APK"
-          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           test -x "$APKSIGNER"
-          "$APKSIGNER" verify --verbose --print-certs "$APK"
-          sha256sum "$APK"
-          cp "$APK" bao-hang-1291-v1.0.0.apk
-      - uses: actions/upload-artifact@v4
+          "$APKSIGNER" verify --verbose --print-certs "$APK" | tee "$RUNNER_TEMP/apksigner.txt"
+          fingerprint="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/apksigner.txt" | head -n 1 | tr '[:upper:]' '[:lower:]' | tr -d ':[:space:]')"
+          test "${#fingerprint}" -eq 64
+          printf '%s\n' "$fingerprint" > signing/production-cert-sha256.txt
+          sha256sum "$APK" | tee "$RUNNER_TEMP/apk-sha256.txt"
+          cp "$APK" "$RUNNER_TEMP/bao-hang-1291-production-v1.0.0.apk"
+
+      - name: Commit encrypted signing material and pinned certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'bao-hang-1291-release-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add signing/production-signing.bundle.enc signing/production-cert-sha256.txt
+          git commit -m 'Bootstrap permanent production signing key'
+          git push origin HEAD:main
+
+      - name: Upload encrypted recovery package and candidate APK
+        uses: actions/upload-artifact@v4
         with:
-          name: bao-hang-1291-signed-v1.0.0
-          path: bao-hang-1291-v1.0.0.apk
+          name: bao-hang-1291-production-signing-bootstrap
+          path: |
+            ${{ runner.temp }}/production-signing-backup.bundle.enc
+            ${{ runner.temp }}/production-signing-backup.key.rsa
+            ${{ runner.temp }}/bao-hang-1291-production-v1.0.0.apk
+            ${{ runner.temp }}/apk-sha256.txt
+            signing/production-cert-sha256.txt
           retention-days: 1
+          if-no-files-found: error
