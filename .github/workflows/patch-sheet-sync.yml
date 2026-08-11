@@ -1,4 +1,4 @@
-name: One-time patch Google Sheet sync response validation
+name: One-time patch Google Sheet sync validation
 
 on:
   push:
@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Require webhook JSON success before exporting queue
+      - name: Validate Google Sheet response body
         shell: bash
         run: |
           set -euo pipefail
@@ -25,33 +25,14 @@ jobs:
           from pathlib import Path
           p = Path('supabase/functions/api/index.ts')
           s = p.read_text()
-          anchor = s.index('async function syncSheet()')
-          start_marker = '  if (!response.ok) throw new Error(`Google Sheet ${response.status}: ${await response.text()}`);\n'
-          end_marker = '  return { exported: ids.length, remaining: count ?? 0 };\n'
-          start = s.index(start_marker, anchor)
-          end = s.index(end_marker, start) + len(end_marker)
+          old = '  if (!response.ok) throw new Error(`Google Sheet ${response.status}: ${await response.text()}`);'
           new = '''  const responseText = await response.text();
   if (!response.ok) throw new Error(`Google Sheet ${response.status}: ${responseText}`);
-  let sheetResult: { ok?: boolean; processed?: number; lastId?: number; error?: string };
-  try {
-    sheetResult = JSON.parse(responseText);
-  } catch {
-    throw new Error("Google Sheet phản hồi không phải JSON hợp lệ");
-  }
-  if (sheetResult.ok !== true) {
-    throw new Error(`Google Sheet từ chối đồng bộ: ${sheetResult.error ?? "Không rõ lỗi"}`);
-  }
-  const ids = events.map((event) => event.id);
-  await admin.from("sheet_export_queue").update({ exported_at: new Date().toISOString() }).in("id", ids);
-  const { count } = await admin.from("sheet_export_queue").select("id", { count: "exact", head: true }).is("exported_at", null);
-  return {
-    exported: ids.length,
-    remaining: count ?? 0,
-    sheet_processed: Number(sheetResult.processed ?? ids.length),
-    sheet_last_id: Number(sheetResult.lastId ?? 0),
-  };
-'''
-          p.write_text(s[:start] + new + s[end:])
+  const sheetResult = JSON.parse(responseText) as { ok?: boolean; error?: string };
+  if (sheetResult.ok !== true) throw new Error(`Google Sheet từ chối đồng bộ: ${sheetResult.error ?? "Không rõ lỗi"}`);'''
+          if old not in s:
+              raise SystemExit('Target response check not found')
+          p.write_text(s.replace(old, new, 1))
           PY
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
