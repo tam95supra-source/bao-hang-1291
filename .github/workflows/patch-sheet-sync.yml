@@ -21,19 +21,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('supabase/functions/api/index.ts')
-          s = p.read_text()
-          old = '  if (!response.ok) throw new Error(`Google Sheet ${response.status}: ${await response.text()}`);'
-          new = '''  const responseText = await response.text();
-  if (!response.ok) throw new Error(`Google Sheet ${response.status}: ${responseText}`);
-  const sheetResult = JSON.parse(responseText) as { ok?: boolean; error?: string };
-  if (sheetResult.ok !== true) throw new Error(`Google Sheet từ chối đồng bộ: ${sheetResult.error ?? "Không rõ lỗi"}`);'''
-          if old not in s:
-              raise SystemExit('Target response check not found')
-          p.write_text(s.replace(old, new, 1))
-          PY
+          python3 -c 'from pathlib import Path; import base64; p=Path("supabase/functions/api/index.ts"); s=p.read_text(); old=base64.b64decode("ICBpZiAoIXJlc3BvbnNlLm9rKSB0aHJvdyBuZXcgRXJyb3IoYEdvb2dsZSBTaGVldCAke3Jlc3BvbnNlLnN0YXR1c306ICR7YXdhaXQgcmVzcG9uc2UudGV4dCgpfWApOw==").decode(); new=base64.b64decode("ICBjb25zdCByZXNwb25zZVRleHQgPSBhd2FpdCByZXNwb25zZS50ZXh0KCk7CiAgaWYgKCFyZXNwb25zZS5vaykgdGhyb3cgbmV3IEVycm9yKGBHb29nbGUgU2hlZXQgJHtyZXNwb25zZS5zdGF0dXN9OiAke3Jlc3BvbnNlVGV4dH1gKTsKICBjb25zdCBzaGVldFJlc3VsdCA9IEpTT04ucGFyc2UocmVzcG9uc2VUZXh0KSBhcyB7IG9rPzogYm9vbGVhbjsgZXJyb3I/OiBzdHJpbmcgfTsKICBpZiAoc2hlZXRSZXN1bHQub2sgIT09IHRydWUpIHRocm93IG5ldyBFcnJvcihgR29vZ2xlIFNoZWV0IHThu6sgY2jhu5FpIMSR4buTbmcgYuG7mTogJHtzaGVldFJlc3VsdC5lcnJvciA/PyAiS2jDtG5nIHLDtSBs4buXaSJ9YCk7").decode(); assert old in s, "target response check not found"; p.write_text(s.replace(old,new,1))'
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add supabase/functions/api/index.ts
