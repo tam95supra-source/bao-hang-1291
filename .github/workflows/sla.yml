@@ -1,0 +1,21 @@
+name: SLA and Google Sheet tick
+
+on: workflow_dispatch
+
+permissions: {}
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Process SLA reminders and Sheet queue
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl --fail-with-body --retry 2 --max-time 60 \
+            -X POST "$SUPABASE_URL/functions/v1/api/sla-tick" \
+            -H "content-type: application/json" \
+            -H "x-cron-secret: $CRON_SECRET" \
+            -d '{}'
