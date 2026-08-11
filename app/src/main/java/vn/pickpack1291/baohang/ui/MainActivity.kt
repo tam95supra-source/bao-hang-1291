@@ -110,7 +110,7 @@ class MainActivity : AppCompatActivity() {
                 searchJob?.cancel()
                 searchJob = lifecycleScope.launch {
                     delay(120)
-                    val results = withContext(Dispatchers.IO) { app.repository.searchSkus(s.orEmpty().toString()) }
+                    val results = withContext(Dispatchers.IO) { app.repository.searchSkus(s?.toString().orEmpty()) }
                     val adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_dropdown_item_1line, results)
                     search.setAdapter(adapter)
                     if (search.hasFocus() && results.isNotEmpty()) search.showDropDown()
