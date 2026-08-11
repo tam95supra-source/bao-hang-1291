@@ -18,12 +18,12 @@
 
 GitHub Actions là pipeline build chuẩn vì dự án không yêu cầu máy người vận hành cài Android Studio.
 
-1. Fork/clone repository.
-2. Cấu hình GitHub Secrets cho Supabase, Firebase và khóa ký APK.
-3. Chạy workflow `Android CI` để lấy APK debug.
-4. Chạy `Deploy Supabase backend`, bootstrap Admin đầu tiên và import hai file XLSX.
-5. Chạy `Build signed APK release` để phát hành bản production.
+1. Workflow `Android CI` chạy unit test và build APK debug trên standard `ubuntu-latest`.
+2. Supabase URL và publishable client key được cấu hình trực tiếp trong Android source vì đây là thông tin public-client; quyền dữ liệu vẫn do Auth/RLS/API kiểm soát.
+3. Firebase client config được bổ sung sau khi tạo Firebase Android app đúng package `vn.pickpack1291.baohang`.
+4. Khóa backend, service account và khóa ký APK không được commit vào source; chúng chỉ được cấu hình qua secret store ở bước production.
+5. Signed release/OTA chỉ được bật sau khi keystore và các secret production đã được bootstrap an toàn.
 
-Mã nguồn không chứa dữ liệu SKU/nhân sự thật, mật khẩu, service account hay keystore. APK phát hành kiểm tra SHA-256 trước khi mở trình cài đặt.
+Mã nguồn không chứa dữ liệu SKU/nhân sự thật, mật khẩu, service account, backend secret hay keystore. APK phát hành kiểm tra SHA-256 trước khi mở trình cài đặt.
 
 Xem [Kiến trúc](docs/ARCHITECTURE.md), [Nghiệp vụ](docs/BUSINESS_RULES.md) và [Triển khai](docs/DEPLOYMENT.md).
