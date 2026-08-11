@@ -1,0 +1,42 @@
+name: Deploy Supabase backend
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_REF }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - run: supabase link --project-ref "$SUPABASE_PROJECT_ID" --password "$SUPABASE_DB_PASSWORD"
+      - run: supabase db push --password "$SUPABASE_DB_PASSWORD"
+      - run: supabase functions deploy api --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
+      - name: Configure server secrets
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          BOOTSTRAP_SECRET: ${{ secrets.BOOTSTRAP_SECRET }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          GOOGLE_SHEET_WEBHOOK_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
+          GOOGLE_SHEET_WEBHOOK_SECRET: ${{ secrets.GOOGLE_SHEET_WEBHOOK_SECRET }}
+        run: supabase secrets set FIREBASE_SERVICE_ACCOUNT="$FIREBASE_SERVICE_ACCOUNT" BOOTSTRAP_SECRET="$BOOTSTRAP_SECRET" CRON_SECRET="$CRON_SECRET" GOOGLE_SHEET_WEBHOOK_URL="$GOOGLE_SHEET_WEBHOOK_URL" GOOGLE_SHEET_WEBHOOK_SECRET="$GOOGLE_SHEET_WEBHOOK_SECRET" --project-ref "$SUPABASE_PROJECT_ID"
+      - name: Configure Supabase SLA schedule
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl --fail-with-body --retry 2 --max-time 60 \
+            -X POST "$SUPABASE_URL/functions/v1/api/configure-schedule" \
+            -H "content-type: application/json" \
+            -H "x-cron-secret: $CRON_SECRET" \
+            -d '{}'
