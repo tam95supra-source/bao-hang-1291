@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "831583541434",
+    "project_id": "bao-hang-1291",
+    "storage_bucket": "bao-hang-1291.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:831583541434:android:8b9a55c3cab3dba3628a83",
+        "android_client_info": {
+          "package_name": "vn.pickpack1291.baohang"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB-n368fntzxsuuLlvte9NXhcuX0DDbTXM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:831583541434:android:b68a2b457e989bb1628a83",
+        "android_client_info": {
+          "package_name": "vn.pickpack1291.baohang.debug"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB-n368fntzxsuuLlvte9NXhcuX0DDbTXM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
