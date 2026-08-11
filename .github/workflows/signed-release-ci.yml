@@ -48,8 +48,7 @@ jobs:
             exit 1
           fi
 
-      - name: Generate one permanent production key
-        id: signing
+      - name: Generate, build, verify and seal permanent production key
         shell: bash
         run: |
           set -euo pipefail
@@ -59,8 +58,13 @@ jobs:
 
           store_pass="$(openssl rand -base64 36 | tr -d '\n')"
           key_pass="$store_pass"
+          backup_pass="$(openssl rand -hex 32)"
           key_alias='bao-hang-1291-production'
           keystore="$work/plain/bao-hang-1291-production.p12"
+
+          echo "::add-mask::$store_pass"
+          echo "::add-mask::$key_pass"
+          echo "::add-mask::$backup_pass"
 
           keytool -genkeypair \
             -keystore "$keystore" \
@@ -73,22 +77,22 @@ jobs:
             -validity 36500 \
             -dname 'CN=Bao Hang 1291 Production'
 
-          cat > "$work/plain/signing.properties" <<EOF
-          RELEASE_STORE_PASSWORD=$store_pass
-          RELEASE_KEY_ALIAS=$key_alias
-          RELEASE_KEY_PASSWORD=$key_pass
-          EOF
+          printf '%s\n' \
+            "RELEASE_STORE_PASSWORD=$store_pass" \
+            "RELEASE_KEY_ALIAS=$key_alias" \
+            "RELEASE_KEY_PASSWORD=$key_pass" \
+            > "$work/plain/signing.properties"
 
           tar -C "$work/plain" -cf "$work/production-signing.tar" \
             bao-hang-1291-production.p12 signing.properties
 
           wrap_key="$({ printf '%s\0' "$FIREBASE_SERVICE_ACCOUNT"; printf '%s\0' "$SUPABASE_ACCESS_TOKEN"; printf '%s' "$GITHUB_REPOSITORY"; } | sha256sum | awk '{print $1}')"
+          echo "::add-mask::$wrap_key"
           WRAP_KEY="$wrap_key" openssl enc -aes-256-cbc -salt -pbkdf2 -iter 250000 -md sha256 \
             -pass env:WRAP_KEY \
             -in "$work/production-signing.tar" \
             -out signing/production-signing.bundle.enc
 
-          backup_pass="$(openssl rand -hex 32)"
           BACKUP_PASS="$backup_pass" openssl enc -aes-256-cbc -salt -pbkdf2 -iter 250000 -md sha256 \
             -pass env:BACKUP_PASS \
             -in "$work/production-signing.tar" \
@@ -99,45 +103,31 @@ jobs:
             -pkeyopt rsa_oaep_md:sha256 \
             -out "$RUNNER_TEMP/production-signing-backup.key.rsa"
 
-          {
-            echo "store_file=$keystore"
-            echo "store_password=$store_pass"
-            echo "key_alias=$key_alias"
-            echo "key_password=$key_pass"
-          } >> "$GITHUB_OUTPUT"
+          RELEASE_STORE_FILE="$keystore" \
+          RELEASE_STORE_PASSWORD="$store_pass" \
+          RELEASE_KEY_ALIAS="$key_alias" \
+          RELEASE_KEY_PASSWORD="$key_pass" \
+            gradle --no-daemon testReleaseUnitTest assembleRelease \
+              -PVERSION_NAME=1.0.0 -PVERSION_CODE=1
 
-      - name: Build and verify signed production candidate
-        shell: bash
-        env:
-          RELEASE_STORE_FILE: ${{ steps.signing.outputs.store_file }}
-          RELEASE_STORE_PASSWORD: ${{ steps.signing.outputs.store_password }}
-          RELEASE_KEY_ALIAS: ${{ steps.signing.outputs.key_alias }}
-          RELEASE_KEY_PASSWORD: ${{ steps.signing.outputs.key_password }}
-        run: |
-          set -euo pipefail
-          gradle --no-daemon testReleaseUnitTest assembleRelease -PVERSION_NAME=1.0.0 -PVERSION_CODE=1
           APK='app/build/outputs/apk/release/app-release.apk'
           test -s "$APK"
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           test -x "$APKSIGNER"
           "$APKSIGNER" verify --verbose --print-certs "$APK" | tee "$RUNNER_TEMP/apksigner.txt"
-          fingerprint="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/apksigner.txt" | head -n 1 | tr '[:upper:]' '[:lower:]' | tr -d ':[:space:]')"
-          test "${#fingerprint}" -eq 64
+          fingerprint="$(sed -n 's/^.*certificate SHA-256 digest: //p' "$RUNNER_TEMP/apksigner.txt" | head -n 1 | tr '[:upper:]' '[:lower:]' | tr -d ':[:space:]')"
+          [[ "$fingerprint" =~ ^[0-9a-f]{64}$ ]]
           printf '%s\n' "$fingerprint" > signing/production-cert-sha256.txt
           sha256sum "$APK" | tee "$RUNNER_TEMP/apk-sha256.txt"
           cp "$APK" "$RUNNER_TEMP/bao-hang-1291-production-v1.0.0.apk"
 
-      - name: Commit encrypted signing material and pinned certificate
-        shell: bash
-        run: |
-          set -euo pipefail
           git config user.name 'bao-hang-1291-release-bot'
           git config user.email 'actions@users.noreply.github.com'
           git add signing/production-signing.bundle.enc signing/production-cert-sha256.txt
           git commit -m 'Bootstrap permanent production signing key'
           git push origin HEAD:main
 
-      - name: Upload encrypted recovery package and candidate APK
+      - name: Upload encrypted recovery package and verified candidate APK
         uses: actions/upload-artifact@v4
         with:
           name: bao-hang-1291-production-signing-bootstrap
