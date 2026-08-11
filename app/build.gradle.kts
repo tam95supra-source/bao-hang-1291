@@ -27,9 +27,11 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
 
-        buildConfigField("String", "SUPABASE_URL", "\"${secret("SUPABASE_URL", "https://PROJECT_REF.supabase.co")}\"")
-        buildConfigField("String", "SUPABASE_ANON_KEY", "\"${secret("SUPABASE_ANON_KEY", "CONFIGURE_ME")}\"")
-        buildConfigField("String", "UPDATE_MANIFEST_URL", "\"${secret("UPDATE_MANIFEST_URL", "")}\"")
+        // Supabase URL and publishable key are intentionally client-visible configuration.
+        // Authorization remains enforced by Supabase Auth, Edge Function checks and RLS/grants.
+        buildConfigField("String", "SUPABASE_URL", "\"${secret("SUPABASE_URL", "https://oedasgcdjppjwidhlqdr.supabase.co")}\"")
+        buildConfigField("String", "SUPABASE_ANON_KEY", "\"${secret("SUPABASE_ANON_KEY", "sb_publishable_LGgDehtHMSyeJ1XyJDvQiQ_cdlqIKq7")}\"")
+        buildConfigField("String", "UPDATE_MANIFEST_URL", "\"${secret("UPDATE_MANIFEST_URL", "https://github.com/tam95supra-source/bao-hang-1291/releases/latest/download/release-manifest.json")}\"")
         resValue("string", "google_app_id", secret("FIREBASE_APP_ID", "1:000000000000:android:0000000000000000"))
         resValue("string", "gcm_defaultSenderId", secret("FIREBASE_SENDER_ID", "000000000000"))
         resValue("string", "project_id", secret("FIREBASE_PROJECT_ID", "bao-hang-1291-placeholder"))
