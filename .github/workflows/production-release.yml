@@ -170,19 +170,17 @@ jobs:
           apk='app/build/outputs/apk/release/app-release.apk'
           test -s "$apk"
           apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n1)"
-          aapt="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n1)"
+          apkanalyzer="$(find "$ANDROID_HOME/cmdline-tools" -type f -name apkanalyzer -perm -111 | sort -V | tail -n1)"
           test -x "$apksigner"
-          test -x "$aapt"
+          test -x "$apkanalyzer"
 
           "$apksigner" verify --verbose --print-certs "$apk" | tee "$RUNNER_TEMP/apksigner.txt"
           actual_fingerprint="$(sed -n 's/^.*certificate SHA-256 digest: //p' "$RUNNER_TEMP/apksigner.txt" | sed -n '1p' | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')"
           test "$actual_fingerprint" = "$PINNED_FINGERPRINT"
 
-          "$aapt" dump badging "$apk" > "$RUNNER_TEMP/aapt-badging.txt"
-          package_line="$(sed -n '1p' "$RUNNER_TEMP/aapt-badging.txt")"
-          package_name="$(sed -n "s/.*name='\([^']*\)'.*/\1/p" <<<"$package_line")"
-          apk_version_code="$(sed -n "s/.*versionCode='\([^']*\)'.*/\1/p" <<<"$package_line")"
-          apk_version_name="$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" <<<"$package_line")"
+          package_name="$("$apkanalyzer" manifest application-id "$apk")"
+          apk_version_code="$("$apkanalyzer" manifest version-code "$apk")"
+          apk_version_name="$("$apkanalyzer" manifest version-name "$apk")"
           test "$package_name" = 'vn.pickpack1291.baohang'
           test "$apk_version_code" = "$VERSION_CODE"
           test "$apk_version_name" = "$VERSION_NAME"
