@@ -5,6 +5,7 @@ import android.net.Uri
 import android.util.Xml
 import org.xmlpull.v1.XmlPullParser
 import vn.pickpack1291.baohang.data.ImportUserRow
+import vn.pickpack1291.baohang.data.InventoryImportRow
 import vn.pickpack1291.baohang.data.SkuItem
 import vn.pickpack1291.baohang.data.UserRole
 import java.io.ByteArrayInputStream
@@ -66,6 +67,46 @@ class XlsxImporter(private val resolver: ContentResolver) {
         }
         if (unique.isEmpty()) throw ImportException("Không tìm thấy nhân sự hợp lệ")
         return unique.values.toList()
+    }
+
+    fun parseInventoryFile(uri: Uri): List<InventoryImportRow> {
+        val rows = readWorkbook(uri).rows
+        if (rows.isEmpty()) throw ImportException("File không có dữ liệu")
+        val headers = headerMap(rows.first())
+        val skuColumn = findHeader(headers, "sku", "ma sku")
+        val binQtyColumn = findHeader(headers, "ton bin")
+        val pendingColumn = findHeader(headers, "ton cho xuat")
+        val storageColumn = findHeader(headers, "tinh chat lt")
+        val binCodeColumn = findOptionalHeader(headers, "ma bin", "bin", "vi tri", "ma vtlt", "ma ptlt")
+        val result = mutableListOf<InventoryImportRow>()
+        rows.drop(1).forEachIndexed { index, row ->
+            val line = index + 2
+            val sku = row[skuColumn].orEmpty().trim()
+            if (sku.isBlank()) return@forEachIndexed
+            val binQty = parseNonNegative(row[binQtyColumn].orEmpty(), "Tồn Bin", line)
+            val pendingOut = parseNonNegative(row[pendingColumn].orEmpty().ifBlank { "0" }, "Tồn chờ Xuất", line)
+            val storage = row[storageColumn].orEmpty().trim()
+            if (storage.isBlank()) throw ImportException("Dòng $line: thiếu Tính chất LT")
+            val storageNormalized = normalize(storage)
+            result += InventoryImportRow(
+                rowKey = line.toString(),
+                sku = sku,
+                binCode = binCodeColumn?.let { row[it].orEmpty().trim() }.orEmpty(),
+                storageType = storage,
+                isPickable = storageNormalized in setOf("pickable", "co the lay hang"),
+                binQty = binQty,
+                pendingOutQty = pendingOut
+            )
+        }
+        if (result.isEmpty()) throw ImportException("Không tìm thấy dòng Tồn Bin hợp lệ")
+        return result
+    }
+
+    private fun parseNonNegative(value: String, label: String, line: Int): Double {
+        val normalized = value.trim().replace(" ", "").replace(',', '.')
+        val parsed = normalized.toDoubleOrNull() ?: throw ImportException("Dòng $line: $label không phải số")
+        if (!parsed.isFinite() || parsed < 0) throw ImportException("Dòng $line: $label không hợp lệ")
+        return parsed
     }
 
     private fun readWorkbook(uri: Uri): ParsedWorkbook {
@@ -156,10 +197,11 @@ class XlsxImporter(private val resolver: ContentResolver) {
     }
 
     private fun headerMap(row: Map<Int, String>) = row.mapValues { normalize(it.value) }
-    private fun findHeader(headers: Map<Int, String>, vararg aliases: String): Int {
+    private fun findHeader(headers: Map<Int, String>, vararg aliases: String): Int = findOptionalHeader(headers, *aliases)
+        ?: throw ImportException("Thiếu cột bắt buộc: ${aliases.first()}")
+    private fun findOptionalHeader(headers: Map<Int, String>, vararg aliases: String): Int? {
         val normalized = aliases.map(::normalize)
         return headers.entries.firstOrNull { it.value in normalized }?.key
-            ?: throw ImportException("Thiếu cột bắt buộc: ${aliases.first()}")
     }
 
     private fun normalize(value: String): String = Normalizer.normalize(value.trim(), Normalizer.Form.NFD)
@@ -168,9 +210,9 @@ class XlsxImporter(private val resolver: ContentResolver) {
 
     private fun parseRole(value: String, line: Int): UserRole = when (normalize(value).replace('-', '_').replace(' ', '_')) {
         "picker", "pick", "nguoi_bao", "nguoi_bao_hang", "nguoi_lay_hang" -> UserRole.PICKER
-        "invent", "invent_user", "bao_hang_invent" -> UserRole.INVENT
-        "admin_invent", "invent_admin" -> UserRole.ADMIN_INVENT
-        "admin" -> throw ImportException("Dòng $line: ADMIN là tài khoản duy nhất và không được tạo/import")
+        "invent", "invent_user", "bao_hang_invent", "nguoi_bao_hang_invent" -> UserRole.INVENT
+        "admin_invent", "invent_admin", "admin_event" -> UserRole.ADMIN_INVENT
+        "admin", "admin_he_thong" -> throw ImportException("Dòng $line: ADMIN là tài khoản duy nhất và không được tạo/import")
         else -> throw ImportException("Dòng $line: vai trò '$value' không hợp lệ. Dùng ADMIN_INVENT, INVENT hoặc PICKER")
     }
 
