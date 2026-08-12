@@ -35,6 +35,16 @@ class SessionStore(context: Context) {
             )
         }
 
+    val adminTestRole: UserRole?
+        get() {
+            if (profile?.role != UserRole.ADMIN) return null
+            val raw = prefs.getString(KEY_ADMIN_TEST_ROLE, "").orEmpty()
+            val role = UserRole.from(raw)
+            return role.takeIf { raw.isNotBlank() && it != UserRole.ADMIN }
+        }
+
+    val effectiveRole: UserRole get() = adminTestRole ?: profile?.role ?: UserRole.PICKER
+
     fun save(session: AuthSession) {
         prefs.edit()
             .putString(KEY_ACCESS, session.accessToken)
@@ -47,7 +57,28 @@ class SessionStore(context: Context) {
             .putString(KEY_ROLE, session.profile.role.wire)
             .putBoolean(KEY_ACTIVE, session.profile.active)
             .putBoolean(KEY_DEVICE_REGISTERED, false)
+            .remove(KEY_ADMIN_TEST_ROLE)
             .apply()
+    }
+
+    fun updateProfile(profile: UserProfile) {
+        prefs.edit()
+            .putString(KEY_USER_ID, profile.id)
+            .putString(KEY_EMPLOYEE_CODE, profile.employeeCode)
+            .putString(KEY_FULL_NAME, profile.fullName)
+            .putString(KEY_CONTRACTOR, profile.contractor)
+            .putString(KEY_ROLE, profile.role.wire)
+            .putBoolean(KEY_ACTIVE, profile.active)
+            .apply()
+        if (profile.role != UserRole.ADMIN) prefs.edit().remove(KEY_ADMIN_TEST_ROLE).apply()
+    }
+
+    fun setAdminTestRole(role: UserRole?) {
+        require(profile?.role == UserRole.ADMIN) { "Chỉ ADMIN được kiểm thử quyền" }
+        require(role == null || role != UserRole.ADMIN) { "Không cần giả lập ADMIN" }
+        prefs.edit().apply {
+            if (role == null) remove(KEY_ADMIN_TEST_ROLE) else putString(KEY_ADMIN_TEST_ROLE, role.wire)
+        }.apply()
     }
 
     fun updateTokens(access: String, refresh: String, expiresAt: Long) {
@@ -56,7 +87,6 @@ class SessionStore(context: Context) {
     }
 
     fun markDeviceRegistered() = prefs.edit().putBoolean(KEY_DEVICE_REGISTERED, true).apply()
-
     fun clear() = prefs.edit().clear().apply()
 
     private companion object {
@@ -70,5 +100,6 @@ class SessionStore(context: Context) {
         const val KEY_ROLE = "role"
         const val KEY_ACTIVE = "active"
         const val KEY_DEVICE_REGISTERED = "device_registered"
+        const val KEY_ADMIN_TEST_ROLE = "admin_test_role"
     }
 }

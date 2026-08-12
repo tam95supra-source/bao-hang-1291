@@ -9,670 +9,112 @@ async function getExcelJS() {
 const SUPABASE_URL = 'https://oedasgcdjppjwidhlqdr.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_LGgDehtHMSyeJ1XyJDvQiQ_cdlqIKq7';
 const API_BASE = `${SUPABASE_URL}/functions/v1/web-api`;
-const SESSION_KEY = 'bao-hang-1291-admin-session';
+const SESSION_KEY = 'bao-hang-1291-web-session';
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
+const ROLES = { ADMIN: 'Admin', ADMIN_INVENT: 'Admin Invent', INVENT: 'Báo hàng Invent', PICKER: 'Người lấy hàng' };
+const state = { session: null, testRole: null, selectedSku: null, pollTimer: null, activeTab: null };
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
-const state = {
-  session: null,
-  skuPreview: null,
-  userPreview: null,
-  existingUserCodes: new Set(),
-  activeTab: 'overview',
-};
+function normalize(value) { return String(value ?? '').trim().normalize('NFD').replace(/\p{M}+/gu, '').toLowerCase().replaceAll('đ', 'd').replace(/\s+/g, ' '); }
+function escapeHtml(value) { return String(value ?? '').replace(/[&<>'"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' }[c])); }
+function employeeEmail(code) { const raw=String(code??'').trim().toLowerCase(); if(!raw||!/^[a-z0-9._-]+$/.test(raw)) throw new Error('Mã nhân viên không hợp lệ.'); return `${raw}@bao-hang-1291.local`; }
+function role(){return state.testRole||state.session?.profile?.role||'PICKER';}
+function actualRole(){return state.session?.profile?.role||'PICKER';}
 
-const $ = (selector, root = document) => root.querySelector(selector);
-const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+function readSession(){try{const p=JSON.parse(sessionStorage.getItem(SESSION_KEY)||'null');return p?.access_token&&p?.refresh_token&&p?.profile?p:null;}catch{return null;}}
+function saveSession(s){state.session=s;sessionStorage.setItem(SESSION_KEY,JSON.stringify(s));}
+function clearSession(){state.session=null;state.testRole=null;sessionStorage.removeItem(SESSION_KEY);clearInterval(state.pollTimer);state.pollTimer=null;}
+async function parseResponse(r){const t=await r.text();let d={};if(t){try{d=JSON.parse(t);}catch{d={error:t};}}if(!r.ok)throw new Error(d.error||d.message||`Lỗi máy chủ ${r.status}`);return d;}
+async function authToken(payload,grantType='password'){return parseResponse(await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=${grantType}`,{method:'POST',headers:{'content-type':'application/json',apikey:SUPABASE_ANON_KEY},body:JSON.stringify(payload)}));}
+async function fetchProfile(accessToken,userId){const q=new URLSearchParams({id:`eq.${userId}`,select:'id,employee_code,full_name,contractor,role,active'});const rows=await parseResponse(await fetch(`${SUPABASE_URL}/rest/v1/profiles?${q}`,{headers:{apikey:SUPABASE_ANON_KEY,authorization:`Bearer ${accessToken}`}}));if(!Array.isArray(rows)||!rows.length)throw new Error('Tài khoản chưa có hồ sơ nhân sự.');return rows[0];}
+async function refreshSessionIfNeeded(){if(!state.session)throw new Error('Phiên đăng nhập không tồn tại.');const now=Math.floor(Date.now()/1000);if((state.session.expires_at||0)>now+120)return;const t=await authToken({refresh_token:state.session.refresh_token},'refresh_token');saveSession({...state.session,access_token:t.access_token,refresh_token:t.refresh_token||state.session.refresh_token,expires_at:now+Number(t.expires_in||3600)});}
+async function api(action,payload={}){await refreshSessionIfNeeded();const h={'content-type':'application/json',apikey:SUPABASE_ANON_KEY,authorization:`Bearer ${state.session.access_token}`};if(state.testRole)h['x-admin-test-role']=state.testRole;const r=await fetch(`${API_BASE}/${encodeURIComponent(action)}`,{method:'POST',headers:h,body:JSON.stringify(payload)});if(r.status===401){clearSession();renderLogin('Phiên đăng nhập đã hết hạn.');throw new Error('Phiên đăng nhập đã hết hạn.');}return parseResponse(r);}
+function setBusy(busy,text='Đang xử lý…'){const el=$('#busy');if(!el)return;el.hidden=!busy;$('#busyText').textContent=text;}
+function message(id,text,type='info'){const el=typeof id==='string'?$(id):id;if(!el)return;el.textContent=text;el.dataset.type=type;el.hidden=!text;}
 
-function normalize(value) {
-  return String(value ?? '')
-    .trim()
-    .normalize('NFD')
-    .replace(/\p{M}+/gu, '')
-    .toLowerCase()
-    .replaceAll('đ', 'd')
-    .replace(/\s+/g, ' ');
+function renderLogin(msg=''){
+  clearInterval(state.pollTimer);state.pollTimer=null;
+  document.body.innerHTML=`<main class="login-shell"><section class="login-card"><div class="brand">1291</div><p class="eyebrow">BÁO HÀNG 1291</p><h1>Web nghiệp vụ</h1><p class="muted">Đăng nhập bằng tài khoản đang dùng trên ứng dụng.</p><form id="loginForm"><label>Mã nhân viên<input id="employeeCode" required autocomplete="username"></label><label>Mật khẩu<input id="password" type="password" required autocomplete="current-password"></label><button class="primary wide">ĐĂNG NHẬP</button></form><div id="loginMessage" class="message" hidden></div><p class="security">Quyền được kiểm tra tại server. Web không chứa service-role key hoặc private key.</p></section></main>`;
+  if(msg)message('#loginMessage',msg,'error');$('#loginForm').addEventListener('submit',handleLogin);$('#employeeCode').focus();
+}
+async function handleLogin(e){e.preventDefault();const b=e.submitter;b.disabled=true;message('#loginMessage','Đang xác thực…');try{const t=await authToken({email:employeeEmail($('#employeeCode').value),password:$('#password').value});const p=await fetchProfile(t.access_token,t.user.id);if(!p.active)throw new Error('Tài khoản đã ngừng hoạt động.');saveSession({access_token:t.access_token,refresh_token:t.refresh_token,expires_at:Math.floor(Date.now()/1000)+Number(t.expires_in||3600),profile:p});state.testRole=null;renderApp();}catch(err){message('#loginMessage',err.message,'error');}finally{b.disabled=false;}}
+
+function tabsForRole(r){if(r==='ADMIN')return[['overview','Tổng quan'],['operations','Báo hàng'],['picker','Lấy hàng'],['reports','Báo cáo'],['logs','Log'],['sku','SKU'],['users','Nhân sự'],['config','Cấu hình']];if(r==='ADMIN_INVENT')return[['overview','Tổng quan'],['operations','Báo hàng'],['reports','Báo cáo'],['logs','Log'],['sku','SKU']];if(r==='INVENT')return[['operations','Báo hàng']];return[['picker','Lấy hàng']];}
+function renderApp(){
+  clearInterval(state.pollTimer);state.pollTimer=null;const p=state.session.profile,r=role(),tabs=tabsForRole(r);state.activeTab=tabs.some(([id])=>id===state.activeTab)?state.activeTab:tabs[0][0];
+  document.body.innerHTML=`<div class="app-shell"><header class="topbar"><div><p class="eyebrow">BÁO HÀNG 1291</p><h1>Web nghiệp vụ</h1></div><div class="user"><strong>${escapeHtml(p.full_name)}</strong><span>${escapeHtml(p.employee_code)} · ${escapeHtml(ROLES[r]||r)}</span><button id="logout" class="ghost">Đăng xuất</button></div></header>${state.testRole?`<div class="test-banner">ĐANG KIỂM THỬ QUYỀN: <strong>${escapeHtml(ROLES[state.testRole])}</strong> · API cũng đang bị giới hạn theo quyền này. <button id="exitTest">Thoát kiểm thử</button></div>`:''}${actualRole()==='ADMIN'&&!state.testRole?`<div class="test-tools"><span>Kiểm thử giao diện thực tế:</span><button data-test="ADMIN_INVENT">Admin Invent</button><button data-test="INVENT">Báo hàng Invent</button><button data-test="PICKER">Người lấy hàng</button></div>`:''}<nav class="tabs">${tabs.map(([id,l])=>`<button data-tab="${id}" class="${id===state.activeTab?'active':''}">${l}</button>`).join('')}</nav><main id="content" class="content"></main></div><div id="busy" class="busy" hidden><div><span class="spinner"></span><strong id="busyText">Đang xử lý…</strong></div></div>`;
+  $('#logout').onclick=()=>{clearSession();renderLogin();};$('#exitTest')?.addEventListener('click',()=>{state.testRole=null;state.activeTab=null;renderApp();});$$('[data-test]').forEach(b=>b.onclick=()=>{state.testRole=b.dataset.test;state.activeTab=null;renderApp();});$$('[data-tab]').forEach(b=>b.onclick=()=>{state.activeTab=b.dataset.tab;renderTab();});renderTab();if(r==='PICKER')startAlertPolling();
+}
+function renderTab(){ $$('[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===state.activeTab));({overview:renderOverview,operations:renderOperations,picker:renderPicker,reports:renderReports,logs:renderLogs,sku:renderSku,users:renderUsers,config:renderConfig})[state.activeTab]?.(); }
+
+async function renderOverview(){
+  $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">LIVE</p><h2>Tổng quan hệ thống</h2></div><button id="refresh" class="secondary">Làm mới</button></div><div id="metrics" class="metrics"></div><div class="card"><h3>Google Sheet</h3><button id="syncSheet" class="secondary">ĐỒNG BỘ NGAY</button><div id="overviewMsg" class="message" hidden></div></div>`;$('#refresh').onclick=renderOverview;$('#syncSheet').onclick=async()=>{try{setBusy(true,'Đang đồng bộ Google Sheet…');const r=await api('sync-google-sheet');message('#overviewMsg',`Đã xuất ${r.exported||0}; còn ${r.remaining||0} sự kiện.`,'good');}catch(e){message('#overviewMsg',e.message,'error');}finally{setBusy(false);}};
+  try{const d=await api('admin-summary');$('#metrics').innerHTML=[['SKU',d.sku_count],['Nhân sự hoạt động',d.active_user_count],['Báo thiếu đang mở',d.active_issue_count],['Chờ Google Sheet',d.pending_sheet_count],['Log chẩn đoán',d.diagnostic_log_count]].map(([l,v])=>`<article class="metric"><span>${l}</span><strong>${Number(v||0).toLocaleString('vi-VN')}</strong></article>`).join('');}catch(e){$('#metrics').innerHTML=`<div class="message" data-type="error">${escapeHtml(e.message)}</div>`;}
 }
 
-function employeeEmail(code) {
-  const raw = String(code ?? '').trim().toLowerCase();
-  const safe = raw.replace(/[^a-z0-9._-]/g, '-');
-  if (!safe || safe !== raw) {
-    throw new Error('Mã nhân viên chỉ được dùng chữ, số, dấu chấm, gạch ngang hoặc gạch dưới.');
-  }
-  return `${safe}@bao-hang-1291.local`;
+async function renderOperations(){
+  $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">INVENT</p><h2>Xử lý báo hàng</h2></div><button id="refreshBoard" class="secondary">Làm mới</button></div><div class="subtabs"><button data-bucket="open" class="active">BÁO THIẾU</button><button data-bucket="skipped">SKIP</button><button data-bucket="available">ĐÃ CHÂM BÙ</button></div><div id="board"></div>`;let board=null,bucket='open';
+  const draw=()=>{const rows=board?.[bucket]||[];$('#board').innerHTML=rows.length?rows.map(i=>issueCardHtml(i,bucket)).join(''):`<div class="card muted">Không có SKU ở trạng thái này.</div>`;$$('[data-issue-action]').forEach(b=>b.onclick=()=>issueAction(b.dataset.issueId,b.dataset.issueAction,b.dataset.sku,load));$$('[data-claim]').forEach(b=>b.onclick=()=>claimIssue(b.dataset.claim,load));};
+  const load=async()=>{try{setBusy(true,'Đang tải báo hàng…');board=await api('issue-board');draw();}catch(e){$('#board').innerHTML=`<div class="message" data-type="error">${escapeHtml(e.message)}</div>`;}finally{setBusy(false);}};$('#refreshBoard').onclick=load;$$('[data-bucket]').forEach(b=>b.onclick=()=>{bucket=b.dataset.bucket;$$('[data-bucket]').forEach(x=>x.classList.toggle('active',x===b));draw();});load();
+}
+function issueCardHtml(i,b){const a=i.assigned_name?` · Xử lý: ${escapeHtml(i.assigned_name)}`:'';const c=`<article class="card issue"><div class="issue-top"><div><strong>SKU ${escapeHtml(i.sku)}</strong><span>${Number(i.report_count||1)} lượt báo</span></div><time>${formatTime(i.reported_at)}</time></div><p>${escapeHtml(i.product_name)}</p><small>Báo đầu: ${formatTime(i.reported_at)}${a}</small>`;if(b==='open')return`${c}<div class="actions">${!i.assigned_name?`<button class="secondary" data-claim="${i.id}">Nhận xử lý</button>`:''}<button class="danger" data-issue-action="NOT_FOUND" data-issue-id="${i.id}" data-sku="${escapeHtml(i.sku)}">SKIP</button><button class="primary" data-issue-action="AVAILABLE" data-issue-id="${i.id}" data-sku="${escapeHtml(i.sku)}">ĐÃ CHÂM BÙ</button></div></article>`;if(b==='skipped')return`${c}<div class="actions"><button class="primary" data-issue-action="AVAILABLE" data-issue-id="${i.id}" data-sku="${escapeHtml(i.sku)}">ĐÃ TÌM THẤY / CHÂM BÙ</button></div></article>`;return`${c}</article>`;}
+async function claimIssue(id,done){try{setBusy(true,'Đang khóa SKU cho người xử lý…');await api('claim-issue',{issue_id:id});await done();}catch(e){alert(e.message);}finally{setBusy(false);}}
+async function issueAction(id,action,sku,done){const l=action==='NOT_FOUND'?`Cho phép Picker SKIP SKU ${sku}?`:`Xác nhận SKU ${sku} đã có hàng/châm bù?`;if(!confirm(l))return;try{setBusy(true,'Đang cập nhật và gửi thông báo…');await api('update-issue',{issue_id:id,action});await done();}catch(e){alert(e.message);}finally{setBusy(false);}}
+
+function renderPicker(){
+  $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">PICKER</p><h2>Người lấy hàng</h2></div></div><div class="card"><label>Tìm bất kỳ phần nào của SKU hoặc tên hàng<input id="skuSearch" placeholder="Ví dụ: b, c, cd…"></label><div id="skuResults" class="search-results"></div><div id="selectedSku" class="selected muted">Chưa chọn SKU</div><button id="reportShortage" class="danger wide" disabled>BÁO THIẾU</button><div id="pickerMsg" class="message" hidden></div></div><div class="heading compact"><h3>Báo thiếu của tôi</h3><button id="refreshMine" class="secondary">Làm mới</button></div><div id="myIssues"></div><div id="pendingAlert"></div>`;let timer;state.selectedSku=null;$('#skuSearch').addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(searchSku,120);});$('#reportShortage').onclick=reportShortage;$('#refreshMine').onclick=loadMyIssues;loadMyIssues();loadPendingAlerts();
+}
+async function searchSku(){const q=$('#skuSearch')?.value.trim();if(!q){$('#skuResults').innerHTML='';return;}try{const d=await api('search-skus',{query:q,limit:20});$('#skuResults').innerHTML=(d.items||[]).map((x,i)=>`<button data-result="${i}"><strong>${escapeHtml(x.sku)}</strong><span>${escapeHtml(x.product_name)}</span></button>`).join('');$$('[data-result]').forEach(b=>b.onclick=()=>{const i=d.items[Number(b.dataset.result)];state.selectedSku=i;$('#selectedSku').innerHTML=`<strong>SKU ${escapeHtml(i.sku)}</strong><span>${escapeHtml(i.product_name)}</span>`;$('#selectedSku').classList.remove('muted');$('#reportShortage').disabled=false;$('#skuResults').innerHTML='';});}catch(e){message('#pickerMsg',e.message,'error');}}
+async function reportShortage(){if(!state.selectedSku)return;if(!confirm(`Báo thiếu SKU ${state.selectedSku.sku}?`))return;try{setBusy(true,'Đang báo nhóm Invent…');const r=await api('report-shortage',{sku:state.selectedSku.sku,client_request_id:crypto.randomUUID()});message('#pickerMsg',(r.already_reported?'SKU đã được báo trước. ':'')+(r.message||'Đã báo thiếu'),'good');await loadMyIssues();}catch(e){message('#pickerMsg',e.message,'error');}finally{setBusy(false);}}
+async function loadMyIssues(){if(!$('#myIssues'))return;try{const d=await api('my-issues');$('#myIssues').innerHTML=(d.issues||[]).length?(d.issues||[]).map(i=>`<article class="card issue"><strong>${statusLabel(i.status)} · SKU ${escapeHtml(i.sku)}</strong><p>${escapeHtml(i.product_name)}</p><small>${Number(i.report_count||1)} lượt · ${formatTime(i.reported_at)}</small></article>`).join(''):'<div class="card muted">Chưa có báo thiếu.</div>';}catch(e){$('#myIssues').innerHTML=`<div class="message" data-type="error">${escapeHtml(e.message)}</div>`;}}
+function startAlertPolling(){clearInterval(state.pollTimer);loadPendingAlerts();state.pollTimer=setInterval(loadPendingAlerts,15000);}
+async function loadPendingAlerts(){if(!$('#pendingAlert'))return;try{const d=await api('pending-alerts'),e=(d.events||[])[0];if(!e){$('#pendingAlert').innerHTML='';return;}$('#pendingAlert').innerHTML=`<div class="alert-modal"><div><p class="eyebrow">CẦN XÁC NHẬN</p><h2>${escapeHtml(e.title||statusLabel(e.status))}</h2><p>${escapeHtml(e.message)}</p><button id="ackAlert" class="primary wide">ĐÃ HIỂU</button></div></div>`;$('#ackAlert').onclick=async()=>{try{await api('ack-alert',{event_id:e.id});$('#pendingAlert').innerHTML='';}catch(err){alert(err.message);}};}catch(e){console.warn(e);}}
+
+async function renderReports(){
+  $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">30 NGÀY</p><h2>Báo cáo & lịch sử</h2></div><button id="refreshReports" class="secondary">Làm mới</button></div><div id="reportMetrics" class="metrics"></div><div class="panel-grid"><div class="card"><h3>SKU báo nhiều</h3><div id="topSkus"></div></div><div class="card"><h3>Lịch sử gần nhất</h3><div id="history"></div></div></div>`;$('#refreshReports').onclick=renderReports;
+  try{const[r,h]=await Promise.all([api('reports-summary'),api('issue-history',{limit:100})]),s=r.by_status||{},open=(s.OPEN||0)+(s.CLAIMED||0)+(s.SEARCHING||0)+(s.REPLENISHING||0);$('#reportMetrics').innerHTML=[['Đợt báo thiếu',r.issues],['Tổng lượt báo',r.reports],['Đang mở',open],['SKIP',s.SKIP_ALLOWED||0],['Đã châm bù',s.AVAILABLE||0],['Xử lý TB',r.average_resolution_minutes==null?'—':`${r.average_resolution_minutes} phút`]].map(([l,v])=>`<article class="metric"><span>${l}</span><strong>${escapeHtml(v)}</strong></article>`).join('');$('#topSkus').innerHTML=(r.top_skus||[]).map(x=>`<div class="row"><strong>${escapeHtml(x.sku)}</strong><span>${x.reports} lượt</span></div>`).join('')||'<span class="muted">Chưa có dữ liệu</span>';$('#history').innerHTML=(h.issues||[]).slice(0,50).map(i=>`<div class="row"><span><strong>${escapeHtml(i.sku)}</strong> · ${statusLabel(i.status)}</span><time>${formatTime(i.reported_at)}</time></div>`).join('')||'<span class="muted">Chưa có dữ liệu</span>';}catch(e){$('#content').insertAdjacentHTML('beforeend',`<div class="message" data-type="error">${escapeHtml(e.message)}</div>`);}
 }
 
-function readSession() {
-  try {
-    const parsed = JSON.parse(sessionStorage.getItem(SESSION_KEY) || 'null');
-    if (parsed?.access_token && parsed?.refresh_token && parsed?.profile) return parsed;
-  } catch {}
-  return null;
+async function renderLogs(){
+  $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">CHẨN ĐOÁN</p><h2>Log thiết bị</h2></div><button id="refreshLogs" class="secondary">Làm mới</button></div><div class="card"><label>Lọc mã nhân viên<input id="logFilter" placeholder="Mã nhân viên"></label><button id="filterLogs" class="secondary">Tìm</button><p class="muted">Log private, tự xóa sau 14 ngày. Link tải chỉ có hiệu lực ngắn hạn.</p></div><div id="logs"></div>`;$('#refreshLogs').onclick=()=>loadLogs('');$('#filterLogs').onclick=()=>loadLogs($('#logFilter').value);await loadLogs('');
+}
+async function loadLogs(employee){try{const d=await api('list-logs',{limit:300,employee_code:employee||''});$('#logs').innerHTML=(d.logs||[]).map(l=>`<article class="card log"><div><strong>${escapeHtml(l.employee_code)} · ${escapeHtml(ROLES[l.role]||l.role)}</strong><span>${escapeHtml(l.device_name||'Thiết bị Android')}</span><small>${escapeHtml(l.app_version)} · ${formatBytes(l.compressed_bytes)} · ${formatTime(l.created_at)}</small></div><button data-log="${l.id}" class="secondary">Tải log</button></article>`).join('')||'<div class="card muted">Chưa có log.</div>';$$('[data-log]').forEach(b=>b.onclick=()=>downloadLog(b.dataset.log));}catch(e){$('#logs').innerHTML=`<div class="message" data-type="error">${escapeHtml(e.message)}</div>`;}}
+async function downloadLog(id){try{setBusy(true,'Đang tạo link tải bảo mật…');const d=await api('download-log',{id});window.location.assign(d.url);}catch(e){alert(e.message);}finally{setBusy(false);}}
+
+function renderSku(){
+  $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">DANH MỤC</p><h2>Import SKU Excel</h2></div><button id="skuTemplate" class="secondary">Tải file mẫu</button></div><div class="card"><input id="skuFile" type="file" accept=".xlsx"><p class="muted">Cột bắt buộc: SKU, Tên sản phẩm. Trùng SKU được gộp; không tự xóa SKU vắng trong file mới.</p><div id="skuMsg" class="message" hidden></div></div><div id="skuPreview"></div>`;$('#skuFile').onchange=e=>previewSku(e.target.files?.[0]);$('#skuTemplate').onclick=downloadSkuTemplate;
+}
+async function previewSku(file){if(!file)return;try{validateFile(file);setBusy(true,'Đang đọc Excel…');const rows=parseSkuRows(await readWorkbook(file));$('#skuPreview').innerHTML=previewTable(rows.slice(0,100),['sku','product_name'],`${rows.length} SKU hợp lệ`)+`<button id="confirmSku" class="primary">XÁC NHẬN IMPORT ${rows.length} SKU</button>`;$('#confirmSku').onclick=()=>importSku(rows);}catch(e){message('#skuMsg',e.message,'error');}finally{setBusy(false);}}
+async function importSku(rows){try{setBusy(true,'Đang import SKU…');let done=0;for(let i=0;i<rows.length;i+=1000){await api('import-skus',{items:rows.slice(i,i+1000)});done+=Math.min(1000,rows.length-i);$('#busyText').textContent=`Đã import ${done}/${rows.length} SKU…`;}message('#skuMsg',`Hoàn tất ${rows.length} SKU.`,'good');$('#skuPreview').innerHTML='';}catch(e){message('#skuMsg',e.message,'error');}finally{setBusy(false);}}
+
+function renderUsers(){
+  $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">ADMIN DUY NHẤT</p><h2>Import nhân sự</h2></div><button id="userTemplate" class="secondary">Tải file mẫu</button></div><div class="card"><input id="userFile" type="file" accept=".xlsx"><p class="muted">Vai trò được phép: ADMIN_INVENT, INVENT, PICKER. ADMIN hiện tại không thể tạo thêm, hạ quyền hoặc vô hiệu hóa.</p><div id="userMsg" class="message" hidden></div></div><div id="userPreview"></div>`;$('#userFile').onchange=e=>previewUsers(e.target.files?.[0]);$('#userTemplate').onclick=downloadUserTemplate;
+}
+async function previewUsers(file){if(!file)return;try{validateFile(file);setBusy(true,'Đang đọc nhân sự…');const[rows,index]=await Promise.all([readWorkbook(file),api('admin-user-index')]),existing=new Set((index.employee_codes||[]).map(x=>String(x).toLowerCase())),parsed=parseUserRows(rows,existing);$('#userPreview').innerHTML=previewTable(parsed.slice(0,100),['employee_code','full_name','role','active'],`${parsed.length} nhân sự hợp lệ`)+`<button id="confirmUsers" class="primary">XÁC NHẬN IMPORT ${parsed.length} NHÂN SỰ</button>`;$('#confirmUsers').onclick=()=>importUsers(parsed);}catch(e){message('#userMsg',e.message,'error');}finally{setBusy(false);}}
+async function importUsers(rows){try{setBusy(true,'Đang import nhân sự…');let done=0;const errors=[];for(let i=0;i<rows.length;i+=200){const r=await api('import-users',{items:rows.slice(i,i+200)});done+=Number(r.created||0)+Number(r.updated||0);errors.push(...(r.errors||[]));}if(errors.length)throw new Error(errors.slice(0,5).join('\n'));message('#userMsg',`Hoàn tất ${done} nhân sự.`,'good');$('#userPreview').innerHTML='';}catch(e){message('#userMsg',e.message,'error');}finally{setBusy(false);}}
+
+async function renderConfig(){
+  $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">ADMIN</p><h2>Cấu hình hệ thống</h2></div></div><form id="configForm" class="card form-grid"><label>Nhắc Invent nhận xử lý (phút)<input id="ackMinutes" type="number" min="1" max="480" required></label><label>Chu kỳ nhắc Invent (phút)<input id="reminderMinutes" type="number" min="1" max="480" required></label><label>Quá thời gian xử lý (phút)<input id="replenishMinutes" type="number" min="1" max="480" required></label><label>Nhắc Picker chưa ACK (phút)<input id="pickerAck" type="number" min="1" max="60" required></label><label>Lưu log server (ngày)<input id="logRetention" type="number" min="1" max="60" required></label><p class="muted span">Không có auto-SKIP: hết thời gian chỉ nhắc Invent, không tự cho Picker skip.</p><button class="primary">LƯU CẤU HÌNH</button><div id="configMsg" class="message span" hidden></div></form>`;
+  try{const c=await api('get-config');$('#ackMinutes').value=c.acknowledge_minutes;$('#reminderMinutes').value=c.reminder_minutes;$('#replenishMinutes').value=c.replenish_minutes;$('#pickerAck').value=c.picker_ack_reminder_minutes;$('#logRetention').value=c.diagnostic_log_retention_days;}catch(e){message('#configMsg',e.message,'error');}
+  $('#configForm').onsubmit=async e=>{e.preventDefault();try{setBusy(true,'Đang lưu cấu hình…');await api('save-config',{acknowledge_minutes:Number($('#ackMinutes').value),reminder_minutes:Number($('#reminderMinutes').value),replenish_minutes:Number($('#replenishMinutes').value),picker_ack_reminder_minutes:Number($('#pickerAck').value),diagnostic_log_retention_days:Number($('#logRetention').value)});message('#configMsg','Đã lưu cấu hình.','good');}catch(err){message('#configMsg',err.message,'error');}finally{setBusy(false);}};
 }
 
-function saveSession(session) {
-  state.session = session;
-  sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
-}
+function validateFile(file){if(!file.name.toLowerCase().endsWith('.xlsx'))throw new Error('Chỉ hỗ trợ file .xlsx');if(file.size>MAX_FILE_BYTES)throw new Error('File vượt quá 15 MB');}
+async function readWorkbook(file){const ExcelJS=await getExcelJS(),wb=new ExcelJS.Workbook();await wb.xlsx.load(await file.arrayBuffer());const ws=wb.worksheets[0];if(!ws)throw new Error('File không có sheet');const rows=[];ws.eachRow({includeEmpty:false},row=>rows.push(row.values.slice(1).map(cellValue)));return rows;}
+function cellValue(v){if(v==null)return'';if(typeof v==='object'){if('text'in v)return String(v.text);if('result'in v)return String(v.result??'');if(Array.isArray(v.richText))return v.richText.map(x=>x.text).join('');}return String(v).trim();}
+function headerIndexes(row){const m=new Map();row.forEach((x,i)=>m.set(normalize(x),i));return m;}
+function findHeader(map,...names){for(const n of names){const i=map.get(normalize(n));if(i!==undefined)return i;}throw new Error(`Thiếu cột ${names[0]}`);}
+function parseSkuRows(rows){if(rows.length<2)throw new Error('File không có dữ liệu');const h=headerIndexes(rows[0]),si=findHeader(h,'sku','ma sku'),ni=findHeader(h,'ten san pham','ten hang','product name'),map=new Map();rows.slice(1).forEach((r,idx)=>{const sku=String(r[si]||'').trim(),name=String(r[ni]||'').trim();if(!sku&&!name)return;if(!sku||!name)throw new Error(`Dòng ${idx+2}: thiếu SKU hoặc tên sản phẩm`);if(map.has(sku)&&normalize(map.get(sku).product_name)!==normalize(name))throw new Error(`SKU ${sku} có nhiều tên khác nhau`);map.set(sku,{sku,product_name:name});});if(!map.size)throw new Error('Không có SKU hợp lệ');return[...map.values()];}
+function parseUserRows(rows,existing){if(rows.length<2)throw new Error('File không có dữ liệu');const h=headerIndexes(rows[0]),ci=findHeader(h,'ma nhan vien','employee code'),ni=findHeader(h,'ho ten','full name'),ki=findHeader(h,'nha thau','contractor'),ri=findHeader(h,'vai tro','role'),ai=findHeader(h,'trang thai','active'),pi=findHeader(h,'mat khau khoi tao','initial password'),seen=new Set(),out=[];rows.slice(1).forEach((r,idx)=>{const line=idx+2,code=String(r[ci]||'').trim(),name=String(r[ni]||'').trim();if(!code&&!name)return;if(!code||!name)throw new Error(`Dòng ${line}: thiếu mã hoặc họ tên`);if(!/^[A-Za-z0-9._-]+$/.test(code))throw new Error(`Dòng ${line}: mã nhân viên không hợp lệ`);const key=code.toLowerCase();if(seen.has(key))throw new Error(`Mã ${code} bị trùng`);seen.add(key);const rr=parseRole(r[ri],line),active=parseActive(r[ai],line),pwd=String(r[pi]||'');if(!existing.has(key)&&pwd.length<8)throw new Error(`Dòng ${line}: tài khoản mới cần mật khẩu ít nhất 8 ký tự`);out.push({employee_code:code,full_name:name,contractor:String(r[ki]||'').trim(),role:rr,active,initial_password:pwd});});if(!out.length)throw new Error('Không có nhân sự hợp lệ');return out;}
+function parseRole(v,line){const x=normalize(v).replace(/[ -]/g,'_');if(['picker','pick','nguoi_lay_hang'].includes(x))return'PICKER';if(['invent','invent_user','bao_hang_invent'].includes(x))return'INVENT';if(['admin_invent','invent_admin'].includes(x))return'ADMIN_INVENT';if(x==='admin')throw new Error(`Dòng ${line}: không được tạo ADMIN thứ hai`);throw new Error(`Dòng ${line}: quyền '${v}' không hợp lệ`);}
+function parseActive(v,line){const x=normalize(v);if(['hoat dong','active','true','1','co'].includes(x))return true;if(['ngung','ngung hoat dong','inactive','false','0','khong'].includes(x))return false;throw new Error(`Dòng ${line}: trạng thái '${v}' không hợp lệ`);}
+function previewTable(rows,fields,title){return`<div class="card"><h3>${escapeHtml(title)}</h3><div class="table-wrap"><table><thead><tr>${fields.map(f=>`<th>${escapeHtml(f)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${fields.map(f=>`<td>${escapeHtml(r[f])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>${rows.length>=100?'<p class="muted">Chỉ hiển thị 100 dòng đầu.</p>':''}</div>`;}
+async function downloadSkuTemplate(){const ExcelJS=await getExcelJS(),wb=new ExcelJS.Workbook(),ws=wb.addWorksheet('SKU');ws.addRow(['SKU','Tên sản phẩm']);ws.addRow(['ABC123','Sản phẩm mẫu']);downloadBuffer(await wb.xlsx.writeBuffer(),'MAU_SKU_BAO_HANG_1291.xlsx');}
+async function downloadUserTemplate(){const ExcelJS=await getExcelJS(),wb=new ExcelJS.Workbook(),ws=wb.addWorksheet('NHAN_SU');ws.addRow(['Mã nhân viên','Họ tên','Nhà thầu','Vai trò','Trạng thái','Mật khẩu khởi tạo']);ws.addRow(['10001','Nguyễn Văn Mẫu','Nội bộ','PICKER','Hoạt động','ChangeMe123']);ws.addRow(['10002','Invent Mẫu','Nội bộ','INVENT','Hoạt động','ChangeMe123']);ws.addRow(['10003','Admin Invent Mẫu','Nội bộ','ADMIN_INVENT','Hoạt động','ChangeMe123']);downloadBuffer(await wb.xlsx.writeBuffer(),'MAU_NHAN_SU_BAO_HANG_1291.xlsx');}
+function downloadBuffer(buffer,name){const blob=new Blob([buffer],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}
+function statusLabel(s){return({OPEN:'BÁO THIẾU',CLAIMED:'BÁO THIẾU',SEARCHING:'BÁO THIẾU',REPLENISHING:'BÁO THIẾU',AVAILABLE:'ĐÃ CHÂM BÙ',SKIP_ALLOWED:'ĐƯỢC SKIP',CLOSED:'ĐÃ ĐÓNG'})[s]||s;}
+function formatTime(v){if(!v)return'—';try{return new Intl.DateTimeFormat('vi-VN',{dateStyle:'short',timeStyle:'short'}).format(new Date(v));}catch{return v;}}
+function formatBytes(n){const v=Number(n||0);return v<1024?`${v} B`:`${(v/1024).toFixed(1)} KB`;}
 
-function clearSession() {
-  state.session = null;
-  sessionStorage.removeItem(SESSION_KEY);
-}
-
-async function parseResponse(response) {
-  const text = await response.text();
-  let data = {};
-  if (text) {
-    try { data = JSON.parse(text); } catch { data = { error: text }; }
-  }
-  if (!response.ok) {
-    throw new Error(data.error || data.message || `Lỗi máy chủ ${response.status}`);
-  }
-  return data;
-}
-
-async function authToken(payload, grantType = 'password') {
-  const response = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=${grantType}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', apikey: SUPABASE_ANON_KEY },
-    body: JSON.stringify(payload),
-  });
-  return parseResponse(response);
-}
-
-async function fetchProfile(accessToken, userId) {
-  const query = new URLSearchParams({
-    id: `eq.${userId}`,
-    select: 'id,employee_code,full_name,contractor,role,active',
-  });
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/profiles?${query}`, {
-    headers: { apikey: SUPABASE_ANON_KEY, authorization: `Bearer ${accessToken}` },
-  });
-  const rows = await parseResponse(response);
-  if (!Array.isArray(rows) || rows.length === 0) throw new Error('Tài khoản chưa có hồ sơ nhân sự.');
-  return rows[0];
-}
-
-async function refreshSessionIfNeeded() {
-  if (!state.session) throw new Error('Phiên đăng nhập không tồn tại.');
-  const now = Math.floor(Date.now() / 1000);
-  if ((state.session.expires_at || 0) > now + 120) return;
-  const token = await authToken({ refresh_token: state.session.refresh_token }, 'refresh_token');
-  saveSession({
-    ...state.session,
-    access_token: token.access_token,
-    refresh_token: token.refresh_token || state.session.refresh_token,
-    expires_at: now + Number(token.expires_in || 3600),
-  });
-}
-
-async function api(action, payload = {}) {
-  await refreshSessionIfNeeded();
-  const response = await fetch(`${API_BASE}/${encodeURIComponent(action)}`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      apikey: SUPABASE_ANON_KEY,
-      authorization: `Bearer ${state.session.access_token}`,
-    },
-    body: JSON.stringify(payload),
-  });
-  if (response.status === 401) {
-    clearSession();
-    renderLogin('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
-    throw new Error('Phiên đăng nhập đã hết hạn.');
-  }
-  return parseResponse(response);
-}
-
-function setBusy(busy, text = 'Đang xử lý…') {
-  const overlay = $('#busyOverlay');
-  if (!overlay) return;
-  $('#busyText').textContent = text;
-  overlay.hidden = !busy;
-}
-
-function showMessage(target, message, type = 'info') {
-  const box = typeof target === 'string' ? $(target) : target;
-  if (!box) return;
-  box.textContent = message;
-  box.dataset.type = type;
-  box.hidden = !message;
-}
-
-function renderLogin(message = '') {
-  document.body.innerHTML = `
-    <main class="login-shell">
-      <section class="login-card" aria-labelledby="loginTitle">
-        <div class="brand-mark">1291</div>
-        <p class="eyebrow">BÁO HÀNG 1291</p>
-        <h1 id="loginTitle">Admin Center</h1>
-        <p class="muted">Đăng nhập bằng tài khoản INVENT ADMIN đang dùng trên ứng dụng.</p>
-        <form id="loginForm" autocomplete="on">
-          <label>Mã nhân viên<input id="employeeCode" autocomplete="username" required maxlength="80"></label>
-          <label>Mật khẩu<input id="password" type="password" autocomplete="current-password" required maxlength="200"></label>
-          <button class="primary wide" type="submit">ĐĂNG NHẬP</button>
-        </form>
-        <div id="loginMessage" class="message" hidden></div>
-        <p class="security-note">Phiên đăng nhập chỉ lưu trong tab trình duyệt hiện tại. Web không chứa service-role key hoặc Firebase private key.</p>
-      </section>
-    </main>`;
-  if (message) showMessage('#loginMessage', message, 'error');
-  $('#loginForm').addEventListener('submit', handleLogin);
-  $('#employeeCode').focus();
-}
-
-async function handleLogin(event) {
-  event.preventDefault();
-  const button = event.submitter;
-  button.disabled = true;
-  showMessage('#loginMessage', 'Đang xác thực…');
-  try {
-    const code = $('#employeeCode').value.trim();
-    const password = $('#password').value;
-    const token = await authToken({ email: employeeEmail(code), password });
-    const profile = await fetchProfile(token.access_token, token.user.id);
-    if (!profile.active) throw new Error('Tài khoản đã ngừng hoạt động.');
-    if (profile.role !== 'INVENT_ADMIN') throw new Error('Web quản trị chỉ dành cho INVENT ADMIN.');
-    saveSession({
-      access_token: token.access_token,
-      refresh_token: token.refresh_token,
-      expires_at: Math.floor(Date.now() / 1000) + Number(token.expires_in || 3600),
-      profile,
-    });
-    renderApp();
-    await initializeAdminData();
-  } catch (error) {
-    showMessage('#loginMessage', error.message || String(error), 'error');
-  } finally {
-    button.disabled = false;
-  }
-}
-
-function renderApp() {
-  const profile = state.session.profile;
-  document.body.innerHTML = `
-    <div class="app-shell">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">BÁO HÀNG 1291</p>
-          <h1>Admin Center</h1>
-        </div>
-        <div class="user-block">
-          <div><strong id="headerName"></strong><span id="headerMeta"></span></div>
-          <button id="logoutBtn" class="ghost">Đăng xuất</button>
-        </div>
-      </header>
-
-      <nav class="tabs" aria-label="Chức năng quản trị">
-        <button data-tab="overview" class="active">Tổng quan</button>
-        <button data-tab="sku">SKU</button>
-        <button data-tab="users">Nhân sự</button>
-        <button data-tab="config">Cấu hình</button>
-      </nav>
-
-      <main class="content">
-        <section id="tab-overview" class="tab-panel active">
-          <div class="section-heading"><div><p class="eyebrow">TRẠNG THÁI LIVE</p><h2>Tổng quan hệ thống</h2></div><button id="refreshOverview" class="secondary">Làm mới</button></div>
-          <div class="metrics" id="metrics"></div>
-          <div class="panel-grid two">
-            <article class="card"><h3>Đồng bộ Google Sheet</h3><p class="muted">Đẩy các sự kiện đang chờ sang file báo cáo.</p><button id="syncSheetBtn" class="secondary">ĐỒNG BỘ NGAY</button><div id="syncMessage" class="message" hidden></div></article>
-            <article class="card"><h3>Nguyên tắc dữ liệu</h3><p class="muted">Import là upsert. SKU hoặc nhân sự vắng mặt trong file mới không bị xóa tự động.</p><div class="status-chip good">Không xóa dữ liệu ngoài file</div></article>
-          </div>
-        </section>
-
-        <section id="tab-sku" class="tab-panel">
-          <div class="section-heading"><div><p class="eyebrow">DANH MỤC</p><h2>Import SKU từ Excel</h2></div><button id="skuTemplateBtn" class="secondary">Tải file mẫu</button></div>
-          <article class="card upload-card">
-            <label class="drop-zone" id="skuDrop"><input id="skuFile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"><strong>Chọn hoặc kéo thả file SKU.xlsx</strong><span>Tối đa 15 MB · đọc Sheet đầu tiên · cột SKU + Tên sản phẩm</span></label>
-            <div id="skuMessage" class="message" hidden></div>
-          </article>
-          <section id="skuPreview" hidden></section>
-        </section>
-
-        <section id="tab-users" class="tab-panel">
-          <div class="section-heading"><div><p class="eyebrow">TÀI KHOẢN</p><h2>Import nhân sự từ Excel</h2></div><a class="button-link secondary" href="/MAU_NHAN_SU_BAO_HANG_1291.xlsx" download>Tải file mẫu</a></div>
-          <article class="card upload-card">
-            <label class="drop-zone" id="userDrop"><input id="userFile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"><strong>Chọn hoặc kéo thả file Nhân sự.xlsx</strong><span>Tối đa 15 MB · mật khẩu chỉ dùng khi tạo tài khoản mới</span></label>
-            <div id="userMessage" class="message" hidden></div>
-          </article>
-          <section id="userPreview" hidden></section>
-        </section>
-
-        <section id="tab-config" class="tab-panel">
-          <div class="section-heading"><div><p class="eyebrow">SLA</p><h2>Cấu hình thời gian</h2></div></div>
-          <form id="configForm" class="card form-grid">
-            <label>Xác nhận nhận tin (phút)<input id="ackMinutes" type="number" min="1" max="480" required></label>
-            <label>Nhắc lại (phút)<input id="reminderMinutes" type="number" min="1" max="480" required></label>
-            <label>Cho phép skip (phút)<input id="skipMinutes" type="number" min="1" max="480" required></label>
-            <label>Thời gian xử lý/châm (phút)<input id="replenishMinutes" type="number" min="1" max="480" required></label>
-            <div class="form-actions"><button class="primary" type="submit">LƯU CẤU HÌNH</button></div>
-            <div id="configMessage" class="message span-all" hidden></div>
-          </form>
-        </section>
-      </main>
-    </div>
-    <div id="busyOverlay" class="busy-overlay" hidden><div class="busy-card"><div class="spinner"></div><strong id="busyText">Đang xử lý…</strong></div></div>`;
-
-  $('#headerName').textContent = profile.full_name;
-  $('#headerMeta').textContent = `${profile.employee_code} · INVENT ADMIN`;
-  $('#logoutBtn').addEventListener('click', logout);
-  $$('.tabs button').forEach((button) => button.addEventListener('click', () => switchTab(button.dataset.tab)));
-  $('#refreshOverview').addEventListener('click', loadOverview);
-  $('#syncSheetBtn').addEventListener('click', syncSheet);
-  $('#skuFile').addEventListener('change', (e) => previewSkuFile(e.target.files?.[0]));
-  $('#userFile').addEventListener('change', (e) => previewUserFile(e.target.files?.[0]));
-  $('#skuTemplateBtn').addEventListener('click', downloadSkuTemplate);
-  $('#configForm').addEventListener('submit', saveConfig);
-  setupDropZone('#skuDrop', '#skuFile', previewSkuFile);
-  setupDropZone('#userDrop', '#userFile', previewUserFile);
-}
-
-function switchTab(tab) {
-  state.activeTab = tab;
-  $$('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
-  $$('.tab-panel').forEach((p) => p.classList.toggle('active', p.id === `tab-${tab}`));
-}
-
-async function initializeAdminData() {
-  setBusy(true, 'Đang tải dữ liệu quản trị…');
-  try {
-    await Promise.all([loadOverview(), loadConfig(), loadUserIndex()]);
-  } catch (error) {
-    console.error(error);
-  } finally {
-    setBusy(false);
-  }
-}
-
-async function loadOverview() {
-  const metrics = $('#metrics');
-  if (!metrics) return;
-  metrics.innerHTML = '<div class="metric loading">Đang tải…</div>';
-  try {
-    const data = await api('admin-summary');
-    const items = [
-      ['SKU', data.sku_count, 'Danh mục hiện có'],
-      ['Nhân sự hoạt động', data.active_user_count, `Tổng ${data.profile_count} tài khoản`],
-      ['Báo thiếu đang mở', data.active_issue_count, 'SKU đang chờ/xử lý'],
-      ['Chờ Google Sheet', data.pending_sheet_count, 'Sự kiện chưa xuất'],
-    ];
-    metrics.replaceChildren(...items.map(([label, value, hint]) => metricCard(label, value, hint)));
-  } catch (error) {
-    metrics.innerHTML = '';
-    const box = document.createElement('div');
-    box.className = 'message'; box.dataset.type = 'error'; box.textContent = error.message; metrics.append(box);
-  }
-}
-
-function metricCard(label, value, hint) {
-  const card = document.createElement('article');
-  card.className = 'metric';
-  const p = document.createElement('p'); p.textContent = label;
-  const strong = document.createElement('strong'); strong.textContent = Number(value || 0).toLocaleString('vi-VN');
-  const span = document.createElement('span'); span.textContent = hint;
-  card.append(p, strong, span);
-  return card;
-}
-
-async function loadUserIndex() {
-  const data = await api('admin-user-index');
-  state.existingUserCodes = new Set((data.employee_codes || []).map((v) => String(v).toLowerCase()));
-}
-
-async function syncSheet() {
-  const button = $('#syncSheetBtn');
-  button.disabled = true;
-  showMessage('#syncMessage', 'Đang đồng bộ…');
-  try {
-    const result = await api('sync-google-sheet');
-    showMessage('#syncMessage', `Hoàn tất: ${result.exported || 0} sự kiện; còn ${result.remaining || 0}.`, 'success');
-    await loadOverview();
-  } catch (error) {
-    showMessage('#syncMessage', error.message, 'error');
-  } finally { button.disabled = false; }
-}
-
-async function loadConfig() {
-  try {
-    const config = await api('get-config');
-    $('#ackMinutes').value = config.acknowledge_minutes;
-    $('#reminderMinutes').value = config.reminder_minutes;
-    $('#skipMinutes').value = config.skip_minutes;
-    $('#replenishMinutes').value = config.replenish_minutes;
-  } catch (error) {
-    showMessage('#configMessage', error.message, 'error');
-  }
-}
-
-async function saveConfig(event) {
-  event.preventDefault();
-  const values = {
-    acknowledge_minutes: Number($('#ackMinutes').value),
-    reminder_minutes: Number($('#reminderMinutes').value),
-    skip_minutes: Number($('#skipMinutes').value),
-    replenish_minutes: Number($('#replenishMinutes').value),
-  };
-  if (Object.values(values).some((v) => !Number.isInteger(v) || v < 1 || v > 480)) {
-    showMessage('#configMessage', 'Mỗi mốc phải là số nguyên từ 1 đến 480 phút.', 'error');
-    return;
-  }
-  const button = event.submitter;
-  button.disabled = true;
-  try {
-    await api('save-config', values);
-    showMessage('#configMessage', 'Đã lưu cấu hình SLA.', 'success');
-  } catch (error) {
-    showMessage('#configMessage', error.message, 'error');
-  } finally { button.disabled = false; }
-}
-
-function setupDropZone(zoneSelector, inputSelector, handler) {
-  const zone = $(zoneSelector);
-  const input = $(inputSelector);
-  for (const eventName of ['dragenter', 'dragover']) {
-    zone.addEventListener(eventName, (event) => { event.preventDefault(); zone.classList.add('dragging'); });
-  }
-  for (const eventName of ['dragleave', 'drop']) {
-    zone.addEventListener(eventName, (event) => { event.preventDefault(); zone.classList.remove('dragging'); });
-  }
-  zone.addEventListener('drop', (event) => {
-    const file = event.dataTransfer?.files?.[0];
-    if (!file) return;
-    const transfer = new DataTransfer(); transfer.items.add(file); input.files = transfer.files;
-    handler(file);
-  });
-}
-
-function ensureXlsx(file) {
-  if (!file) throw new Error('Chưa chọn file.');
-  if (file.size > MAX_FILE_BYTES) throw new Error('File vượt quá 15 MB.');
-  if (!file.name.toLowerCase().endsWith('.xlsx')) throw new Error('Chỉ hỗ trợ file .xlsx.');
-}
-
-function cellText(cell) {
-  const text = cell?.text;
-  if (text != null && String(text).trim() !== '') return String(text).trim();
-  const value = cell?.value;
-  if (value == null) return '';
-  if (value instanceof Date) return value.toISOString();
-  if (typeof value === 'object' && value.result != null) return String(value.result).trim();
-  return String(value).trim();
-}
-
-async function readRows(file) {
-  ensureXlsx(file);
-  const ExcelJS = await getExcelJS();
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(await file.arrayBuffer());
-  const sheet = workbook.worksheets[0];
-  if (!sheet) throw new Error('Không tìm thấy Sheet đầu tiên trong file XLSX.');
-  const rows = [];
-  sheet.eachRow({ includeEmpty: false }, (row) => {
-    const values = [];
-    for (let col = 1; col <= row.cellCount; col += 1) values[col - 1] = cellText(row.getCell(col));
-    rows.push(values);
-  });
-  if (!rows.length) throw new Error('File không có dữ liệu.');
-  return rows;
-}
-
-function headerMap(row) {
-  const map = new Map();
-  row.forEach((value, index) => map.set(normalize(value), index));
-  return map;
-}
-
-function findHeader(headers, aliases) {
-  for (const alias of aliases) {
-    const key = normalize(alias);
-    if (headers.has(key)) return headers.get(key);
-  }
-  throw new Error(`Thiếu cột bắt buộc: ${aliases[0]}`);
-}
-
-async function previewSkuFile(file) {
-  const section = $('#skuPreview');
-  section.hidden = true;
-  showMessage('#skuMessage', 'Đang đọc file…');
-  setBusy(true, 'Đang kiểm tra file SKU…');
-  try {
-    const rows = await readRows(file);
-    const headers = headerMap(rows[0]);
-    const skuCol = findHeader(headers, ['sku', 'ma sku']);
-    const nameCol = findHeader(headers, ['ten san pham', 'ten hang', 'product name']);
-    const unique = new Map();
-    let duplicateCount = 0;
-    const errors = [];
-    rows.slice(1).forEach((row, index) => {
-      const line = index + 2;
-      const sku = String(row[skuCol] || '').trim();
-      const product_name = String(row[nameCol] || '').trim();
-      if (!sku && !product_name) return;
-      if (!sku || !product_name) { errors.push(`Dòng ${line}: thiếu SKU hoặc Tên sản phẩm`); return; }
-      const previous = unique.get(sku);
-      if (previous) {
-        duplicateCount += 1;
-        if (normalize(previous.product_name) !== normalize(product_name)) errors.push(`SKU ${sku} có nhiều tên sản phẩm khác nhau`);
-        return;
-      }
-      unique.set(sku, { sku, product_name });
-    });
-    if (!unique.size) errors.push('Không tìm thấy SKU hợp lệ.');
-    state.skuPreview = { fileName: file.name, items: [...unique.values()], duplicateCount, errors };
-    renderImportPreview('sku');
-    showMessage('#skuMessage', errors.length ? `File có ${errors.length} lỗi cần sửa trước khi import.` : `Đã kiểm tra ${unique.size.toLocaleString('vi-VN')} SKU hợp lệ.`, errors.length ? 'error' : 'success');
-  } catch (error) {
-    state.skuPreview = null;
-    showMessage('#skuMessage', error.message, 'error');
-  } finally { setBusy(false); }
-}
-
-function parseRole(value, line) {
-  const v = normalize(value);
-  if (['picker', 'pick', 'nguoi bao', 'nguoi bao hang'].includes(v)) return 'PICKER';
-  if (['invent user', 'invent_user', 'invent'].includes(v)) return 'INVENT_USER';
-  if (['invent admin', 'invent_admin', 'admin'].includes(v)) return 'INVENT_ADMIN';
-  throw new Error(`Dòng ${line}: vai trò '${value}' không hợp lệ`);
-}
-
-function parseActive(value, line) {
-  const v = normalize(value);
-  if (['hoat dong', 'active', 'true', '1', 'co'].includes(v)) return true;
-  if (['ngung', 'ngung hoat dong', 'inactive', 'false', '0', 'khong'].includes(v)) return false;
-  throw new Error(`Dòng ${line}: trạng thái '${value}' không hợp lệ`);
-}
-
-async function previewUserFile(file) {
-  const section = $('#userPreview');
-  section.hidden = true;
-  showMessage('#userMessage', 'Đang đọc file…');
-  setBusy(true, 'Đang kiểm tra file nhân sự…');
-  try {
-    if (!state.existingUserCodes.size) await loadUserIndex();
-    const rows = await readRows(file);
-    const headers = headerMap(rows[0]);
-    const cols = {
-      code: findHeader(headers, ['ma nhan vien', 'employee code']),
-      name: findHeader(headers, ['ho ten', 'ten nhan vien', 'full name']),
-      contractor: findHeader(headers, ['nha thau', 'contractor']),
-      role: findHeader(headers, ['vai tro', 'role']),
-      active: findHeader(headers, ['trang thai', 'active']),
-      password: findHeader(headers, ['mat khau khoi tao', 'mat khau', 'initial password']),
-    };
-    const unique = new Map();
-    const errors = [];
-    let createCount = 0;
-    let updateCount = 0;
-    rows.slice(1).forEach((row, index) => {
-      const line = index + 2;
-      try {
-        const employee_code = String(row[cols.code] || '').trim();
-        const full_name = String(row[cols.name] || '').trim();
-        if (!employee_code && !full_name) return;
-        if (!employee_code || !full_name) throw new Error(`Dòng ${line}: thiếu mã hoặc họ tên`);
-        if (!/^[A-Za-z0-9._-]+$/.test(employee_code)) throw new Error(`Dòng ${line}: mã nhân viên không hợp lệ`);
-        const key = employee_code.toLowerCase();
-        if (unique.has(key)) throw new Error(`Mã nhân viên ${employee_code} bị trùng`);
-        const existing = state.existingUserCodes.has(key);
-        const initial_password = String(row[cols.password] || '');
-        if (!existing && initial_password.length < 8) throw new Error(`Dòng ${line}: tài khoản mới cần mật khẩu ít nhất 8 ký tự`);
-        const item = {
-          employee_code,
-          full_name,
-          contractor: String(row[cols.contractor] || '').trim(),
-          role: parseRole(row[cols.role], line),
-          active: parseActive(row[cols.active], line),
-          initial_password,
-          _mode: existing ? 'Cập nhật' : 'Tạo mới',
-        };
-        unique.set(key, item);
-        if (existing) updateCount += 1; else createCount += 1;
-      } catch (error) { errors.push(error.message); }
-    });
-    if (!unique.size) errors.push('Không tìm thấy nhân sự hợp lệ.');
-    state.userPreview = { fileName: file.name, items: [...unique.values()], createCount, updateCount, errors };
-    renderImportPreview('users');
-    showMessage('#userMessage', errors.length ? `File có ${errors.length} lỗi cần sửa trước khi import.` : `Hợp lệ: ${createCount} tạo mới, ${updateCount} cập nhật.`, errors.length ? 'error' : 'success');
-  } catch (error) {
-    state.userPreview = null;
-    showMessage('#userMessage', error.message, 'error');
-  } finally { setBusy(false); }
-}
-
-function renderImportPreview(kind) {
-  const isSku = kind === 'sku';
-  const preview = isSku ? state.skuPreview : state.userPreview;
-  const section = $(`#${isSku ? 'sku' : 'user'}Preview`);
-  if (!preview) { section.hidden = true; return; }
-  section.hidden = false;
-  section.replaceChildren();
-  const card = document.createElement('article'); card.className = 'card preview-card';
-  const heading = document.createElement('div'); heading.className = 'preview-heading';
-  const titleWrap = document.createElement('div');
-  const title = document.createElement('h3'); title.textContent = `Xem trước · ${preview.fileName}`;
-  const summary = document.createElement('p'); summary.className = 'muted';
-  summary.textContent = isSku
-    ? `${preview.items.length.toLocaleString('vi-VN')} SKU sau khi gộp · ${preview.duplicateCount} dòng trùng`
-    : `${preview.items.length.toLocaleString('vi-VN')} nhân sự · ${preview.createCount} tạo mới · ${preview.updateCount} cập nhật`;
-  titleWrap.append(title, summary);
-  const button = document.createElement('button'); button.className = 'primary'; button.textContent = 'XÁC NHẬN IMPORT'; button.disabled = preview.errors.length > 0;
-  button.addEventListener('click', () => isSku ? importSku() : importUsers());
-  heading.append(titleWrap, button); card.append(heading);
-
-  if (preview.errors.length) {
-    const errorBox = document.createElement('div'); errorBox.className = 'error-list';
-    const strong = document.createElement('strong'); strong.textContent = `${preview.errors.length} lỗi:`; errorBox.append(strong);
-    const ul = document.createElement('ul');
-    preview.errors.slice(0, 30).forEach((message) => { const li = document.createElement('li'); li.textContent = message; ul.append(li); });
-    if (preview.errors.length > 30) { const li = document.createElement('li'); li.textContent = `… và ${preview.errors.length - 30} lỗi khác`; ul.append(li); }
-    errorBox.append(ul); card.append(errorBox);
-  }
-
-  const tableWrap = document.createElement('div'); tableWrap.className = 'table-wrap';
-  const table = document.createElement('table');
-  const headers = isSku ? ['SKU', 'Tên sản phẩm'] : ['Mã nhân viên', 'Họ tên', 'Nhà thầu', 'Vai trò', 'Trạng thái', 'Thao tác'];
-  const keys = isSku ? ['sku', 'product_name'] : ['employee_code', 'full_name', 'contractor', 'role', 'active', '_mode'];
-  const thead = document.createElement('thead'); const trh = document.createElement('tr');
-  headers.forEach((h) => { const th = document.createElement('th'); th.textContent = h; trh.append(th); }); thead.append(trh); table.append(thead);
-  const tbody = document.createElement('tbody');
-  preview.items.slice(0, 20).forEach((item) => {
-    const tr = document.createElement('tr');
-    keys.forEach((key) => { const td = document.createElement('td'); td.textContent = key === 'active' ? (item[key] ? 'Hoạt động' : 'Ngừng') : String(item[key] ?? ''); tr.append(td); });
-    tbody.append(tr);
-  });
-  table.append(tbody); tableWrap.append(table); card.append(tableWrap);
-  if (preview.items.length > 20) { const note = document.createElement('p'); note.className = 'muted preview-limit'; note.textContent = `Chỉ hiển thị 20/${preview.items.length.toLocaleString('vi-VN')} dòng để xem trước.`; card.append(note); }
-  section.append(card);
-}
-
-async function importSku() {
-  const preview = state.skuPreview;
-  if (!preview || preview.errors.length) return;
-  setBusy(true, `Đang import 0/${preview.items.length} SKU…`);
-  try {
-    let imported = 0;
-    for (let i = 0; i < preview.items.length; i += 1000) {
-      const batch = preview.items.slice(i, i + 1000);
-      await api('import-skus', { items: batch });
-      imported += batch.length;
-      $('#busyText').textContent = `Đang import ${imported}/${preview.items.length} SKU…`;
-    }
-    showMessage('#skuMessage', `Hoàn tất ${imported.toLocaleString('vi-VN')} SKU. SKU trùng đã được gộp.`, 'success');
-    state.skuPreview = null; $('#skuPreview').hidden = true; $('#skuFile').value = '';
-    await loadOverview();
-  } catch (error) {
-    showMessage('#skuMessage', `Import dừng: ${error.message}`, 'error');
-  } finally { setBusy(false); }
-}
-
-async function importUsers() {
-  const preview = state.userPreview;
-  if (!preview || preview.errors.length) return;
-  setBusy(true, `Đang import 0/${preview.items.length} nhân sự…`);
-  try {
-    let processed = 0, created = 0, updated = 0;
-    for (let i = 0; i < preview.items.length; i += 200) {
-      const items = preview.items.slice(i, i + 200).map(({ _mode, ...item }) => item);
-      const result = await api('import-users', { items });
-      if (Number(result.failed || 0) > 0) {
-        const detail = Array.isArray(result.errors) && result.errors.length ? ` ${result.errors[0]}` : '';
-        throw new Error(`${result.failed} dòng bị lỗi.${detail}`);
-      }
-      created += Number(result.created || 0); updated += Number(result.updated || 0); processed += items.length;
-      $('#busyText').textContent = `Đang import ${processed}/${preview.items.length} nhân sự…`;
-    }
-    showMessage('#userMessage', `Hoàn tất: ${created} tạo mới, ${updated} cập nhật.`, 'success');
-    state.userPreview = null; $('#userPreview').hidden = true; $('#userFile').value = '';
-    await Promise.all([loadUserIndex(), loadOverview()]);
-  } catch (error) {
-    showMessage('#userMessage', `Import dừng: ${error.message}`, 'error');
-  } finally { setBusy(false); }
-}
-
-async function downloadSkuTemplate() {
-  setBusy(true, 'Đang tạo file mẫu SKU…');
-  try {
-    const ExcelJS = await getExcelJS();
-    const workbook = new ExcelJS.Workbook();
-    const sheet = workbook.addWorksheet('SKU');
-    sheet.addRow(['SKU', 'Tên sản phẩm']);
-    sheet.addRow(['12910001', 'Tên sản phẩm mẫu']);
-    sheet.getRow(1).font = { bold: true };
-    sheet.columns = [{ width: 20 }, { width: 48 }];
-    const buffer = await workbook.xlsx.writeBuffer();
-    const url = URL.createObjectURL(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
-    const a = document.createElement('a'); a.href = url; a.download = 'MAU_SKU_BAO_HANG_1291.xlsx'; document.body.append(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-  } catch (error) {
-    showMessage('#skuMessage', error.message, 'error');
-  } finally { setBusy(false); }
-}
-
-async function logout() {
-  const token = state.session?.access_token;
-  clearSession();
-  if (token) {
-    fetch(`${SUPABASE_URL}/auth/v1/logout`, { method: 'POST', headers: { apikey: SUPABASE_ANON_KEY, authorization: `Bearer ${token}` } }).catch(() => {});
-  }
-  renderLogin();
-}
-
-async function restore() {
-  const stored = readSession();
-  if (!stored) { renderLogin(); return; }
-  state.session = stored;
-  try {
-    await refreshSessionIfNeeded();
-    const profile = await fetchProfile(state.session.access_token, state.session.profile.id);
-    if (!profile.active || profile.role !== 'INVENT_ADMIN') throw new Error('Tài khoản không còn quyền INVENT ADMIN.');
-    saveSession({ ...state.session, profile });
-    renderApp();
-    await initializeAdminData();
-  } catch (error) {
-    clearSession();
-    renderLogin(error.message || 'Phiên đăng nhập không còn hợp lệ.');
-  }
-}
-
-restore();
+state.session=readSession();if(state.session)renderApp();else renderLogin();

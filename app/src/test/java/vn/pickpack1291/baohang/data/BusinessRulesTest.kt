@@ -14,8 +14,14 @@ class BusinessRulesTest {
         assertFalse(IssueStatus.REPLENISHING.criticalForPicker)
     }
 
-    @Test fun unknownRoleFallsBackToPicker() {
+    @Test fun roleAliasesRemainBackwardCompatibleWithoutCreatingAdmin() {
         assertEquals(UserRole.PICKER, UserRole.from("UNKNOWN"))
-        assertEquals(UserRole.INVENT_ADMIN, UserRole.from("invent_admin"))
+        assertEquals(UserRole.ADMIN_INVENT, UserRole.from("invent_admin"))
+        assertEquals(UserRole.INVENT, UserRole.from("invent_user"))
+        assertEquals(UserRole.ADMIN, UserRole.from("ADMIN"))
+    }
+
+    @Test fun normalizedSearchSupportsContainsAndVietnameseAccents() {
+        assertEquals("abcde coca cola", AppDatabase.normalize(" AbCDe  Côca Còla "))
     }
 }
