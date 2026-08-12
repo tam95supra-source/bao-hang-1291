@@ -43,7 +43,7 @@ class DiagnosticsLogger(context: Context) {
                     .put("level", level)
                     .put("event", sanitize(event))
                 fields.forEach { (key, value) ->
-                    json.put(sanitize(key).take(80), sanitize(String(value ?: "")).take(1200))
+                    json.put(sanitize(key).take(80), sanitize(value?.toString().orEmpty()).take(1200))
                 }
                 current.appendText(json.toString() + "\n", Charsets.UTF_8)
             }
