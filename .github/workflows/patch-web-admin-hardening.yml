@@ -22,7 +22,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
 
           main = Path('web-admin/src/main.js')
@@ -55,29 +55,27 @@ jobs:
           yml = yml.replace(old_node, new_node, 1)
 
           marker = "      - name: Cleanup credential files\n"
-          smoke = """      - name: Verify Web Admin API CORS and auth boundary
-        shell: bash
-        run: |
-          set -euo pipefail
-          API_URL=\"https://oedasgcdjppjwidhlqdr.supabase.co/functions/v1/web-api/admin-summary\"
-          ORIGIN=\"https://bao-hang-1291.web.app\"
-          curl -sS -D \"$RUNNER_TEMP/cors-headers.txt\" -o /dev/null -X OPTIONS \"$API_URL\" \\
-            -H \"Origin: $ORIGIN\" \\
-            -H 'Access-Control-Request-Method: POST' \\
-            -H 'Access-Control-Request-Headers: authorization,apikey,content-type'
-          grep -qi '^access-control-allow-origin: https://bao-hang-1291.web.app' \"$RUNNER_TEMP/cors-headers.txt\"
-          CODE=\"$(curl -sS -D \"$RUNNER_TEMP/api-headers.txt\" -o \"$RUNNER_TEMP/api-body.json\" -w '%{http_code}' \\
-            -X POST \"$API_URL\" -H \"Origin: $ORIGIN\" -H 'Content-Type: application/json' -d '{}')\"
-          test \"$CODE\" = '401'
-          grep -qi '^access-control-allow-origin: https://bao-hang-1291.web.app' \"$RUNNER_TEMP/api-headers.txt\"
-          grep -q 'Phiên đăng nhập' \"$RUNNER_TEMP/api-body.json\"
-          echo 'WEB_API_CORS_AUTH_SMOKE=PASS'
-
-"""
+          smoke_lines = [
+              "      - name: Verify Web Admin API CORS and auth boundary",
+              "        shell: bash",
+              "        run: |",
+              "          set -euo pipefail",
+              "          API_URL=\"https://oedasgcdjppjwidhlqdr.supabase.co/functions/v1/web-api/admin-summary\"",
+              "          ORIGIN=\"https://bao-hang-1291.web.app\"",
+              "          curl -sS -D \"$RUNNER_TEMP/cors-headers.txt\" -o /dev/null -X OPTIONS \"$API_URL\" -H \"Origin: $ORIGIN\" -H 'Access-Control-Request-Method: POST' -H 'Access-Control-Request-Headers: authorization,apikey,content-type'",
+              "          grep -qi '^access-control-allow-origin: https://bao-hang-1291.web.app' \"$RUNNER_TEMP/cors-headers.txt\"",
+              "          CODE=\"$(curl -sS -D \"$RUNNER_TEMP/api-headers.txt\" -o \"$RUNNER_TEMP/api-body.json\" -w '%{http_code}' -X POST \"$API_URL\" -H \"Origin: $ORIGIN\" -H 'Content-Type: application/json' -d '{}')\"",
+              "          test \"$CODE\" = '401'",
+              "          grep -qi '^access-control-allow-origin: https://bao-hang-1291.web.app' \"$RUNNER_TEMP/api-headers.txt\"",
+              "          grep -q 'Phiên đăng nhập' \"$RUNNER_TEMP/api-body.json\"",
+              "          echo 'WEB_API_CORS_AUTH_SMOKE=PASS'",
+              "",
+          ]
           if 'WEB_API_CORS_AUTH_SMOKE=PASS' not in yml:
               if marker not in yml:
                   raise SystemExit('Cleanup marker not found')
-              yml = yml.replace(marker, smoke + marker, 1)
+              yml = yml.replace(marker, "\n".join(smoke_lines) + marker, 1)
+
           old_cleanup = '        run: rm -f "$RUNNER_TEMP/firebase-sa.json" "$RUNNER_TEMP/web-index.html" "$RUNNER_TEMP/web-headers.txt"\n'
           new_cleanup = '        run: rm -f "$RUNNER_TEMP/firebase-sa.json" "$RUNNER_TEMP/web-index.html" "$RUNNER_TEMP/web-headers.txt" "$RUNNER_TEMP/cors-headers.txt" "$RUNNER_TEMP/api-headers.txt" "$RUNNER_TEMP/api-body.json"\n'
           if old_cleanup not in yml:
@@ -96,6 +94,6 @@ jobs:
           set -euo pipefail
           git config user.name 'bao-hang-1291-automation'
           git config user.email 'actions@users.noreply.github.com'
-          git add web-admin/src/main.js .github/workflows/deploy-web-admin.yml .github/workflows/patch-web-admin-hardening.yml
+          git add -A web-admin/src/main.js .github/workflows/deploy-web-admin.yml .github/workflows/patch-web-admin-hardening.yml
           git commit -m 'Harden and optimize Web Admin delivery'
           git push origin HEAD:main
