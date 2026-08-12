@@ -44,18 +44,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if grep -R -n -E 'SUPRA_CREDENTIAL_MASTER_KEY|inventory-credential-update|inventory-sync-start|api-supra\.winmart\.vn' supabase/functions web-admin/src; then
-            echo 'Active Supra mechanism remains' >&2
-            exit 1
-          fi
-      - name: Verify static secret safety
+          ! grep -R -n -E 'SUPRA_CREDENTIAL_MASTER_KEY|inventory-credential-update|inventory-sync-start|api-supra\.winmart\.vn' supabase/functions web-admin/src
+      - name: Verify no embedded PEM
         shell: bash
         run: |
           set -euo pipefail
-          if grep -R -n -E -- '-----BEGIN (RSA )?PRIVATE KEY-----|SUPABASE_SERVICE_ROLE_KEY[[:space:]]*=' web-admin/src supabase/functions; then
-            echo 'Actual secret-like material found' >&2
-            exit 1
-          fi
+          ! grep -R -n -E -- '-----BEGIN (RSA )?PRIVATE KEY-----' web-admin/src supabase/functions
+      - name: Verify no service-role hardcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -R -n -E 'SUPABASE_SERVICE_ROLE_KEY[[:space:]]*=' web-admin/src supabase/functions
       - name: Verify patch whitespace
         run: git diff --check
       - name: Remove completed transformation tooling
