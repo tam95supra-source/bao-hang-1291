@@ -36,8 +36,12 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
                 reported_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 assigned_name TEXT NOT NULL DEFAULT '',
+                assigned_id TEXT,
                 latest_reporter_name TEXT NOT NULL DEFAULT '',
-                latest_message TEXT NOT NULL DEFAULT ''
+                latest_message TEXT NOT NULL DEFAULT '',
+                issue_version INTEGER NOT NULL DEFAULT 1,
+                previous_issue_id TEXT,
+                recurrence_30m INTEGER NOT NULL DEFAULT 0
             )"""
         )
         db.execSQL("CREATE INDEX idx_issue_cache_status ON issue_cache(status, updated_at DESC)")
@@ -71,6 +75,12 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
             }
             db.delete("metadata", "key=?", arrayOf("catalog_last_sync"))
         }
+        if (oldVersion < 4) {
+            db.execSQL("ALTER TABLE issue_cache ADD COLUMN assigned_id TEXT")
+            db.execSQL("ALTER TABLE issue_cache ADD COLUMN issue_version INTEGER NOT NULL DEFAULT 1")
+            db.execSQL("ALTER TABLE issue_cache ADD COLUMN previous_issue_id TEXT")
+            db.execSQL("ALTER TABLE issue_cache ADD COLUMN recurrence_30m INTEGER NOT NULL DEFAULT 0")
+        }
     }
 
     fun upsertSkus(items: List<SkuItem>) {
@@ -87,9 +97,7 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
                 writableDatabase.insertWithOnConflict("sku_catalog", null, values, SQLiteDatabase.CONFLICT_REPLACE)
             }
             writableDatabase.setTransactionSuccessful()
-        } finally {
-            writableDatabase.endTransaction()
-        }
+        } finally { writableDatabase.endTransaction() }
     }
 
     fun searchSkus(query: String, limit: Int = 20): List<SkuItem> {
@@ -100,9 +108,8 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
         val args = mutableListOf<String>()
         tokens.forEach { token -> args += "%$token%"; args += "%$token%" }
         val skuRaw = query.trim().lowercase(Locale.ROOT)
-        val prefix = "$skuRaw%"
         args += skuRaw
-        args += prefix
+        args += "$skuRaw%"
         args += "%$skuRaw%"
         args += limit.toString()
         val cursor = readableDatabase.rawQuery(
@@ -113,17 +120,12 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
                  WHEN lower(sku) LIKE ? THEN 1
                  WHEN lower(sku) LIKE ? THEN 2
                  ELSE 3 END, sku
-               LIMIT ?""",
-            args.toTypedArray()
+               LIMIT ?""", args.toTypedArray()
         )
-        return cursor.use {
-            buildList { while (it.moveToNext()) add(SkuItem(it.getString(0), it.getString(1))) }
-        }
+        return cursor.use { buildList { while (it.moveToNext()) add(SkuItem(it.getString(0), it.getString(1))) } }
     }
 
-    fun skuCount(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM sku_catalog", null).use {
-        if (it.moveToFirst()) it.getInt(0) else 0
-    }
+    fun skuCount(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM sku_catalog", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
 
     fun upsertIssues(issues: List<StockIssue>) {
         if (issues.isEmpty()) return
@@ -140,28 +142,31 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
                 values.put("reported_at", issue.reportedAt)
                 values.put("updated_at", issue.updatedAt)
                 values.put("assigned_name", issue.assignedName)
+                values.put("assigned_id", issue.assignedId)
                 values.put("latest_reporter_name", issue.latestReporterName)
                 values.put("latest_message", issue.latestMessage)
+                values.put("issue_version", issue.issueVersion)
+                values.put("previous_issue_id", issue.previousIssueId)
+                values.put("recurrence_30m", if (issue.recurrence30m) 1 else 0)
                 writableDatabase.insertWithOnConflict("issue_cache", null, values, SQLiteDatabase.CONFLICT_REPLACE)
             }
             writableDatabase.setTransactionSuccessful()
-        } finally {
-            writableDatabase.endTransaction()
-        }
+        } finally { writableDatabase.endTransaction() }
     }
 
     fun cachedIssues(limit: Int = 200): List<StockIssue> {
         val cursor = readableDatabase.rawQuery(
-            "SELECT id,sku,product_name,status,report_count,reported_at,updated_at,assigned_name,latest_reporter_name,latest_message FROM issue_cache ORDER BY updated_at DESC LIMIT ?",
+            "SELECT id,sku,product_name,status,report_count,reported_at,updated_at,assigned_name,assigned_id,latest_reporter_name,latest_message,issue_version,previous_issue_id,recurrence_30m FROM issue_cache ORDER BY updated_at DESC LIMIT ?",
             arrayOf(limit.toString())
         )
         return cursor.use {
             buildList {
                 while (it.moveToNext()) add(
                     StockIssue(
-                        it.getString(0), it.getString(1), it.getString(2),
-                        IssueStatus.from(it.getString(3)), it.getInt(4), it.getString(5),
-                        it.getString(6), it.getString(7), it.getString(8), it.getString(9)
+                        id = it.getString(0), sku = it.getString(1), productName = it.getString(2), status = IssueStatus.from(it.getString(3)),
+                        reportCount = it.getInt(4), reportedAt = it.getString(5), updatedAt = it.getString(6), assignedName = it.getString(7),
+                        assignedId = it.getString(8), latestReporterName = it.getString(9), latestMessage = it.getString(10), issueVersion = it.getLong(11),
+                        previousIssueId = it.getString(12), recurrence30m = it.getInt(13) != 0
                     )
                 )
             }
@@ -180,37 +185,25 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
     data class OutboxItem(val id: Long, val action: String, val payload: JSONObject)
 
     fun outbox(limit: Int = 100): List<OutboxItem> {
-        val cursor = readableDatabase.rawQuery(
-            "SELECT id,action,payload FROM outbox ORDER BY id LIMIT ?", arrayOf(limit.toString())
-        )
-        return cursor.use {
-            buildList {
-                while (it.moveToNext()) add(OutboxItem(it.getLong(0), it.getString(1), JSONObject(it.getString(2))))
-            }
-        }
+        val cursor = readableDatabase.rawQuery("SELECT id,action,payload FROM outbox ORDER BY id LIMIT ?", arrayOf(limit.toString()))
+        return cursor.use { buildList { while (it.moveToNext()) add(OutboxItem(it.getLong(0), it.getString(1), JSONObject(it.getString(2)))) } }
     }
 
+    fun outboxCount(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM outbox", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
     fun removeOutbox(id: Long) = writableDatabase.delete("outbox", "id=?", arrayOf(id.toString()))
-
     fun failOutbox(id: Long, error: String) {
-        writableDatabase.execSQL(
-            "UPDATE outbox SET attempts=attempts+1,last_error=? WHERE id=?",
-            arrayOf(error.take(500), id)
-        )
+        writableDatabase.execSQL("UPDATE outbox SET attempts=attempts+1,last_error=? WHERE id=?", arrayOf(error.take(500), id))
     }
 
     fun setMetadata(key: String, value: String) {
         val values = ContentValues().apply { put("key", key); put("value", value) }
         writableDatabase.insertWithOnConflict("metadata", null, values, SQLiteDatabase.CONFLICT_REPLACE)
     }
-
-    fun metadata(key: String): String? = readableDatabase.rawQuery(
-        "SELECT value FROM metadata WHERE key=?", arrayOf(key)
-    ).use { if (it.moveToFirst()) it.getString(0) else null }
+    fun metadata(key: String): String? = readableDatabase.rawQuery("SELECT value FROM metadata WHERE key=?", arrayOf(key)).use { if (it.moveToFirst()) it.getString(0) else null }
 
     companion object {
         private const val DB_NAME = "bao_hang_1291.db"
-        private const val DB_VERSION = 3
+        private const val DB_VERSION = 4
 
         fun normalize(value: String): String = Normalizer.normalize(value.trim(), Normalizer.Form.NFD)
             .replace(Regex("\\p{M}+"), "")
