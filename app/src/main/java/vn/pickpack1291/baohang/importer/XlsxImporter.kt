@@ -13,7 +13,7 @@ import java.util.Locale
 import java.util.zip.ZipInputStream
 
 class XlsxImporter(private val resolver: ContentResolver) {
-    data class ParsedWorkbook(val rows: List<Map<Int, String>>)
+    private data class ParsedWorkbook(val rows: List<Map<Int, String>>)
 
     fun parseSkuFile(uri: Uri): List<SkuItem> {
         val rows = readWorkbook(uri).rows
@@ -21,22 +21,18 @@ class XlsxImporter(private val resolver: ContentResolver) {
         val headers = headerMap(rows.first())
         val skuColumn = findHeader(headers, "sku", "ma sku")
         val nameColumn = findHeader(headers, "ten san pham", "ten hang", "product name")
-        val deduplicated = linkedMapOf<String, SkuItem>()
+        val unique = linkedMapOf<String, SkuItem>()
         rows.drop(1).forEachIndexed { index, row ->
             val sku = row[skuColumn].orEmpty().trim()
             val name = row[nameColumn].orEmpty().trim()
             if (sku.isBlank() && name.isBlank()) return@forEachIndexed
-            if (sku.isBlank() || name.isBlank()) {
-                throw ImportException("Dòng ${index + 2}: thiếu SKU hoặc Tên sản phẩm")
-            }
-            val existing = deduplicated[sku]
-            if (existing != null && !existing.productName.equals(name, ignoreCase = true)) {
-                throw ImportException("SKU $sku có nhiều tên sản phẩm khác nhau")
-            }
-            deduplicated[sku] = SkuItem(sku, name)
+            if (sku.isBlank() || name.isBlank()) throw ImportException("Dòng ${index + 2}: thiếu SKU hoặc Tên sản phẩm")
+            val old = unique[sku]
+            if (old != null && !old.productName.equals(name, true)) throw ImportException("SKU $sku có nhiều tên sản phẩm khác nhau")
+            unique[sku] = SkuItem(sku, name)
         }
-        if (deduplicated.isEmpty()) throw ImportException("Không tìm thấy SKU hợp lệ")
-        return deduplicated.values.toList()
+        if (unique.isEmpty()) throw ImportException("Không tìm thấy SKU hợp lệ")
+        return unique.values.toList()
     }
 
     fun parseUserFile(uri: Uri): List<ImportUserRow> {
@@ -56,19 +52,16 @@ class XlsxImporter(private val resolver: ContentResolver) {
             val name = row[nameColumn].orEmpty().trim()
             if (code.isBlank() && name.isBlank()) return@forEachIndexed
             if (code.isBlank() || name.isBlank()) throw ImportException("Dòng $line: thiếu mã hoặc họ tên")
-            if (!code.matches(Regex("[A-Za-z0-9._-]+"))) {
-                throw ImportException("Dòng $line: mã nhân viên chỉ được dùng chữ, số, dấu chấm, gạch ngang hoặc gạch dưới")
-            }
-            val role = parseRole(row[roleColumn].orEmpty(), line)
-            val active = parseActive(row[activeColumn].orEmpty(), line)
-            if (unique.containsKey(code.lowercase())) throw ImportException("Mã nhân viên $code bị trùng")
-            unique[code.lowercase()] = ImportUserRow(
-                employeeCode = code,
-                fullName = name,
-                contractor = row[contractorColumn].orEmpty().trim(),
-                role = role,
-                active = active,
-                initialPassword = row[passwordColumn].orEmpty()
+            if (!code.matches(Regex("[A-Za-z0-9._-]+"))) throw ImportException("Dòng $line: mã nhân viên không hợp lệ")
+            val key = code.lowercase(Locale.ROOT)
+            if (unique.containsKey(key)) throw ImportException("Mã nhân viên $code bị trùng")
+            unique[key] = ImportUserRow(
+                code,
+                name,
+                row[contractorColumn].orEmpty().trim(),
+                parseRole(row[roleColumn].orEmpty(), line),
+                parseActive(row[activeColumn].orEmpty(), line),
+                row[passwordColumn].orEmpty()
             )
         }
         if (unique.isEmpty()) throw ImportException("Không tìm thấy nhân sự hợp lệ")
@@ -81,11 +74,7 @@ class XlsxImporter(private val resolver: ContentResolver) {
             ZipInputStream(input).use { zip ->
                 var entry = zip.nextEntry
                 while (entry != null) {
-                    if (!entry.isDirectory && (
-                            entry.name == "xl/sharedStrings.xml" ||
-                                entry.name == "xl/worksheets/sheet1.xml"
-                            )
-                    ) {
+                    if (!entry.isDirectory && (entry.name == "xl/sharedStrings.xml" || entry.name == "xl/worksheets/sheet1.xml")) {
                         entries[entry.name] = zip.readBytes()
                     }
                     zip.closeEntry()
@@ -93,8 +82,7 @@ class XlsxImporter(private val resolver: ContentResolver) {
                 }
             }
         } ?: throw ImportException("Không mở được file")
-        val sheet = entries["xl/worksheets/sheet1.xml"]
-            ?: throw ImportException("Không tìm thấy Sheet1 trong file XLSX")
+        val sheet = entries["xl/worksheets/sheet1.xml"] ?: throw ImportException("Không tìm thấy Sheet1 trong file XLSX")
         val shared = entries["xl/sharedStrings.xml"]?.let(::parseSharedStrings).orEmpty()
         return ParsedWorkbook(parseSheet(sheet, shared))
     }
@@ -110,9 +98,7 @@ class XlsxImporter(private val resolver: ContentResolver) {
                 XmlPullParser.START_TAG -> if (parser.name == "si") {
                     inString = true
                     buffer = StringBuilder()
-                } else if (inString && parser.name == "t") {
-                    inText = true
-                }
+                } else if (inString && parser.name == "t") inText = true
                 XmlPullParser.TEXT -> if (inText) buffer.append(parser.text)
                 XmlPullParser.END_TAG -> when (parser.name) {
                     "t" -> inText = false
@@ -128,29 +114,27 @@ class XlsxImporter(private val resolver: ContentResolver) {
         val parser = newParser(bytes)
         val rows = mutableListOf<Map<Int, String>>()
         var row = linkedMapOf<Int, String>()
-        var cellColumn = 0
-        var cellType = ""
-        var cellValue = ""
+        var column = 0
+        var type = ""
+        var value = ""
         var capture = false
         while (parser.eventType != XmlPullParser.END_DOCUMENT) {
             when (parser.eventType) {
                 XmlPullParser.START_TAG -> when (parser.name) {
                     "row" -> row = linkedMapOf()
                     "c" -> {
-                        cellColumn = columnIndex(parser.getAttributeValue(null, "r").orEmpty())
-                        cellType = parser.getAttributeValue(null, "t").orEmpty()
-                        cellValue = ""
+                        column = columnIndex(parser.getAttributeValue(null, "r").orEmpty())
+                        type = parser.getAttributeValue(null, "t").orEmpty()
+                        value = ""
                     }
                     "v", "t" -> capture = true
                 }
-                XmlPullParser.TEXT -> if (capture) cellValue += parser.text
+                XmlPullParser.TEXT -> if (capture) value += parser.text
                 XmlPullParser.END_TAG -> when (parser.name) {
                     "v", "t" -> capture = false
                     "c" -> {
-                        val value = if (cellType == "s") {
-                            cellValue.toIntOrNull()?.let(shared::getOrNull).orEmpty()
-                        } else cellValue
-                        if (value.isNotEmpty()) row[cellColumn] = value
+                        val cell = if (type == "s") value.toIntOrNull()?.let(shared::getOrNull).orEmpty() else value
+                        if (cell.isNotEmpty()) row[column] = cell
                     }
                     "row" -> rows.add(row)
                 }
@@ -172,7 +156,6 @@ class XlsxImporter(private val resolver: ContentResolver) {
     }
 
     private fun headerMap(row: Map<Int, String>) = row.mapValues { normalize(it.value) }
-
     private fun findHeader(headers: Map<Int, String>, vararg aliases: String): Int {
         val normalized = aliases.map(::normalize)
         return headers.entries.firstOrNull { it.value in normalized }?.key
@@ -183,11 +166,12 @@ class XlsxImporter(private val resolver: ContentResolver) {
         .replace(Regex("\\p{M}+"), "").lowercase(Locale.ROOT).replace('đ', 'd')
         .replace(Regex("\\s+"), " ")
 
-    private fun parseRole(value: String, line: Int): UserRole = when (normalize(value)) {
-        "picker", "pick", "nguoi bao", "nguoi bao hang" -> UserRole.PICKER
-        "invent user", "invent_user", "invent" -> UserRole.INVENT_USER
-        "invent admin", "invent_admin", "admin" -> UserRole.INVENT_ADMIN
-        else -> throw ImportException("Dòng $line: vai trò '$value' không hợp lệ")
+    private fun parseRole(value: String, line: Int): UserRole = when (normalize(value).replace('-', '_').replace(' ', '_')) {
+        "picker", "pick", "nguoi_bao", "nguoi_bao_hang", "nguoi_lay_hang" -> UserRole.PICKER
+        "invent", "invent_user", "bao_hang_invent" -> UserRole.INVENT
+        "admin_invent", "invent_admin" -> UserRole.ADMIN_INVENT
+        "admin" -> throw ImportException("Dòng $line: ADMIN là tài khoản duy nhất và không được tạo/import")
+        else -> throw ImportException("Dòng $line: vai trò '$value' không hợp lệ. Dùng ADMIN_INVENT, INVENT hoặc PICKER")
     }
 
     private fun parseActive(value: String, line: Int): Boolean = when (normalize(value)) {
