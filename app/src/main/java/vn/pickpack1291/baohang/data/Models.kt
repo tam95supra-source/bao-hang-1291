@@ -10,7 +10,7 @@ enum class UserRole(val wire: String, val label: String) {
 
     val canProcessIssues: Boolean get() = this in setOf(ADMIN, ADMIN_INVENT, INVENT)
     val canViewReports: Boolean get() = this in setOf(ADMIN, ADMIN_INVENT)
-    val canManageUsers: Boolean get() = this == ADMIN
+    val canManageUsers: Boolean get() = this in setOf(ADMIN, ADMIN_INVENT)
     val canManageConfig: Boolean get() = this == ADMIN
     val canImportSku: Boolean get() = this in setOf(ADMIN, ADMIN_INVENT)
 

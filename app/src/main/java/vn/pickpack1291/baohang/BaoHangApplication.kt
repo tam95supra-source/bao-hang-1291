@@ -31,7 +31,7 @@ class BaoHangApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         diagnostics = DiagnosticsLogger(this)
-        diagnostics.info("app_start", mapOf("version" to BuildConfig.VERSION_NAME, "build_type" to BuildConfig.BUILD_TYPE))
+        diagnostics.info("app_start", mapOf("version" to BuildConfig.VERSION_NAME, "build_type" to BuildConfig.BUILD_TYPE, "ota_channel" to BuildConfig.OTA_CHANNEL))
         database = AppDatabase(this)
         session = SessionStore(this)
         api = ApiClient(session, diagnostics)

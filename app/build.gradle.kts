@@ -21,6 +21,10 @@ val productionSignerSha256 = if (productionSignerFile.isFile) {
     ""
 }
 
+val requestedOtaChannel = (project.findProperty("OTA_CHANNEL") as String?)?.trim()?.lowercase() ?: "stable"
+require(requestedOtaChannel in setOf("stable", "beta")) { "OTA_CHANNEL must be stable or beta" }
+val otaManifestUrl = "https://raw.githubusercontent.com/tam95supra-source/bao-hang-1291/main/ota/$requestedOtaChannel/release-manifest.json"
+
 android {
     namespace = "vn.pickpack1291.baohang"
     compileSdk = 35
@@ -39,8 +43,10 @@ android {
         // Authorization remains enforced by Supabase Auth, Edge Function checks and RLS/grants.
         buildConfigField("String", "SUPABASE_URL", "\"${secret("SUPABASE_URL", "https://oedasgcdjppjwidhlqdr.supabase.co")}\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"${secret("SUPABASE_ANON_KEY", "sb_publishable_LGgDehtHMSyeJ1XyJDvQiQ_cdlqIKq7")}\"")
-        buildConfigField("String", "UPDATE_MANIFEST_URL", "\"${secret("UPDATE_MANIFEST_URL", "https://github.com/tam95supra-source/bao-hang-1291/releases/latest/download/release-manifest.json")}\"")
+        buildConfigField("String", "OTA_CHANNEL", "\"$requestedOtaChannel\"")
+        buildConfigField("String", "UPDATE_MANIFEST_URL", "\"${secret("UPDATE_MANIFEST_URL", otaManifestUrl)}\"")
         buildConfigField("String", "PRODUCTION_SIGNER_SHA256", "\"$productionSignerSha256\"")
+        manifestPlaceholders["otaChannel"] = requestedOtaChannel
     }
 
     signingConfigs {
@@ -63,6 +69,9 @@ android {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
             isMinifyEnabled = false
+            buildConfigField("String", "OTA_CHANNEL", "\"debug\"")
+            buildConfigField("String", "UPDATE_MANIFEST_URL", "\"\"")
+            manifestPlaceholders["otaChannel"] = "debug"
         }
         release {
             isMinifyEnabled = true

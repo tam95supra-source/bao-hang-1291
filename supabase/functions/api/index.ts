@@ -97,6 +97,63 @@ async function importUsers(items: Record<string, unknown>[]) {
   return { created, updated, failed: errors.length, errors: errors.slice(0, 30) };
 }
 
+async function listUsers(context: Context) {
+  requireRole(context, ["ADMIN", "ADMIN_INVENT"]);
+  const { data, error, count } = await admin.from("profiles").select("id,employee_code,full_name,contractor,role,active", { count: "exact" }).order("employee_code").limit(2000);
+  if (error) throw error;
+  if ((count ?? 0) > 2000) throw new HttpError(409, "Số nhân sự vượt giới hạn 2000 tài khoản");
+  return { users: data ?? [], count: count ?? 0 };
+}
+
+async function updateManagedUser(context: Context, body: Record<string, unknown>) {
+  requireRole(context, ["ADMIN", "ADMIN_INVENT"]);
+  const targetId = required(body.id, "User ID");
+  const { data: target, error: targetError } = await admin.from("profiles").select("id,employee_code,full_name,contractor,role,active").eq("id", targetId).single();
+  if (targetError || !target) throw new HttpError(404, "Không tìm thấy tài khoản");
+  if (context.effectiveRole === "ADMIN_INVENT" && !["INVENT", "PICKER"].includes(target.role)) throw new HttpError(403, "Admin Invent chỉ được sửa tài khoản Báo hàng Invent hoặc Người lấy hàng");
+
+  const employeeCode = required(body.employee_code, "Mã nhân viên");
+  const fullName = required(body.full_name, "Họ tên");
+  const contractor = String(body.contractor ?? "").trim();
+  const role = String(body.role ?? target.role).trim().toUpperCase() as Role;
+  const active = typeof body.active === "boolean" ? body.active : Boolean(target.active);
+  const newPassword = String(body.new_password ?? "");
+  if (!["ADMIN", "ADMIN_INVENT", "INVENT", "PICKER"].includes(role)) throw new HttpError(400, "Quyền không hợp lệ");
+  if (newPassword && newPassword.length < 8) throw new HttpError(400, "Mật khẩu mới cần ít nhất 8 ký tự");
+
+  if (target.role === "ADMIN") {
+    if (context.effectiveRole !== "ADMIN") throw new HttpError(403, "Tài khoản ADMIN được bảo vệ");
+    if (role !== "ADMIN" || !active) throw new HttpError(409, "ADMIN_PROTECTED");
+  } else {
+    if (role === "ADMIN") throw new HttpError(409, "ADMIN_ALREADY_EXISTS");
+    if (context.effectiveRole === "ADMIN_INVENT" && !["INVENT", "PICKER"].includes(role)) throw new HttpError(403, "Admin Invent không được cấp quyền cao hơn quyền của mình");
+  }
+
+  if (employeeCode.toLowerCase() !== String(target.employee_code).toLowerCase()) {
+    const { data: duplicate, error: duplicateError } = await admin.from("profiles").select("id").ilike("employee_code", employeeCode).neq("id", targetId).maybeSingle();
+    if (duplicateError) throw duplicateError;
+    if (duplicate) throw new HttpError(409, "Mã nhân viên đã tồn tại");
+  }
+
+  const values = { employee_code: employeeCode, full_name: fullName, contractor, role, active, updated_at: new Date().toISOString() };
+  const { data: updated, error: updateError } = await admin.from("profiles").update(values).eq("id", targetId).select("id,employee_code,full_name,contractor,role,active").single();
+  if (updateError || !updated) throw updateError ?? new Error("Không cập nhật được hồ sơ");
+
+  const authValues: { email?: string; password?: string } = {};
+  if (employeeCode.toLowerCase() !== String(target.employee_code).toLowerCase()) authValues.email = employeeEmail(employeeCode);
+  if (newPassword) authValues.password = newPassword;
+  if (Object.keys(authValues).length) {
+    const { error: authError } = await admin.auth.admin.updateUserById(targetId, authValues);
+    if (authError) {
+      await admin.from("profiles").update({ employee_code: target.employee_code, full_name: target.full_name, contractor: target.contractor, role: target.role, active: target.active, updated_at: new Date().toISOString() }).eq("id", targetId);
+      throw authError;
+    }
+  }
+  const { error: queueError } = await admin.from("sheet_export_queue").insert({ event_type: "USER_UPSERT", payload: values });
+  if (queueError) console.warn("USER_UPSERT queue deferred", errorText(queueError));
+  return { profile: updated };
+}
+
 async function syncSheet() {
   const url = Deno.env.get("GOOGLE_SHEET_WEBHOOK_URL") ?? ""; const secret = Deno.env.get("GOOGLE_SHEET_WEBHOOK_SECRET") ?? ""; if (!url || !secret) throw new HttpError(503, "Chưa cấu hình Google Sheet webhook");
   const { data: events, error } = await admin.from("sheet_export_queue").select("*").is("exported_at", null).order("id").limit(500); if (error) throw error; if (!events?.length) return { exported: 0, remaining: 0 };
@@ -194,6 +251,8 @@ async function route(req: Request) {
       requireRole(context, ["ADMIN"]); const values = { acknowledge_minutes: Number(body.acknowledge_minutes), reminder_minutes: Number(body.reminder_minutes), replenish_minutes: Number(body.replenish_minutes), picker_ack_reminder_minutes: Number(body.picker_ack_reminder_minutes ?? 3), diagnostic_log_retention_days: Number(body.diagnostic_log_retention_days ?? 14), updated_by: context.userId, updated_at: new Date().toISOString() };
       if ([values.acknowledge_minutes, values.reminder_minutes, values.replenish_minutes].some((v) => !Number.isInteger(v) || v < 1 || v > 480)) throw new HttpError(400, "Cấu hình SLA phải từ 1 đến 480 phút"); if (!Number.isInteger(values.picker_ack_reminder_minutes) || values.picker_ack_reminder_minutes < 1 || values.picker_ack_reminder_minutes > 60) throw new HttpError(400, "Nhắc Picker phải từ 1 đến 60 phút"); if (!Number.isInteger(values.diagnostic_log_retention_days) || values.diagnostic_log_retention_days < 1 || values.diagnostic_log_retention_days > 60) throw new HttpError(400, "Lưu log phải từ 1 đến 60 ngày"); const { data, error } = await admin.from("app_config").update(values).eq("singleton", true).select().single(); if (error) throw error; return data;
     }
+    case "list-users": return listUsers(context);
+    case "update-user": return updateManagedUser(context, body);
     case "import-skus": { requireRole(context, ["ADMIN", "ADMIN_INVENT"]); const items = Array.isArray(body.items) ? body.items as Record<string, unknown>[] : []; if (!items.length || items.length > 1000) throw new HttpError(400, "Mỗi lô cần 1–1000 SKU"); const now = new Date().toISOString(); const rows = items.map((item) => ({ sku: required(item.sku, "SKU").trim(), product_name: required(item.product_name, "Tên sản phẩm").trim(), last_imported_at: now, updated_at: now })); const { error } = await admin.from("sku_catalog").upsert(rows, { onConflict: "sku" }); if (error) throw error; return { imported: rows.length }; }
     case "import-users": { requireRole(context, ["ADMIN"]); const items = Array.isArray(body.items) ? body.items as Record<string, unknown>[] : []; if (!items.length || items.length > 200) throw new HttpError(400, "Mỗi lô cần 1–200 nhân sự"); return importUsers(items); }
     case "sync-google-sheet": requireRole(context, ["ADMIN", "ADMIN_INVENT"]); return syncSheet();
