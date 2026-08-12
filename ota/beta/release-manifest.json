@@ -1,0 +1,11 @@
+{
+  "channel": "beta",
+  "versionCode": 2,
+  "versionName": "1.1.0",
+  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.1.0/bao-hang-1291-beta-1.1.0.apk",
+  "sha256": "428f60244a1b654ec88cfa66619d5450e9e93e5c59bc5fd5fc4a21019f9b9cae",
+  "mandatory": false,
+  "releaseNotes": "Cập nhật Báo hàng 1291 Beta: cùng đầy đủ nghiệp vụ/backend với Stable, 4 quyền, quản lý nhân sự Admin/Admin Invent, báo thiếu/ACK, tìm kiếm linh hoạt, gửi log chẩn đoán và OTA khóa theo APK. Bản Beta chỉ nhận cập nhật Beta.",
+  "signerSha256": "2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0",
+  "sourceSha": "ca31ecb143c08206db0468a2a0a5613a48306f40"
+}
