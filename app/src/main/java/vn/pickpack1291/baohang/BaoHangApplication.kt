@@ -1,11 +1,6 @@
 package vn.pickpack1291.baohang
 
 import android.app.Application
-import androidx.work.Constraints
-import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.NetworkType
-import androidx.work.PeriodicWorkRequestBuilder
-import androidx.work.WorkManager
 import com.google.firebase.messaging.FirebaseMessaging
 import vn.pickpack1291.baohang.data.AppDatabase
 import vn.pickpack1291.baohang.data.AppRepository
@@ -13,8 +8,7 @@ import vn.pickpack1291.baohang.data.SessionStore
 import vn.pickpack1291.baohang.diagnostics.DiagnosticsLogger
 import vn.pickpack1291.baohang.network.ApiClient
 import vn.pickpack1291.baohang.notifications.NotificationHelper
-import vn.pickpack1291.baohang.sync.SyncWorker
-import java.util.concurrent.TimeUnit
+import vn.pickpack1291.baohang.sync.SyncScheduler
 
 class BaoHangApplication : Application() {
     lateinit var database: AppDatabase
@@ -37,21 +31,17 @@ class BaoHangApplication : Application() {
         api = ApiClient(session, diagnostics)
         repository = AppRepository(this, database, session, api, diagnostics)
         NotificationHelper.createChannels(this)
-        scheduleSync()
+
+        // Target: no fixed 15-minute heartbeat. Remove legacy periodic work once and only
+        // schedule network work when a durable outbox item actually exists.
+        SyncScheduler.removeLegacyPeriodic(this)
+        if (session.isLoggedIn && database.outboxCount() > 0) {
+            SyncScheduler.enqueueOutbox(this)
+            diagnostics.info("outbox_sync_scheduled_on_start", mapOf("pending" to database.outboxCount()))
+        }
 
         FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
             if (session.isLoggedIn) repository.registerDeviceAsync(token)
         }.addOnFailureListener { diagnostics.error("fcm_token_read_failed", it) }
-    }
-
-    private fun scheduleSync() {
-        val constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
-        val request = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES).setConstraints(constraints).build()
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            SyncWorker.PERIODIC_WORK,
-            ExistingPeriodicWorkPolicy.KEEP,
-            request
-        )
-        diagnostics.info("periodic_sync_scheduled", mapOf("minutes" to 15))
     }
 }

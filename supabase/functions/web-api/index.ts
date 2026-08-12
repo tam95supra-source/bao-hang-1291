@@ -9,10 +9,13 @@ type Role = "ADMIN" | "ADMIN_INVENT" | "INVENT" | "PICKER";
 const productionOrigins = new Set(["https://bao-hang-1291.web.app", "https://bao-hang-1291.firebaseapp.com"]);
 const previewOrigin = /^https:\/\/bao-hang-1291--[a-z0-9-]+\.web\.app$/i;
 const forwardedActions = new Set([
-  "session-profile", "search-skus", "report-shortage", "active-issues", "issue-board", "my-issues",
-  "claim-issue", "update-issue", "pending-alerts", "ack-alert", "get-config", "save-config",
+  "session-profile", "search-skus", "report-shortage", "active-issues", "issue-board", "my-issues", "issue-detail",
+  "claim-issue", "reassign-issue", "update-issue", "pending-alerts", "mark-alert-received", "mark-alert-displayed", "ack-alert",
+  "get-operational-config", "save-operational-config", "get-config", "save-config",
   "import-skus", "import-users", "list-users", "update-user", "sync-google-sheet", "reports-summary", "issue-history", "audit-history",
   "upload-log", "list-logs", "download-log",
+  "inventory-status", "inventory-current", "inventory-summary", "inventory-connection-status", "inventory-credential-update",
+  "inventory-sync-start", "inventory-recovery-start", "inventory-recovery-stage", "inventory-recovery-finalize", "inventory-job-cancel",
 ]);
 function isAllowedOrigin(origin: string): boolean { return productionOrigins.has(origin) || previewOrigin.test(origin); }
 function corsHeaders(req: Request): Record<string, string> {
@@ -26,7 +29,12 @@ function corsHeaders(req: Request): Record<string, string> {
   if (origin && isAllowedOrigin(origin)) headers["access-control-allow-origin"] = origin;
   return headers;
 }
-function json(req: Request, body: unknown, status = 200): Response { return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders(req), "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" } }); }
+function json(req: Request, body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders(req), "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" },
+  });
+}
 function errorText(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 
@@ -46,21 +54,37 @@ async function requireWebUser(req: Request) {
 async function adminSummary(req: Request) {
   const ctx = await requireWebUser(req);
   if (!["ADMIN", "ADMIN_INVENT"].includes(ctx.effectiveRole)) throw new HttpError(403, "Bạn không có quyền xem tổng quan quản trị");
-  const [sku, profiles, activeUsers, activeIssues, pendingSheet, logs] = await Promise.all([
+  const [sku, profiles, activeUsers, openIssues, claimedIssues, pendingSheet, logs, inventory, inventoryJob] = await Promise.all([
     admin.from("sku_catalog").select("sku", { count: "exact", head: true }),
     admin.from("profiles").select("id", { count: "exact", head: true }),
     admin.from("profiles").select("id", { count: "exact", head: true }).eq("active", true),
-    admin.from("issues").select("id", { count: "exact", head: true }).in("status", ["OPEN", "CLAIMED", "SEARCHING", "REPLENISHING"]),
+    admin.from("issues").select("id", { count: "exact", head: true }).eq("status", "OPEN"),
+    admin.from("issues").select("id", { count: "exact", head: true }).in("status", ["CLAIMED", "SEARCHING", "REPLENISHING"]),
     admin.from("sheet_export_queue").select("id", { count: "exact", head: true }).is("exported_at", null),
     admin.from("diagnostic_logs").select("id", { count: "exact", head: true }),
+    admin.from("inventory_snapshots").select("id,source_captured_at,sha256,normalized_row_count").eq("warehouse_site_id", "1291").order("published_at", { ascending: false }).limit(1).maybeSingle(),
+    admin.from("inventory_sync_jobs").select("id,state,requested_at,error_code").eq("warehouse_site_id", "1291").order("requested_at", { ascending: false }).limit(1).maybeSingle(),
   ]);
-  for (const result of [sku, profiles, activeUsers, activeIssues, pendingSheet, logs]) if (result.error) throw result.error;
-  return { sku_count: sku.count ?? 0, profile_count: profiles.count ?? 0, active_user_count: activeUsers.count ?? 0, active_issue_count: activeIssues.count ?? 0, pending_sheet_count: pendingSheet.count ?? 0, diagnostic_log_count: logs.count ?? 0 };
+  for (const result of [sku, profiles, activeUsers, openIssues, claimedIssues, pendingSheet, logs, inventory, inventoryJob]) if (result.error) throw result.error;
+  return {
+    sku_count: sku.count ?? 0,
+    profile_count: profiles.count ?? 0,
+    active_user_count: activeUsers.count ?? 0,
+    open_issue_count: openIssues.count ?? 0,
+    claimed_issue_count: claimedIssues.count ?? 0,
+    active_issue_count: (openIssues.count ?? 0) + (claimedIssues.count ?? 0),
+    pending_sheet_count: pendingSheet.count ?? 0,
+    diagnostic_log_count: logs.count ?? 0,
+    inventory_snapshot: inventory.data ?? null,
+    inventory_job: inventoryJob.data ?? null,
+  };
 }
 async function adminUserIndex(req: Request) {
   const ctx = await requireWebUser(req);
-  if (ctx.effectiveRole !== "ADMIN") throw new HttpError(403, "Chỉ ADMIN được quản lý nhân sự");
-  const { data, error, count } = await admin.from("profiles").select("employee_code,role", { count: "exact" }).order("employee_code").limit(5000);
+  if (!["ADMIN", "ADMIN_INVENT"].includes(ctx.effectiveRole)) throw new HttpError(403, "Bạn không có quyền xem danh sách nhân sự quản lý");
+  let query = admin.from("profiles").select("employee_code,role", { count: "exact" }).order("employee_code").limit(5000);
+  if (ctx.effectiveRole === "ADMIN_INVENT") query = query.in("role", ["INVENT", "PICKER"]);
+  const { data, error, count } = await query;
   if (error) throw error;
   if ((count ?? 0) > 5000) throw new HttpError(409, "Số nhân sự vượt ngưỡng preview 5000 tài khoản");
   return { users: data ?? [], employee_codes: (data ?? []).map((row) => row.employee_code), count: count ?? 0 };
@@ -69,10 +93,14 @@ async function forwardToApi(req: Request, action: string): Promise<Response> {
   await requireWebUser(req);
   const authorization = req.headers.get("authorization") ?? "";
   const body = await req.text();
-  const headers: Record<string, string> = { "content-type": "application/json", "authorization": authorization, "apikey": ANON_KEY };
-  const testRole = req.headers.get("x-admin-test-role"); if (testRole) headers["x-admin-test-role"] = testRole;
+  const headers: Record<string, string> = { "content-type": "application/json", authorization, apikey: ANON_KEY };
+  const testRole = req.headers.get("x-admin-test-role");
+  if (testRole) headers["x-admin-test-role"] = testRole;
   const response = await fetch(`${SUPABASE_URL}/functions/v1/api/${action}`, { method: "POST", headers, body: body || "{}" });
-  return new Response(await response.text(), { status: response.status, headers: { ...corsHeaders(req), "content-type": response.headers.get("content-type") ?? "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" } });
+  return new Response(await response.text(), {
+    status: response.status,
+    headers: { ...corsHeaders(req), "content-type": response.headers.get("content-type") ?? "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" },
+  });
 }
 
 Deno.serve(async (req) => {

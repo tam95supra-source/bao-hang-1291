@@ -13,6 +13,8 @@ import org.json.JSONObject
 import vn.pickpack1291.baohang.BuildConfig
 import vn.pickpack1291.baohang.diagnostics.DiagnosticsLogger
 import vn.pickpack1291.baohang.network.ApiClient
+import vn.pickpack1291.baohang.sync.SyncScheduler
+import java.time.Duration
 import java.time.Instant
 import java.util.UUID
 
@@ -30,6 +32,8 @@ class AppRepository(
         session.save(auth)
         diagnostics.info("session_saved", mapOf("employee_code" to auth.profile.employeeCode, "role" to auth.profile.role.wire))
         registerCurrentDevice()
+        if (database.outboxCount() > 0) SyncScheduler.enqueueOutbox(context)
+        if (catalogNeedsRefresh()) SyncScheduler.enqueueCatalog(context)
         return auth.profile
     }
 
@@ -53,6 +57,8 @@ class AppRepository(
     fun searchSkus(query: String) = database.searchSkus(query)
     suspend fun searchSkusOnline(query: String) = api.searchSkus(query)
 
+    suspend fun inventoryStatus(sku: String): InventoryStatus = api.inventoryStatus(sku)
+
     suspend fun reportShortage(sku: String): ReportResult {
         val requestId = UUID.randomUUID().toString()
         diagnostics.info("shortage_submit", mapOf("sku" to sku, "request_id" to requestId))
@@ -72,40 +78,46 @@ class AppRepository(
             )
             database.upsertIssues(listOf(issue))
             database.enqueue("report-shortage", JSONObject().put("sku", sku).put("client_request_id", requestId))
-            ReportResult(issue, false, "Đã lưu trên máy; ứng dụng sẽ tự gửi khi có mạng")
+            SyncScheduler.enqueueOutbox(context)
+            diagnostics.info("outbox_sync_scheduled", mapOf("action" to "report-shortage", "pending" to database.outboxCount()))
+            ReportResult(issue, false, "ĐÃ LƯU TRÊN MÁY • CHỜ ĐỒNG BỘ")
         }
     }
 
     suspend fun loadMyIssues(): List<StockIssue> = try {
         api.myIssues().also(database::upsertIssues)
-    } catch (_: Exception) {
-        database.cachedIssues(100)
-    }
+    } catch (_: Exception) { database.cachedIssues(100) }
 
     suspend fun loadActiveIssues(): List<StockIssue> = try {
         api.activeIssues().also(database::upsertIssues)
-    } catch (_: Exception) {
-        database.cachedIssues(200).filter { it.status.isOpenBucket }
-    }
+    } catch (_: Exception) { database.cachedIssues(200).filter { it.status.isOpenBucket } }
 
     suspend fun loadIssueBoard(): IssueBoard = api.issueBoard().also {
-        database.upsertIssues(it.open + it.skipped + it.available)
+        database.upsertIssues(it.open + it.claimed + it.recent)
     }
 
     suspend fun claimIssue(issueId: String): StockIssue = api.claimIssue(issueId).also {
         database.upsertIssues(listOf(it))
-        diagnostics.info("issue_claim", mapOf("issue_id" to issueId, "sku" to it.sku))
+        diagnostics.info("issue_claim", mapOf("issue_id" to issueId, "sku" to it.sku, "version" to it.issueVersion))
     }
+
+    suspend fun reassignIssue(issueId: String, newAssigneeId: String, reason: String): StockIssue =
+        api.reassignIssue(issueId, newAssigneeId, reason).also {
+            database.upsertIssues(listOf(it))
+            diagnostics.info("issue_reassign", mapOf("issue_id" to issueId, "new_assignee" to newAssigneeId, "version" to it.issueVersion))
+        }
 
     suspend fun updateIssue(issueId: String, action: String): StockIssue {
         diagnostics.info("issue_update_start", mapOf("issue_id" to issueId, "action" to action))
         return api.updateIssue(issueId, action).also {
             database.upsertIssues(listOf(it))
-            diagnostics.info("issue_update_success", mapOf("issue_id" to issueId, "sku" to it.sku, "status" to it.status.wire))
+            diagnostics.info("issue_update_success", mapOf("issue_id" to issueId, "sku" to it.sku, "status" to it.status.wire, "version" to it.issueVersion))
         }
     }
 
     suspend fun pendingAlerts(): List<PendingAlert> = api.pendingAlerts()
+    suspend fun markAlertReceived(eventId: String) = api.markAlertReceived(eventId)
+    suspend fun markAlertDisplayed(eventId: String) = api.markAlertDisplayed(eventId)
 
     suspend fun acknowledgeAlert(eventId: String) {
         try {
@@ -114,8 +126,17 @@ class AppRepository(
         } catch (error: Exception) {
             diagnostics.warn("alert_ack_deferred", mapOf("event_id" to eventId, "error" to error.message.orEmpty()))
             database.enqueue("ack-alert", JSONObject().put("event_id", eventId))
+            SyncScheduler.enqueueOutbox(context)
         }
     }
+
+    fun catalogNeedsRefresh(maxAgeHours: Long = 6): Boolean {
+        if (database.skuCount() == 0) return true
+        val last = database.metadata("catalog_last_sync") ?: return true
+        return runCatching { Duration.between(Instant.parse(last), Instant.now()).toHours() >= maxAgeHours }.getOrDefault(true)
+    }
+
+    suspend fun syncCatalogIfStale(maxAgeHours: Long = 6): Int = if (catalogNeedsRefresh(maxAgeHours)) syncCatalog() else 0
 
     suspend fun syncCatalog(onPage: ((count: Int) -> Unit)? = null): Int {
         val updatedSince = if (database.skuCount() == 0) null else database.metadata("catalog_last_sync")
@@ -147,13 +168,15 @@ class AppRepository(
                 sent++
             } catch (error: Exception) {
                 database.failOutbox(item.id, error.message.orEmpty())
-                diagnostics.warn("outbox_flush_paused", mapOf("action" to item.action, "sent" to sent, "error" to error.message.orEmpty()))
+                diagnostics.warn("outbox_flush_paused", mapOf("action" to item.action, "sent" to sent, "error" to error.message.orEmpty(), "pending" to database.outboxCount()))
                 return sent
             }
         }
-        if (sent > 0) diagnostics.info("outbox_flush_success", mapOf("sent" to sent))
+        if (sent > 0) diagnostics.info("outbox_flush_success", mapOf("sent" to sent, "remaining" to database.outboxCount()))
         return sent
     }
+
+    fun outboxCount(): Int = database.outboxCount()
 
     suspend fun registerCurrentDevice() {
         val token = FirebaseMessaging.getInstance().token.await()
@@ -174,14 +197,15 @@ class AppRepository(
 
     suspend fun sendDiagnosticLog(): JSONObject {
         diagnostics.info("diagnostic_upload_requested", mapOf("role" to session.effectiveRole.wire, "version" to BuildConfig.VERSION_NAME))
-        val bundle = diagnostics.prepareUpload()
-            ?: return JSONObject().put("uploaded", false).put("message", "Chưa có log để gửi")
+        val bundle = diagnostics.prepareUpload() ?: return JSONObject().put("uploaded", false).put("message", "Chưa có log để gửi")
         val result = api.uploadDiagnosticLog(bundle)
         if (result.optBoolean("uploaded", false)) diagnostics.clearAfterConfirmedUpload()
         return result
     }
 
     fun skuCount() = database.skuCount()
+    suspend fun getOperationalConfig() = api.getOperationalConfig()
+    suspend fun saveOperationalConfig(config: OperationalConfig) = api.saveOperationalConfig(config)
     suspend fun getConfig() = api.getConfig()
     suspend fun saveConfig(config: AppConfig) = api.saveConfig(config)
     suspend fun importSkus(items: List<SkuItem>) = api.importSkus(items)

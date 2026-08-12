@@ -9,13 +9,16 @@ import vn.pickpack1291.baohang.BuildConfig
 import vn.pickpack1291.baohang.data.AppConfig
 import vn.pickpack1291.baohang.data.AuthSession
 import vn.pickpack1291.baohang.data.ImportUserRow
+import vn.pickpack1291.baohang.data.InventoryStatus
 import vn.pickpack1291.baohang.data.IssueBoard
+import vn.pickpack1291.baohang.data.OperationalConfig
 import vn.pickpack1291.baohang.data.PendingAlert
 import vn.pickpack1291.baohang.data.ReportResult
 import vn.pickpack1291.baohang.data.SessionStore
 import vn.pickpack1291.baohang.data.SkuItem
 import vn.pickpack1291.baohang.data.StockIssue
 import vn.pickpack1291.baohang.data.UserProfile
+import vn.pickpack1291.baohang.data.UserRole
 import vn.pickpack1291.baohang.diagnostics.DiagnosticsLogger
 import java.io.BufferedReader
 import java.net.HttpURLConnection
@@ -64,10 +67,7 @@ class ApiClient(
         )
     }
 
-    suspend fun sessionProfile(): UserProfile {
-        val response = invoke("session-profile", JSONObject())
-        return UserProfile.fromJson(response.getJSONObject("profile"))
-    }
+    suspend fun sessionProfile(): UserProfile = UserProfile.fromJson(invoke("session-profile", JSONObject()).getJSONObject("profile"))
 
     suspend fun searchSkus(query: String, limit: Int = 20): List<SkuItem> {
         val response = invoke("search-skus", JSONObject().put("query", query).put("limit", limit))
@@ -94,16 +94,27 @@ class ApiClient(
     suspend fun issueBoard(): IssueBoard {
         val response = invoke("issue-board", JSONObject())
         return IssueBoard(
-            response.optJSONArray("open").toStockIssues(),
-            response.optJSONArray("skipped").toStockIssues(),
-            response.optJSONArray("available").toStockIssues()
+            open = response.optJSONArray("open").toStockIssues(),
+            claimed = response.optJSONArray("claimed").toStockIssues(),
+            recent = response.optJSONArray("recent").toStockIssues()
         )
     }
+
+    suspend fun issueDetail(issueId: String): StockIssue = StockIssue.fromJson(
+        invoke("issue-detail", JSONObject().put("issue_id", issueId)).getJSONObject("issue")
+    )
 
     suspend fun myIssues(): List<StockIssue> = invoke("my-issues", JSONObject()).optJSONArray("issues").toStockIssues()
 
     suspend fun claimIssue(issueId: String): StockIssue = StockIssue.fromJson(
         invoke("claim-issue", JSONObject().put("issue_id", issueId)).getJSONObject("issue")
+    )
+
+    suspend fun reassignIssue(issueId: String, newAssigneeId: String, reason: String): StockIssue = StockIssue.fromJson(
+        invoke(
+            "reassign-issue",
+            JSONObject().put("issue_id", issueId).put("new_assignee_id", newAssigneeId).put("reason", reason)
+        ).getJSONObject("issue")
     )
 
     suspend fun updateIssue(issueId: String, action: String): StockIssue = StockIssue.fromJson(
@@ -115,9 +126,9 @@ class ApiClient(
         return buildList { for (i in 0 until array.length()) add(PendingAlert.fromJson(array.getJSONObject(i))) }
     }
 
-    suspend fun acknowledgeAlert(eventId: String) {
-        invoke("ack-alert", JSONObject().put("event_id", eventId))
-    }
+    suspend fun markAlertReceived(eventId: String) { invoke("mark-alert-received", JSONObject().put("event_id", eventId)) }
+    suspend fun markAlertDisplayed(eventId: String) { invoke("mark-alert-displayed", JSONObject().put("event_id", eventId)) }
+    suspend fun acknowledgeAlert(eventId: String) { invoke("ack-alert", JSONObject().put("event_id", eventId)) }
 
     suspend fun registerDevice(token: String, deviceName: String, appVersion: String) {
         invoke(
@@ -145,6 +156,14 @@ class ApiClient(
         return CatalogPage(result, response.optBoolean("has_more", result.size == limit), response.getString("sync_until"))
     }
 
+    suspend fun inventoryStatus(sku: String): InventoryStatus = InventoryStatus.fromJson(
+        invoke("inventory-status", JSONObject().put("sku", sku))
+    )
+
+    suspend fun getOperationalConfig(): OperationalConfig = OperationalConfig.fromJson(invoke("get-operational-config", JSONObject()))
+    suspend fun saveOperationalConfig(config: OperationalConfig): OperationalConfig = OperationalConfig.fromJson(
+        invoke("save-operational-config", config.toJson())
+    )
     suspend fun getConfig(): AppConfig = AppConfig.fromJson(invoke("get-config", JSONObject()))
     suspend fun saveConfig(config: AppConfig): AppConfig = AppConfig.fromJson(invoke("save-config", config.toJson()))
 
@@ -164,7 +183,7 @@ class ApiClient(
         employeeCode: String,
         fullName: String,
         contractor: String,
-        role: vn.pickpack1291.baohang.data.UserRole,
+        role: UserRole,
         active: Boolean,
         newPassword: String
     ): UserProfile {
@@ -276,18 +295,17 @@ class ApiClient(
                 mapOf("event" to eventName, "method" to method, "status" to code, "elapsed_ms" to elapsedMs, "test_role" to (sessionStore.adminTestRole?.wire ?: ""))
             )
             if (code !in 200..299) {
-                val message = runCatching { JSONObject(response).optString("error", response) }
-                    .getOrDefault(response).ifBlank { "Lỗi máy chủ $code" }
-                diagnostics.warn("http_error", mapOf("event" to eventName, "status" to code, "message" to message.take(500)))
-                throw ApiException(code, message)
+                val parsed = runCatching { JSONObject(response) }.getOrNull()
+                val message = parsed?.optString("error", response).orEmpty().ifBlank { response.ifBlank { "Lỗi máy chủ $code" } }
+                val errorCode = parsed?.optString("code").orEmpty()
+                diagnostics.warn("http_error", mapOf("event" to eventName, "status" to code, "code" to errorCode, "message" to message.take(500)))
+                throw ApiException(code, message, errorCode)
             }
             return response
         } catch (error: Exception) {
             diagnostics.error("http_exception", error, mapOf("event" to eventName, "method" to method))
             throw error
-        } finally {
-            connection.disconnect()
-        }
+        } finally { connection.disconnect() }
     }
 
     private fun requireConfigured() {
@@ -307,4 +325,4 @@ class ApiClient(
     }
 }
 
-class ApiException(val statusCode: Int, override val message: String) : Exception(message)
+class ApiException(val statusCode: Int, override val message: String, val code: String = "") : Exception(message)

@@ -1,0 +1,75 @@
+name: Target quality gate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'web-admin/**'
+      - 'supabase/functions/**'
+      - 'supabase/migrations/**'
+      - 'docs/BUSINESS_RULES.md'
+  push:
+    branches: [main]
+    paths:
+      - 'web-admin/**'
+      - 'supabase/functions/**'
+      - 'supabase/migrations/**'
+      - 'docs/BUSINESS_RULES.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: target-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: denoland/setup-deno@v2
+        with:
+          # Match the Deno runtime documented for Supabase Edge Functions.
+          deno-version: v1.46.3
+      - name: Install pinned web dependencies
+        run: npm --prefix web-admin install --ignore-scripts --no-audit --no-fund --no-package-lock
+      - name: Build Web Admin
+        run: npm --prefix web-admin run build
+      - name: Enforce web performance and secret budgets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f web-admin/dist/index.html
+          if grep -R -E 'BEGIN (RSA )?PRIVATE KEY|SUPABASE_SERVICE_ROLE_KEY|service_role|SUPRA_CREDENTIAL_MASTER_KEY|encrypted_credential_bundle' web-admin/dist; then
+            echo 'Secret-like server material found in static build' >&2
+            exit 1
+          fi
+          shopt -s nullglob
+          app_js=(web-admin/dist/assets/index-*.js)
+          css=(web-admin/dist/assets/index-*.css)
+          test ${#app_js[@]} -ge 1
+          js_gzip=$(gzip -c "${app_js[0]}" | wc -c)
+          test "$js_gzip" -le 153600 || { echo "Initial JS gzip budget exceeded: $js_gzip > 153600" >&2; exit 1; }
+          if [ ${#css[@]} -ge 1 ]; then
+            css_gzip=$(gzip -c "${css[0]}" | wc -c)
+            test "$css_gzip" -le 30720 || { echo "CSS gzip budget exceeded: $css_gzip > 30720" >&2; exit 1; }
+          fi
+          echo "WEB_BUDGET=PASS initial_js_gzip=$js_gzip"
+      - name: Type-check Edge Functions
+        run: deno check supabase/functions/_shared/fcm.ts supabase/functions/api/index.ts supabase/functions/web-api/index.ts
+      - name: Guard migrations and public source from secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Match actual PEM/json secret material, not source code that intentionally parses PEM markers.
+          if grep -R -n -E --exclude='*.example' --exclude='BUSINESS_RULES.md' '^[[:space:]]*-----BEGIN (RSA )?PRIVATE KEY-----|"private_key"[[:space:]]*:[[:space:]]*"-----BEGIN|SUPABASE_SERVICE_ROLE_KEY[[:space:]]*=[[:space:]]*[^$[:space:]]|RELEASE_STORE_PASSWORD[[:space:]]*=[[:space:]]*[^$[:space:]]|SUPRA_CREDENTIAL_MASTER_KEY[[:space:]]*=[[:space:]]*[^$[:space:]]' supabase app web-admin docs; then
+            echo 'Possible secret value or private key material detected' >&2
+            exit 1
+          fi
+          echo 'SECRET_GUARD=PASS'
