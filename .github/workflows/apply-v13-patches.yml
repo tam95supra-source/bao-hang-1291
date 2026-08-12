@@ -43,10 +43,13 @@ jobs:
               if len(hits)!=1: raise SystemExit(f'compat {marker}: expected 1, got {len(hits)}')
               lines[hits[0]]='s=s'
           text='\n'.join(lines)+'\n'
-          a=text.find('# reports professional')
-          b=text.find('# SLA with auto skip',a)
-          if a<0 or b<0: raise SystemExit('report isolation anchors missing')
-          text=text[:a]+text[b:]
+          for start_marker,end_marker,label in [
+              ('# reports professional','# SLA with auto skip','report'),
+              ('# users source-aware + create/delete manual','# edit role Admin Invent only Picker','staff-ui')
+          ]:
+              a=text.find(start_marker); b=text.find(end_marker,a)
+              if a<0 or b<0: raise SystemExit(f'{label} isolation anchors missing')
+              text=text[:a]+text[b:]
           patch.write_text(text,encoding='utf-8')
 
           fcm=Path('app/src/main/java/vn/pickpack1291/baohang/notifications/StockMessagingService.kt')
