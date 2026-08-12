@@ -154,24 +154,25 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
         } finally { writableDatabase.endTransaction() }
     }
 
+    private fun issueFromCursor(cursor: android.database.Cursor) = StockIssue(
+        id = cursor.getString(0), sku = cursor.getString(1), productName = cursor.getString(2), status = IssueStatus.from(cursor.getString(3)),
+        reportCount = cursor.getInt(4), reportedAt = cursor.getString(5), updatedAt = cursor.getString(6), assignedName = cursor.getString(7),
+        assignedId = cursor.getString(8), latestReporterName = cursor.getString(9), latestMessage = cursor.getString(10), issueVersion = cursor.getLong(11),
+        previousIssueId = cursor.getString(12), recurrence30m = cursor.getInt(13) != 0
+    )
+
     fun cachedIssues(limit: Int = 200): List<StockIssue> {
         val cursor = readableDatabase.rawQuery(
             "SELECT id,sku,product_name,status,report_count,reported_at,updated_at,assigned_name,assigned_id,latest_reporter_name,latest_message,issue_version,previous_issue_id,recurrence_30m FROM issue_cache ORDER BY updated_at DESC LIMIT ?",
             arrayOf(limit.toString())
         )
-        return cursor.use {
-            buildList {
-                while (it.moveToNext()) add(
-                    StockIssue(
-                        id = it.getString(0), sku = it.getString(1), productName = it.getString(2), status = IssueStatus.from(it.getString(3)),
-                        reportCount = it.getInt(4), reportedAt = it.getString(5), updatedAt = it.getString(6), assignedName = it.getString(7),
-                        assignedId = it.getString(8), latestReporterName = it.getString(9), latestMessage = it.getString(10), issueVersion = it.getLong(11),
-                        previousIssueId = it.getString(12), recurrence30m = it.getInt(13) != 0
-                    )
-                )
-            }
-        }
+        return cursor.use { buildList { while (it.moveToNext()) add(issueFromCursor(it)) } }
     }
+
+    fun cachedIssue(id: String): StockIssue? = readableDatabase.rawQuery(
+        "SELECT id,sku,product_name,status,report_count,reported_at,updated_at,assigned_name,assigned_id,latest_reporter_name,latest_message,issue_version,previous_issue_id,recurrence_30m FROM issue_cache WHERE id=? LIMIT 1",
+        arrayOf(id)
+    ).use { if (it.moveToFirst()) issueFromCursor(it) else null }
 
     fun enqueue(action: String, payload: JSONObject): Long {
         val values = ContentValues().apply {
