@@ -67,7 +67,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if grep -R -n -E --exclude='*.example' --exclude='BUSINESS_RULES.md' 'BEGIN (RSA )?PRIVATE KEY|"private_key"[[:space:]]*:|SUPABASE_SERVICE_ROLE_KEY[[:space:]]*=|RELEASE_STORE_PASSWORD[[:space:]]*=|SUPRA_CREDENTIAL_MASTER_KEY[[:space:]]*=' supabase app web-admin docs; then
+          # Match actual PEM/json secret material, not source code that intentionally parses PEM markers.
+          if grep -R -n -E --exclude='*.example' --exclude='BUSINESS_RULES.md' '^[[:space:]]*-----BEGIN (RSA )?PRIVATE KEY-----|"private_key"[[:space:]]*:[[:space:]]*"-----BEGIN|SUPABASE_SERVICE_ROLE_KEY[[:space:]]*=[[:space:]]*[^$[:space:]]|RELEASE_STORE_PASSWORD[[:space:]]*=[[:space:]]*[^$[:space:]]|SUPRA_CREDENTIAL_MASTER_KEY[[:space:]]*=[[:space:]]*[^$[:space:]]' supabase app web-admin docs; then
             echo 'Possible secret value or private key material detected' >&2
             exit 1
           fi
