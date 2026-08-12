@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Read Cloud Billing association directly
+      - name: Diagnose Cloud Billing read access
         shell: bash
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
@@ -24,8 +24,7 @@ jobs:
           const crypto = require('crypto');
           const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
           if (!sa.client_email || !sa.private_key) throw new Error('Service account JSON incomplete');
-          const enc = (v) => Buffer.from(typeof v === 'string' ? v : JSON.stringify(v))
-            .toString('base64url');
+          const enc = (v) => Buffer.from(typeof v === 'string' ? v : JSON.stringify(v)).toString('base64url');
           const now = Math.floor(Date.now() / 1000);
           const header = enc({ alg: 'RS256', typ: 'JWT' });
           const claim = enc({
@@ -42,10 +41,7 @@ jobs:
             const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
               method: 'POST',
               headers: { 'content-type': 'application/x-www-form-urlencoded' },
-              body: new URLSearchParams({
-                grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-                assertion,
-              }),
+              body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion }),
             });
             if (!tokenRes.ok) throw new Error(`OAuth token HTTP ${tokenRes.status}`);
             const token = await tokenRes.json();
@@ -54,20 +50,24 @@ jobs:
             });
             const raw = await billingRes.text();
             if (!billingRes.ok) {
-              let message = `Cloud Billing HTTP ${billingRes.status}`;
-              try {
-                const j = JSON.parse(raw);
-                message += ` ${j?.error?.status || j?.error?.message || ''}`;
-              } catch {}
-              throw new Error(message.trim());
-            }
-            const info = JSON.parse(raw);
-            if (info.billingEnabled === true) {
-              console.log('FIREBASE_BILLING_ENABLED=true');
-              process.exitCode = 3;
+              let info = {};
+              try { info = JSON.parse(raw); } catch {}
+              const err = info.error || {};
+              console.error(`CLOUD_BILLING_HTTP=${billingRes.status}`);
+              console.error(`CLOUD_BILLING_STATUS=${String(err.status || 'unknown')}`);
+              console.error(`CLOUD_BILLING_MESSAGE=${String(err.message || 'unknown').replace(/[\r\n]+/g, ' ')}`);
+              const detail = Array.isArray(err.details) ? err.details.find((d) => d && d.reason) : null;
+              if (detail) {
+                console.error(`CLOUD_BILLING_REASON=${String(detail.reason)}`);
+                if (detail.metadata?.permission) console.error(`CLOUD_BILLING_PERMISSION=${String(detail.metadata.permission)}`);
+                if (detail.metadata?.service) console.error(`CLOUD_BILLING_SERVICE=${String(detail.metadata.service)}`);
+              }
+              process.exitCode = 2;
               return;
             }
-            console.log('FIREBASE_BILLING_ENABLED=false');
+            const info = JSON.parse(raw);
+            console.log(`FIREBASE_BILLING_ENABLED=${info.billingEnabled === true ? 'true' : 'false'}`);
+            if (info.billingEnabled === true) process.exitCode = 3;
           }
           main().catch((e) => { console.error(e.message); process.exitCode = 2; });
           NODE
