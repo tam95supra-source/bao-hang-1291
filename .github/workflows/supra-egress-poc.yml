@@ -26,28 +26,44 @@ jobs:
           host='api-supra.winmart.vn'
           base='https://api-supra.winmart.vn'
           endpoint='/sft3-hy1/api/v1/report/stock/binStocks'
+          ua='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151.0 Safari/537.36'
+          common=(
+            -H 'accept: application/json, text/plain, */*'
+            -H 'accept-language: en-US,en;q=0.9'
+            -H 'cache-control: no-cache'
+            -H 'pragma: no-cache'
+            -H 'dnt: 1'
+            -H 'content-type: application/json'
+            -H 'withcredentials: true'
+            -H 'origin: https://dashboard-supra.winmart.vn'
+            -H 'referer: https://dashboard-supra.winmart.vn/'
+            -A "$ua"
+          )
 
-          echo '=== DNS ==='
-          getent ahostsv4 "$host" | head -n 5 || true
-
-          echo '=== TLS ==='
+          echo '=== DNS/TLS ==='
+          getent ahostsv4 "$host" | head -n 3 || true
           timeout 15 openssl s_client -connect "$host:443" -servername "$host" -brief </dev/null 2>&1 \
-            | sed -E 's/(Session-ID|Master-Key|PSK identity|SRP username).*/[REDACTED]/I' \
-            | head -n 30
-          echo "TLS_EXIT=${PIPESTATUS[0]}"
+            | grep -E 'CONNECTION ESTABLISHED|Protocol version|Ciphersuite|Peer certificate|Verification|DONE' || true
 
-          echo '=== ROOT HTTP/1.1 ==='
+          echo '=== ROOT BROWSER-CONTEXT HTTP/1.1 ==='
           curl --http1.1 -sS -o /dev/null --connect-timeout 10 --max-time 15 \
-            -w 'ROOT_HTTP1 status=%{http_code} remote=%{remote_ip} verify=%{ssl_verify_result}\n' \
+            "${common[@]}" \
+            -w 'ROOT_CONTEXT status=%{http_code} remote=%{remote_ip} verify=%{ssl_verify_result}\n' \
             "$base/"
-          echo "ROOT_HTTP1_EXIT=$?"
+          echo "ROOT_CONTEXT_EXIT=$?"
 
-          echo '=== BINSTOCKS HTTP/1.1 UNSIGNED ==='
+          echo '=== BINSTOCKS CONTEXT warehouse=HY1 UNSIGNED ==='
           curl --http1.1 -sS -o /dev/null --connect-timeout 10 --max-time 15 \
-            -H 'accept: application/json' \
-            -w 'BINSTOCKS_HTTP1 status=%{http_code} remote=%{remote_ip} verify=%{ssl_verify_result}\n' \
+            "${common[@]}" -H 'warehouse: HY1' \
+            -w 'BIN_HY1 status=%{http_code} remote=%{remote_ip} verify=%{ssl_verify_result}\n' \
             "$base$endpoint"
-          echo "BINSTOCKS_HTTP1_EXIT=$?"
+          echo "BIN_HY1_EXIT=$?"
 
-          # Diagnostic probe only: a transport failure should still leave logs available.
+          echo '=== BINSTOCKS CONTEXT warehouse=none UNSIGNED ==='
+          curl --http1.1 -sS -o /dev/null --connect-timeout 10 --max-time 15 \
+            "${common[@]}" -H 'warehouse: none' \
+            -w 'BIN_NONE status=%{http_code} remote=%{remote_ip} verify=%{ssl_verify_result}\n' \
+            "$base$endpoint"
+          echo "BIN_NONE_EXIT=$?"
+
           exit 0
