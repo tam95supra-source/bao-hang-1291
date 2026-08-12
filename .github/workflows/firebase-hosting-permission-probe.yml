@@ -10,9 +10,9 @@ permissions:
   contents: read
 
 jobs:
-  probe:
+  verify-clean:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 8
     steps:
       - name: Prepare Firebase service account
         shell: bash
@@ -27,48 +27,18 @@ jobs:
           jq -e '.project_id and .client_email and .private_key' "$SA_FILE" >/dev/null
           echo "GOOGLE_APPLICATION_CREDENTIALS=$SA_FILE" >> "$GITHUB_ENV"
 
-      - name: Verify Firebase Hosting read access
+      - name: Verify no permission probe channel remains
         shell: bash
         run: |
           set -euo pipefail
-          npx --yes firebase-tools@14.17.0 hosting:sites:list --project bao-hang-1291 --json > "$RUNNER_TEMP/hosting-sites.json"
-          jq -e '.status == "success"' "$RUNNER_TEMP/hosting-sites.json" >/dev/null
-          COUNT="$(jq '.result.sites | length' "$RUNNER_TEMP/hosting-sites.json")"
-          test "$COUNT" -ge 1
-          SITE_ID="$(jq -r '.result.sites[0].name | split("/")[-1]' "$RUNNER_TEMP/hosting-sites.json")"
-          test -n "$SITE_ID"
-          echo "FIREBASE_HOSTING_READ_ACCESS=PASS sites=$COUNT"
-          echo "FIREBASE_SITE_ID=$SITE_ID" >> "$GITHUB_ENV"
-
-      - name: Verify isolated preview deploy and cleanup
-        shell: bash
-        run: |
-          set -euo pipefail
-          CHANNEL="permission-probe-${GITHUB_RUN_ID}"
-          ROOT="$RUNNER_TEMP/firebase-hosting-probe"
-          mkdir -p "$ROOT/public"
-          printf '%s\n' '<!doctype html><meta charset="utf-8"><title>permission probe</title><p>ok</p>' > "$ROOT/public/index.html"
-          cat > "$ROOT/firebase.json" <<EOF
-          {
-            "hosting": {
-              "site": "$FIREBASE_SITE_ID",
-              "public": "public",
-              "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
-            }
-          }
-          EOF
-          cleanup() {
-            (cd "$ROOT" && npx --yes firebase-tools@14.17.0 hosting:channel:delete "$CHANNEL" --project bao-hang-1291 --force >/dev/null 2>&1) || true
-          }
-          trap cleanup EXIT
-          cd "$ROOT"
-          npx --yes firebase-tools@14.17.0 hosting:channel:deploy "$CHANNEL" --project bao-hang-1291 --expires 1h --json > "$RUNNER_TEMP/preview-deploy.json"
-          jq -e '.status == "success"' "$RUNNER_TEMP/preview-deploy.json" >/dev/null
-          echo "FIREBASE_HOSTING_WRITE_DEPLOY_ACCESS=PASS"
-          cleanup
-          trap - EXIT
+          npx --yes firebase-tools@14.17.0 hosting:channel:list --project bao-hang-1291 --json > "$RUNNER_TEMP/channels.json"
+          if grep -q 'permission-probe-' "$RUNNER_TEMP/channels.json"; then
+            echo 'Firebase Hosting permission probe residue found' >&2
+            exit 1
+          fi
+          echo 'FIREBASE_HOSTING_PROBE_CLEANUP=PASS'
 
       - name: Cleanup credential file
         if: always()
         shell: bash
-        run: rm -rf "$RUNNER_TEMP/firebase-sa.json" "$RUNNER_TEMP/hosting-sites.json" "$RUNNER_TEMP/preview-deploy.json" "$RUNNER_TEMP/firebase-hosting-probe"
+        run: rm -f "$RUNNER_TEMP/firebase-sa.json" "$RUNNER_TEMP/channels.json"
