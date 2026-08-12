@@ -29,7 +29,13 @@
         ]
       },
       {
-        "source": "**/*.@(js|css)",
+        "source": "/browser-supra-poc.js",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-store" }
+        ]
+      },
+      {
+        "source": "/assets/**",
         "headers": [
           { "key": "Cache-Control", "value": "public,max-age=31536000,immutable" }
         ]
