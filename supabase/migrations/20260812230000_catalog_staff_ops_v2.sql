@@ -85,6 +85,14 @@ end $$;
 revoke all on function public.replace_sku_catalog_service(jsonb,uuid,text,text) from public,anon,authenticated;
 grant execute on function public.replace_sku_catalog_service(jsonb,uuid,text,text) to service_role;
 
+create or replace function public.broadcast_staff_change_service(p_payload jsonb)
+returns void language plpgsql security definer set search_path='' as $$
+begin
+  perform realtime.send(coalesce(p_payload,'{}'::jsonb),'staff_changed','site:1291:staff',true);
+end $$;
+revoke all on function public.broadcast_staff_change_service(jsonb) from public,anon,authenticated;
+grant execute on function public.broadcast_staff_change_service(jsonb) to service_role;
+
 create or replace function public.auto_skip_overdue_service()
 returns table(issue_id uuid) language plpgsql security definer set search_path=public as $$
 declare v_enabled boolean; v_minutes integer; r public.issues%rowtype; v_old public.issue_status;
