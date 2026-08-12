@@ -15,7 +15,7 @@
         android:gravity="center"
         android:text="INVENT ĐANG TÌM"
         android:textColor="@color/white"
-        android:textSize="20sp"
+        android:textSize="24sp"
         android:textStyle="bold" />
 
     <TextView
@@ -26,7 +26,7 @@
         android:gravity="center"
         android:text="SKU 12345678"
         android:textColor="@color/white"
-        android:textSize="29sp"
+        android:textSize="32sp"
         android:textStyle="bold" />
 
     <TextView
@@ -38,7 +38,7 @@
         android:gravity="center"
         android:maxLines="2"
         android:textColor="#EFF8FF"
-        android:textSize="15sp" />
+        android:textSize="17sp" />
 
     <TextView
         android:id="@+id/tvOverlayMessage"
@@ -48,14 +48,14 @@
         android:layout_weight="1"
         android:gravity="center"
         android:textColor="@color/white"
-        android:textSize="16sp" />
+        android:textSize="18sp" />
 
     <Button
         android:id="@+id/btnOverlayAck"
         android:layout_width="match_parent"
         android:layout_height="52dp"
         android:background="@drawable/bg_button_success"
-        android:text="ĐÃ HIỂU"
+        android:text="ĐÃ XÁC NHẬN"
         android:textColor="@color/white"
         android:textSize="17sp"
         android:textStyle="bold"
@@ -66,7 +66,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center"
-        android:text="Chạm vùng trống để ẩn"
+        android:text="Cảnh báo nghiệp vụ • vui lòng xác nhận"
         android:textColor="#D5E7F5"
         android:textSize="12sp" />
 </LinearLayout>

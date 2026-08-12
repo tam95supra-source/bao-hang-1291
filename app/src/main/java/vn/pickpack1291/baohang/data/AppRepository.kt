@@ -57,7 +57,6 @@ class AppRepository(
     fun searchSkus(query: String) = database.searchSkus(query)
     suspend fun searchSkusOnline(query: String) = api.searchSkus(query)
 
-    suspend fun inventoryStatus(sku: String): InventoryStatus = api.inventoryStatus(sku)
 
     suspend fun reportShortage(sku: String): ReportResult {
         val requestId = UUID.randomUUID().toString()
@@ -139,15 +138,20 @@ class AppRepository(
     suspend fun syncCatalogIfStale(maxAgeHours: Long = 6): Int = if (catalogNeedsRefresh(maxAgeHours)) syncCatalog() else 0
 
     suspend fun syncCatalog(onPage: ((count: Int) -> Unit)? = null): Int {
-        val updatedSince = if (database.skuCount() == 0) null else database.metadata("catalog_last_sync")
         var syncUntil: String? = null
-        var count = 0
         var afterSku: String? = null
+        var count = 0
+        var revision: Long? = null
         var hasMore = true
-        diagnostics.info("catalog_sync_start", mapOf("updated_since" to (updatedSince ?: "full")))
+        diagnostics.info("catalog_sync_start", mapOf("mode" to "active_full"))
         while (hasMore) {
-            val page = api.catalogPage(afterSku, updatedSince, syncUntil)
+            val page = api.catalogPage(afterSku, null, syncUntil)
             syncUntil = page.syncUntil
+            if (revision == null) {
+                revision = page.revision
+                val localRevision = database.metadata("catalog_revision")?.toLongOrNull()
+                if (localRevision != page.revision) database.clearSkus()
+            }
             database.upsertSkus(page.items)
             count += page.items.size
             afterSku = page.items.lastOrNull()?.sku ?: afterSku
@@ -155,11 +159,10 @@ class AppRepository(
             hasMore = page.hasMore && page.items.isNotEmpty()
         }
         syncUntil?.let { database.setMetadata("catalog_last_sync", it) }
-        diagnostics.info("catalog_sync_success", mapOf("received" to count, "local_count" to database.skuCount()))
+        revision?.let { database.setMetadata("catalog_revision", it.toString()) }
+        diagnostics.info("catalog_sync_success", mapOf("received" to count, "local_count" to database.skuCount(), "revision" to (revision ?: 0L)))
         return count
-    }
-
-    suspend fun flushOutbox(): Int {
+    }    suspend fun flushOutbox(): Int {
         var sent = 0
         database.outbox().forEach { item ->
             try {
@@ -209,6 +212,14 @@ class AppRepository(
     suspend fun getConfig() = api.getConfig()
     suspend fun saveConfig(config: AppConfig) = api.saveConfig(config)
     suspend fun importSkus(items: List<SkuItem>) = api.importSkus(items)
+
+    suspend fun replaceCatalog(items: List<SkuItem>, sourceName: String): JSONObject {
+        val result = api.replaceCatalog(items, sourceName)
+        database.clearSkus()
+        database.setMetadata("catalog_revision", "0")
+        syncCatalog()
+        return result
+    }
     suspend fun listUsers() = api.listUsers()
     suspend fun updateUser(user: UserProfile, employeeCode: String, fullName: String, contractor: String, role: UserRole, active: Boolean, newPassword: String) =
         api.updateUser(user.id, employeeCode, fullName, contractor, role, active, newPassword).also {

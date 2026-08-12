@@ -29,7 +29,8 @@ const state = {
   activeTab: null,
   managedUsers: [],
   issueChannel: null,
-  inventoryChannel: null,
+  catalogChannel: null,
+  staffChannel: null,
   realtimeStatus: 'OFFLINE',
   fallbackTimer: null,
   refreshTimer: null,
@@ -72,9 +73,10 @@ async function stopRealtime() {
   state.fallbackTimer = null;
   clearTimeout(state.refreshTimer);
   state.refreshTimer = null;
-  const channels = [state.issueChannel, state.inventoryChannel].filter(Boolean);
+  const channels = [state.issueChannel, state.catalogChannel, state.staffChannel].filter(Boolean);
   state.issueChannel = null;
-  state.inventoryChannel = null;
+  state.catalogChannel = null;
+  state.staffChannel = null;
   for (const channel of channels) await realtimeClient.removeChannel(channel).catch(() => {});
   state.realtimeStatus = 'OFFLINE';
 }
@@ -156,7 +158,7 @@ function renderLogin(msg = '') {
     <form id="loginForm"><label>Mã nhân viên<input id="employeeCode" required autocomplete="username"></label>
     <label>Mật khẩu<input id="password" type="password" required autocomplete="current-password"></label>
     <button class="primary wide">ĐĂNG NHẬP</button></form><div id="loginMessage" class="message" hidden></div>
-    <p class="security">Quyền được kiểm tra tại server. Web không chứa service-role key, credential Supra hoặc private key.</p>
+    <p class="security">Quyền được kiểm tra tại server. Web không chứa service-role key, thông tin xác thực máy chủ hoặc private key.</p>
   </section></main>`;
   if (msg) message('#loginMessage', msg, 'error');
   $('#loginForm').addEventListener('submit', handleLogin);
@@ -179,15 +181,9 @@ async function handleLogin(event) {
 }
 
 function tabsForRole(currentRole) {
-  if (currentRole === 'ADMIN') return [
-    ['overview','Tổng quan'],['events','Sự kiện'],['inventory','Tồn bin'],['reports','Báo cáo'],['users','Nhân sự & quyền'],
-    ['devices','Thiết bị & thông báo'],['integrations','Tích hợp'],['logs','Log & audit'],['config','Cấu hình'],['versions','Phiên bản'],
-  ];
-  if (currentRole === 'ADMIN_INVENT') return [
-    ['overview','Tổng quan'],['events','Sự kiện'],['inventory','Tồn bin'],['reports','Báo cáo'],['sku','SKU'],['users','Nhân sự'],['logs','Log'],['sla','SLA vận hành'],
-  ];
-  if (currentRole === 'INVENT') return [['events','Sự kiện'],['inventory','Tồn bin']];
-  return [['picker','Picker']];
+  if(currentRole==='ADMIN')return [['overview','Tổng quan'],['events','Sự kiện'],['sku','Danh mục SKU'],['reports','Báo cáo'],['users','Nhân sự & quyền'],['devices','Thiết bị'],['services','Hệ thống & dung lượng'],['logs','Log & audit'],['config','Cấu hình'],['versions','Phiên bản']];
+  if(currentRole==='ADMIN_INVENT')return [['overview','Tổng quan'],['events','Sự kiện'],['sku','Danh mục SKU'],['reports','Báo cáo'],['users','Nhân sự'],['logs','Log'],['sla','Mốc thời gian']];
+  if(currentRole==='INVENT')return [['events','Sự kiện'],['sku','Danh mục SKU']];return [['picker','Picker']];
 }
 function tabFromHash(tabs) {
   const id = location.hash.replace(/^#\/?/, '').split('/')[0];
@@ -205,7 +201,7 @@ function renderApp() {
   setHash(state.activeTab);
   document.body.innerHTML = `<div class="app-shell">
     <header class="topbar"><div><p class="eyebrow">BÁO HÀNG 1291</p><h1>Web nghiệp vụ</h1><div class="health-row" id="healthRow">
-      ${healthChip('SERVICE','ONLINE','good')}${healthChip('REALTIME','ĐANG NỐI')}${healthChip('SHEET','—')}${healthChip('TỒN BIN','—')}
+      ${healthChip('SERVICE','ONLINE','good')}${healthChip('REALTIME','ĐANG NỐI')}${healthChip('SHEET','—')}${healthChip('FREE TIER','GIÁM SÁT')}
     </div></div><div class="user"><strong>${escapeHtml(profile.full_name)}</strong><span>${escapeHtml(profile.employee_code)} · ${escapeHtml(ROLES[currentRole] || currentRole)}</span><button id="logout" class="ghost">Đăng xuất</button></div></header>
     ${state.testRole ? `<div class="test-banner">ĐANG KIỂM THỬ QUYỀN: <strong>${escapeHtml(ROLES[state.testRole])}</strong> · API cũng bị hạ quyền tương ứng. <button id="exitTest">Thoát kiểm thử</button></div>` : ''}
     ${actualRole() === 'ADMIN' && !state.testRole ? `<div class="test-tools"><span>Kiểm thử giao diện + quyền server:</span><button data-test="ADMIN_INVENT">Admin Event</button><button data-test="INVENT">Người báo hàng</button><button data-test="PICKER">Picker</button></div>` : ''}
@@ -222,8 +218,8 @@ function renderApp() {
 function renderTab() {
   $$('[data-tab]').forEach((button) => button.classList.toggle('active', button.dataset.tab === state.activeTab));
   const handlers = {
-    overview: renderOverview, events: renderEvents, picker: renderPicker, inventory: renderInventory, reports: renderReports,
-    sku: renderSku, users: renderUsers, devices: renderDevices, integrations: renderIntegrations, logs: renderLogs,
+    overview: renderOverview, events: renderEvents, picker: renderPicker, reports: renderReports,
+    sku: renderSku, users: renderUsers, devices: renderDevices, services: renderIntegrations, logs: renderLogs,
     sla: renderSla, config: renderConfig, versions: renderVersions,
   };
   handlers[state.activeTab]?.();
@@ -232,7 +228,8 @@ function scheduleLiveRefresh(kind) {
   if (document.hidden) return;
   clearTimeout(state.refreshTimer);
   state.refreshTimer = setTimeout(() => {
-    if (kind === 'inventory' && ['inventory','overview'].includes(state.activeTab)) renderTab();
+    if (kind === 'catalog' && ['sku','overview','picker'].includes(state.activeTab)) renderTab();
+    if (kind === 'staff' && ['users','overview'].includes(state.activeTab)) renderTab();
     if (kind === 'issue' && ['events','overview','picker'].includes(state.activeTab)) renderTab();
   }, 180);
 }
@@ -260,16 +257,17 @@ async function startRealtime() {
   state.issueChannel = realtimeClient.channel('site:1291:issues', { config: { private: true } })
     .on('broadcast', { event: 'issue_changed' }, () => scheduleLiveRefresh('issue'))
     .subscribe(subscribeStatus);
-  state.inventoryChannel = realtimeClient.channel('site:1291:inventory', { config: { private: true } })
-    .on('broadcast', { event: 'snapshot_published' }, () => scheduleLiveRefresh('inventory'))
-    .subscribe(subscribeStatus);
+  state.catalogChannel = realtimeClient.channel('site:1291:catalog', { config: { private: true } })
+    .on('broadcast', { event: 'catalog_changed' }, () => scheduleLiveRefresh('catalog')).subscribe(subscribeStatus);
+  state.staffChannel = realtimeClient.channel('site:1291:staff', { config: { private: true } })
+    .on('broadcast', { event: 'staff_changed' }, () => scheduleLiveRefresh('staff')).subscribe(subscribeStatus);
   setTimeout(() => { if (state.realtimeStatus !== 'ONLINE') ensureFallbackPolling(); }, 6000);
 }
 function ensureFallbackPolling() {
   if (state.fallbackTimer || document.hidden || !state.session) return;
   state.fallbackTimer = setInterval(() => {
     if (document.hidden) return;
-    if (['events','picker','inventory','overview'].includes(state.activeTab)) renderTab();
+    if (['events','picker','sku','overview','users'].includes(state.activeTab)) renderTab();
   }, 30_000);
 }
 document.addEventListener('visibilitychange', () => {
@@ -282,21 +280,10 @@ window.addEventListener('hashchange', () => {
   if (tab && tab !== state.activeTab) { state.activeTab = tab; renderTab(); }
 });
 
-async function renderOverview() {
-  $('#content').innerHTML = `<div class="heading"><div><p class="eyebrow">LIVE</p><h2>Tổng quan vận hành</h2></div><button id="refresh" class="secondary">Làm mới</button></div><div id="metrics" class="metrics"></div><div id="overviewStatus"></div>`;
-  $('#refresh').onclick = renderOverview;
-  try {
-    const data = await api('admin-summary');
-    $('#metrics').innerHTML = [
-      ['Chờ nhận',data.open_issue_count],['Đang xử lý',data.claimed_issue_count],['SKU master',data.sku_count],['Nhân sự hoạt động',data.active_user_count],['Chờ Sheet',data.pending_sheet_count],['Log',data.diagnostic_log_count],
-    ].map(([label,value]) => `<article class="metric"><span>${label}</span><strong>${Number(value || 0).toLocaleString('vi-VN')}</strong></article>`).join('');
-    const snap = data.inventory_snapshot;
-    $('#overviewStatus').innerHTML = `<div class="panel-grid"><article class="card"><h3>Google Sheet</h3><p>${data.pending_sheet_count ? `<b class="bad-text">${data.pending_sheet_count} đang chờ</b>` : 'Không có hàng đợi đang chờ.'}</p><button id="syncSheet" class="secondary">ĐỒNG BỘ NGAY</button><div id="overviewMsg" class="message" hidden></div></article>
-      <article class="card"><h3>Tồn bin</h3>${snap ? `<p>Snapshot: ${formatTime(snap.source_captured_at)}</p><p>${Number(snap.normalized_row_count || 0).toLocaleString('vi-VN')} dòng chuẩn hóa · hash ${escapeHtml(String(snap.sha256 || '').slice(0,12))}</p>` : '<p class="muted">Chưa có snapshot.</p>'}</article></div>`;
-    $('#syncSheet').onclick = async () => { try { setBusy(true,'Đang đồng bộ Google Sheet…'); const result = await api('sync-google-sheet'); message('#overviewMsg', `Đã xuất ${result.exported || 0}; còn ${result.remaining || 0} sự kiện.`, 'good'); } catch (error) { message('#overviewMsg', safeMessage(error), 'error'); } finally { setBusy(false); } };
-    const sheetEl = $('[data-health="SHEET"]'); if (sheetEl) { $('em', sheetEl).textContent = data.pending_sheet_count ? `${data.pending_sheet_count} CHỜ` : 'OK'; sheetEl.className = `health-chip ${data.pending_sheet_count ? 'warn' : 'good'}`; }
-    const invEl = $('[data-health="TỒN BIN"]'); if (invEl) { $('em', invEl).textContent = snap ? formatAge(snap.source_captured_at) : 'CHƯA CÓ'; invEl.className = `health-chip ${snap ? '' : 'warn'}`; }
-  } catch (error) { $('#metrics').innerHTML = `<div class="message" data-type="error">${escapeHtml(safeMessage(error))}</div>`; }
+async function renderOverview(){
+  $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">LIVE</p><h2>Tổng quan vận hành kho</h2></div></div><div id="metrics" class="metrics"></div><div id="overviewStatus"></div>`;
+  try{const [d,r,svc]=await Promise.all([api('admin-summary'),api('reports-summary'),api('service-metrics')]);$('#metrics').innerHTML=[['Chờ nhận',d.open_issue_count],['Đang xử lý',d.claimed_issue_count],['SKU đang dùng',d.sku_count],['Nhân sự hoạt động',d.active_user_count],['Báo 24 giờ',r.last_24h?.reports],['Quá mốc phản hồi',r.overdue_now]].map(([l,v])=>`<article class="metric"><span>${l}</span><strong>${Number(v||0).toLocaleString('vi-VN')}</strong></article>`).join('');const db=Number(svc.usage?.database_bytes||0),lim=Number(svc.free_limits?.database_bytes||1),pct=Math.min(100,db/lim*100);$('#overviewStatus').innerHTML=`<div class="panel-grid"><article class="card"><h3>Hiệu suất 24 giờ</h3><p>Ticket phát sinh: <b>${Number(r.last_24h?.issues||0)}</b> · Đã xử lý: <b>${Number(r.last_24h?.resolved||0)}</b></p><p>Có hàng/châm bù: <b>${Number(r.last_24h?.available||0)}</b> · Cho SKIP: <b>${Number(r.last_24h?.skipped||0)}</b></p><p>Trung vị nhận: <b>${r.median_claim_minutes??'—'} phút</b> · Trung vị hoàn tất: <b>${r.median_resolution_minutes??'—'} phút</b></p></article><article class="card"><h3>Nhân sự nguồn</h3><p>${d.staff_sync?`${escapeHtml(d.staff_sync.status)} · ${formatTime(d.staff_sync.finished_at)} · ${Number(d.staff_sync.eligible_rows||0)} nhân sự`:'Chưa đồng bộ.'}</p></article><article class="card"><h3>Kiểm soát free tier</h3><p>Database: <b>${(db/1048576).toFixed(1)} MB / ${(lim/1048576).toFixed(0)} MB (${pct.toFixed(1)}%)</b></p><p>Thiết bị FCM: ${Number(svc.usage?.active_device_tokens||0)} · Log: ${(Number(svc.usage?.diagnostic_log_bytes||0)/1048576).toFixed(2)} MB · Sheet chờ: ${Number(svc.usage?.sheet_pending||0)}</p><p class="muted">Không tự bật Billing hoặc dịch vụ trả phí.</p></article></div>`;const sheet=$('[data-health="SHEET"]');if(sheet){$('em',sheet).textContent=d.pending_sheet_count?`${d.pending_sheet_count} CHỜ`:'OK';sheet.className=`health-chip ${d.pending_sheet_count?'warn':'good'}`;}const free=$('[data-health="FREE TIER"]');if(free){$('em',free).textContent=`DB ${pct.toFixed(1)}%`;free.className=`health-chip ${pct>=80?'warn':'good'}`;}}
+  catch(e){$('#metrics').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}
 }
 function formatAge(value) {
   if (!value) return 'CHƯA CÓ';
@@ -374,7 +361,7 @@ async function openReassign(issueId, sku, done) {
 function renderPicker() {
   $('#content').innerHTML = `<div class="heading"><div><p class="eyebrow">PICKER</p><h2>Picker / Người lấy hàng</h2></div></div>
     <div class="card"><label>Quét hoặc tìm SKU / tên hàng<input id="skuSearch" placeholder="Quét mã hoặc nhập một phần tên"></label><div id="skuResults" class="search-results"></div>
-    <div id="selectedSku" class="selected muted">Chưa chọn SKU</div><div id="stockHint"></div><button id="reportShortage" class="danger wide" disabled>BÁO THIẾU</button><div id="pickerMsg" class="message" hidden></div></div>
+    <div id="selectedSku" class="selected muted">Chưa chọn SKU</div><button id="reportShortage" class="danger wide" disabled>BÁO THIẾU</button><div id="pickerMsg" class="message" hidden></div></div>
     <div class="heading compact"><h3>Báo gần đây của tôi</h3><button id="refreshMine" class="secondary">Làm mới</button></div><div id="myIssues"></div><div id="pendingAlert"></div>`;
   let timer;
   state.selectedSku = null;
@@ -395,21 +382,7 @@ async function searchSku() {
     $$('[data-result]').forEach((button) => button.onclick = () => selectSku(data.items[Number(button.dataset.result)]));
   } catch (error) { message('#pickerMsg', safeMessage(error), 'error'); }
 }
-async function selectSku(item) {
-  state.selectedSku = item;
-  $('#selectedSku').classList.remove('muted');
-  $('#selectedSku').innerHTML = `<strong>SKU ${escapeHtml(item.sku)}</strong><span>${escapeHtml(item.product_name)}</span>`;
-  $('#reportShortage').disabled = false;
-  $('#skuResults').innerHTML = '';
-  try {
-    const stock = await api('inventory-status',{ sku:item.sku });
-    const map = {
-      AVAILABLE:'CÓ THỂ CÒN TỒN', ZERO:'KHÔNG CÒN TỒN KHẢ DỤNG', STALE:'DỮ LIỆU TỒN ĐÃ CŨ', NO_DATA:'CHƯA CÓ DỮ LIỆU TỒN',
-    };
-    const warning = stock.freshness_status === 'STALE' ? '<b>KHÔNG DÙNG SỐ TỒN NÀY ĐỂ QUYẾT ĐỊNH.</b>' : '';
-    $('#stockHint').innerHTML = `<div class="stock-hint ${stock.stock_status === 'STALE' ? 'warn' : ''}"><strong>${map[stock.stock_status] || 'CHƯA XÁC ĐỊNH'}</strong><span>Snapshot: ${formatTime(stock.snapshot_captured_at)}</span>${warning}</div>`;
-  } catch { $('#stockHint').innerHTML = '<div class="stock-hint warn">Không lấy được trạng thái tồn. Picker vẫn được phép báo thiếu.</div>'; }
-}
+async function selectSku(item){state.selectedSku=item;$('#selectedSku').classList.remove('muted');$('#selectedSku').innerHTML=`<strong>SKU ${escapeHtml(item.sku)}</strong><span>${escapeHtml(item.product_name)}</span>`;$('#reportShortage').disabled=false;$('#skuResults').innerHTML='';}
 async function reportShortage() {
   const item = state.selectedSku;
   if (!item || !confirm(`Báo thiếu SKU ${item.sku}?\n${item.product_name}`)) return;
@@ -422,7 +395,6 @@ async function reportShortage() {
     $('#skuSearch').value = '';
     $('#selectedSku').textContent = 'Chưa chọn SKU';
     $('#selectedSku').classList.add('muted');
-    $('#stockHint').innerHTML = '';
     await loadMyIssues();
     $('#skuSearch').focus();
   } catch (error) { message('#pickerMsg', safeMessage(error), 'error'); }
@@ -448,120 +420,20 @@ async function loadPendingAlerts() {
   } catch (error) { target.innerHTML = `<div class="message" data-type="error">${escapeHtml(safeMessage(error))}</div>`; }
 }
 
-async function renderInventory() {
-  const exact = role() !== 'PICKER';
-  $('#content').innerHTML = `<div class="heading"><div><p class="eyebrow">INVENTORY</p><h2>Tồn bin</h2></div><button id="refreshInventory" class="secondary">Làm mới</button></div>
-    <div id="inventorySummary"></div>${exact ? `<div class="card"><label>Tìm SKU<input id="inventorySearch" placeholder="Nhập SKU"></label><button id="inventorySearchBtn" class="secondary">TÌM</button><div id="inventoryRows"></div></div>` : ''}
-    ${elevated() ? `<div class="panel-grid"><article class="card"><h3>Đồng bộ từ Supra</h3><p class="muted">Chỉ chạy khi credential + read-only POC đã xác minh contract JSON. Không suy đoán schema.</p><button id="syncSupra" class="primary">ĐỒNG BỘ TỪ SUPRA</button><div id="supraSyncMsg" class="message" hidden></div></article>
-    <article class="card"><h3>Recovery XLSX</h3><p class="muted">Fallback có kiểm soát; dùng cùng staging/finalize nguyên tử.</p><input id="inventoryFile" type="file" accept=".xlsx"><button id="importInventory" class="secondary">IMPORT SNAPSHOT XLSX</button><div id="inventoryImportMsg" class="message" hidden></div></article></div>` : ''}`;
-  $('#refreshInventory').onclick = renderInventory;
-  if (elevated()) {
-    $('#syncSupra').onclick = async () => { try { setBusy(true,'Đang khởi tạo job Supra…'); await api('inventory-sync-start',{ client_request_id:uuid() }); message('#supraSyncMsg','Job đã được tạo.','good'); } catch (error) { message('#supraSyncMsg',safeMessage(error),'error'); } finally { setBusy(false); } };
-    $('#importInventory').onclick = importInventoryXlsx;
-  }
-  if (exact) {
-    $('#inventorySearchBtn').onclick = loadInventoryRows;
-    $('#inventorySearch').addEventListener('keydown',(event)=>{ if(event.key==='Enter') loadInventoryRows(); });
-  }
-  try {
-    const summary = elevated() ? await api('inventory-summary') : null;
-    if (summary) {
-      const snap = summary.snapshot;
-      $('#inventorySummary').innerHTML = `<div class="metrics"><article class="metric"><span>SKU hiện hành</span><strong>${Number(summary.current_sku_count || 0).toLocaleString('vi-VN')}</strong></article><article class="metric"><span>Freshness</span><strong>${escapeHtml(snap?.freshness_status || 'UNKNOWN')}</strong></article><article class="metric"><span>Kết nối Supra</span><strong>${escapeHtml(summary.connection?.status || 'DISABLED')}</strong></article></div>
-        <article class="card"><b>Snapshot hiện hành</b><p>${snap ? `${formatTime(snap.source_captured_at)} · ${Number(snap.normalized_row_count || 0).toLocaleString('vi-VN')} dòng · hash ${escapeHtml(snap.sha256_short)}` : 'Chưa có snapshot.'}</p><div class="table-wrap"><table><thead><tr><th>Job</th><th>Trạng thái</th><th>Nguồn</th><th>Yêu cầu</th><th>Lỗi</th></tr></thead><tbody>${(summary.jobs||[]).map(j=>`<tr><td>${escapeHtml(j.id.slice(0,8))}</td><td>${escapeHtml(j.state)}</td><td>${escapeHtml(j.requested_source)}</td><td>${formatTime(j.requested_at)}</td><td>${escapeHtml(j.error_code||'')}</td></tr>`).join('')}</tbody></table></div></article>`;
-    } else $('#inventorySummary').innerHTML = '<div class="card muted">Chọn SKU ở màn Picker để xem trạng thái tồn.</div>';
-  } catch (error) { $('#inventorySummary').innerHTML = `<div class="message" data-type="error">${escapeHtml(safeMessage(error))}</div>`; }
-  if (exact) loadInventoryRows();
-}
-async function loadInventoryRows() {
-  const target = $('#inventoryRows'); if (!target) return;
-  try {
-    const data = await api('inventory-current',{ query:$('#inventorySearch')?.value.trim() || '', limit:200 });
-    target.innerHTML = `<div class="table-wrap"><table><thead><tr><th>SKU</th><th>Tồn Bin pickable</th><th>Chờ xuất</th><th>Khả dụng</th><th>Khác</th><th>Freshness</th><th>Snapshot</th></tr></thead><tbody>${data.items.map(i=>`<tr><td>${escapeHtml(i.sku)}</td><td>${escapeHtml(i.pickable_bin_qty)}</td><td>${escapeHtml(i.pickable_pending_out_qty)}</td><td><b>${escapeHtml(i.pickable_available_qty)}</b></td><td>${escapeHtml(i.other_stock_qty)}</td><td>${escapeHtml(i.freshness_status)}</td><td>${formatTime(i.snapshot_captured_at)}</td></tr>`).join('')}</tbody></table></div>`;
-  } catch (error) { target.innerHTML = `<div class="message" data-type="error">${escapeHtml(safeMessage(error))}</div>`; }
-}
-async function importInventoryXlsx() {
-  const file = $('#inventoryFile')?.files?.[0];
-  if (!file) return message('#inventoryImportMsg','Chọn file XLSX trước.','error');
-  if (file.size > MAX_FILE_BYTES) return message('#inventoryImportMsg','File vượt giới hạn 20 MB.','error');
-  try {
-    setBusy(true,'Đang đọc và kiểm tra Tồn Bin…');
-    const ExcelJS = await getExcelJS();
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(await file.arrayBuffer());
-    const sheet = workbook.worksheets[0];
-    if (!sheet) throw new Error('File không có worksheet.');
-    const header = new Map();
-    sheet.getRow(1).eachCell((cell, col) => header.set(normalize(cell.text), col));
-    const requiredCols = ['sku','ton bin','ton cho xuat','tinh chat lt'];
-    for (const key of requiredCols) if (!header.get(key)) throw new Error(`Thiếu cột bắt buộc: ${key}`);
-    const binCodeCol = header.get('ma vtlt') || header.get('ma ptlt') || null;
-    const items = [];
-    for (let rowNo = 2; rowNo <= sheet.rowCount; rowNo++) {
-      const row = sheet.getRow(rowNo);
-      const sku = String(row.getCell(header.get('sku')).text || '').trim();
-      if (!sku) continue;
-      const binQty = Number(String(row.getCell(header.get('ton bin')).value ?? row.getCell(header.get('ton bin')).text ?? 0).replace(',','.'));
-      const pendingRaw = row.getCell(header.get('ton cho xuat')).value ?? row.getCell(header.get('ton cho xuat')).text ?? 0;
-      const pending = Number(String(pendingRaw || 0).replace(',','.')) || 0;
-      if (!Number.isFinite(binQty) || binQty < 0 || pending < 0) throw new Error(`Dòng ${rowNo}: số tồn không hợp lệ.`);
-      const storage = String(row.getCell(header.get('tinh chat lt')).text || '').trim();
-      const storageNorm = normalize(storage);
-      items.push({ row_key:String(rowNo), sku, bin_code:binCodeCol ? String(row.getCell(binCodeCol).text || '').trim() : '', storage_type:storage, is_pickable:['pickable','co the lay hang'].includes(storageNorm), bin_qty:binQty, pending_out_qty:pending });
-    }
-    if (!items.length) throw new Error('Không có dòng tồn hợp lệ.');
-    const start = await api('inventory-recovery-start',{ client_request_id:uuid() });
-    const jobId = start.job.id;
-    let staged = 0;
-    for (let index = 0; index < items.length; index += 500) {
-      const batch = items.slice(index,index+500);
-      const result = await api('inventory-recovery-stage',{ job_id:jobId, batch_index:index/500, items:batch });
-      staged = Number(result.total_staged || staged + batch.length);
-      $('#busyText').textContent = `Đã staging ${staged.toLocaleString('vi-VN')} / ${items.length.toLocaleString('vi-VN')} dòng…`;
-    }
-    const result = await api('inventory-recovery-finalize',{ job_id:jobId, source_captured_at:new Date(file.lastModified || Date.now()).toISOString() });
-    message('#inventoryImportMsg',`Hoàn tất ${items.length.toLocaleString('vi-VN')} dòng · ${result.state}. Snapshot chỉ đổi sau finalize nguyên tử.`,'good');
-    await renderInventory();
-  } catch (error) { message('#inventoryImportMsg',safeMessage(error),'error'); }
-  finally { setBusy(false); }
+async function renderInventory(){return renderSku();}
+async function renderReports(){
+ $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">REPORT</p><h2>Báo cáo vận hành kho</h2></div></div><div id="reportBody"></div>`;try{const r=await api('reports-summary');$('#reportBody').innerHTML=`<div class="metrics"><article class="metric"><span>Lượt báo 30 ngày</span><strong>${Number(r.reports||0).toLocaleString('vi-VN')}</strong></article><article class="metric"><span>Ticket 30 ngày</span><strong>${Number(r.issues||0).toLocaleString('vi-VN')}</strong></article><article class="metric"><span>Đang mở</span><strong>${Number(r.active_now||0)}</strong></article><article class="metric"><span>Quá mốc phản hồi</span><strong>${Number(r.overdue_now||0)}</strong></article><article class="metric"><span>Trung vị nhận</span><strong>${r.median_claim_minutes??'—'} phút</strong></article><article class="metric"><span>P95 hoàn tất</span><strong>${r.p95_resolution_minutes??'—'} phút</strong></article></div><div class="panel-grid"><article class="card"><h3>24 giờ gần nhất</h3><p>Lượt báo: <b>${Number(r.last_24h?.reports||0)}</b> · Ticket: <b>${Number(r.last_24h?.issues||0)}</b> · Hoàn tất: <b>${Number(r.last_24h?.resolved||0)}</b></p><p>Có hàng/châm bù: <b>${Number(r.last_24h?.available||0)}</b> · Cho SKIP: <b>${Number(r.last_24h?.skipped||0)}</b></p></article><article class="card"><h3>Chất lượng xử lý</h3><p>Trung vị hoàn tất: <b>${r.median_resolution_minutes??'—'} phút</b> · P95: <b>${r.p95_resolution_minutes??'—'} phút</b></p><p>Tái phát: <b>${Number(r.recurrent_episodes||0)}</b> · Auto SKIP 30 ngày: <b>${Number(r.auto_skip_count_30d||0)}</b></p></article></div><article class="card"><h3>SKU phát sinh nhiều nhất</h3><div class="table-wrap"><table><thead><tr><th>SKU</th><th>Tên sản phẩm</th><th>Lượt báo</th></tr></thead><tbody>${(r.top_skus||[]).map(x=>`<tr><td><b>${escapeHtml(x.sku)}</b></td><td>${escapeHtml(x.product_name||'')}</td><td>${Number(x.reports||0)}</td></tr>`).join('')}</tbody></table></div></article>`;}catch(e){$('#reportBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}
 }
 
-async function renderReports() {
-  $('#content').innerHTML = `<div class="heading"><div><p class="eyebrow">REPORT</p><h2>Báo cáo vận hành</h2></div><button id="refreshReports" class="secondary">Làm mới</button></div><div id="reportMetrics" class="metrics"></div><div id="reportBody"></div>`;
-  $('#refreshReports').onclick = renderReports;
-  try {
-    const data = await api('reports-summary');
-    $('#reportMetrics').innerHTML = [
-      ['Đợt báo thiếu',data.issues],['Tổng lượt báo',data.reports],['Claim median',data.median_claim_minutes == null ? '—' : `${data.median_claim_minutes}m`],['Xử lý median',data.median_resolution_minutes == null ? '—' : `${data.median_resolution_minutes}m`],['Xử lý P95',data.p95_resolution_minutes == null ? '—' : `${data.p95_resolution_minutes}m`],['Đợt tái phát',data.recurrent_episodes],
-    ].map(([l,v])=>`<article class="metric"><span>${l}</span><strong>${escapeHtml(v)}</strong></article>`).join('');
-    $('#reportBody').innerHTML = `<div class="panel-grid"><article class="card"><h3>Theo trạng thái</h3>${Object.entries(data.by_status||{}).map(([key,value])=>`<div class="row"><span>${escapeHtml(statusLabel(key))}</span><b>${value}</b></div>`).join('')}</article><article class="card"><h3>SKU báo nhiều</h3>${(data.top_skus||[]).slice(0,15).map(i=>`<div class="row"><span>${escapeHtml(i.sku)}</span><b>${i.reports}</b></div>`).join('')}</article></div>`;
-  } catch (error) { $('#reportBody').innerHTML = `<div class="message" data-type="error">${escapeHtml(safeMessage(error))}</div>`; }
+async function renderSku(){
+ const can=elevated();$('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">CATALOG</p><h2>Danh mục SKU / tên hàng</h2></div></div><article class="card"><p class="muted">Chỉ lưu <b>SKU và tên sản phẩm</b>; không lưu số tồn, bin, số lượng chờ xuất hoặc vị trí.</p>${can?`<input id="catalogFile" type="file" accept=".xlsx"><button id="replaceCatalog" class="primary">CẬP NHẬT TỪ FILE TỒN BIN</button><div id="catalogMsg" class="message" hidden></div>`:''}<label>Tìm SKU / tên hàng<input id="catalogSearch" placeholder="Nhập SKU hoặc tên sản phẩm"></label><button id="catalogSearchBtn" class="secondary">TÌM</button><div id="catalogRows"></div></article>`;
+ const load=async()=>{try{const q=$('#catalogSearch').value.trim();if(!q){$('#catalogRows').innerHTML='<p class="muted">Nhập từ khóa để tra cứu.</p>';return;}const d=await api('search-skus',{query:q,limit:100});$('#catalogRows').innerHTML=`<div class="table-wrap"><table><thead><tr><th>SKU</th><th>Tên sản phẩm</th></tr></thead><tbody>${d.items.map(i=>`<tr><td><b>${escapeHtml(i.sku)}</b></td><td>${escapeHtml(i.product_name)}</td></tr>`).join('')}</tbody></table></div>`;}catch(e){$('#catalogRows').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}};$('#catalogSearchBtn').onclick=load;$('#catalogSearch').addEventListener('keydown',e=>{if(e.key==='Enter')load();});
+ if(can)$('#replaceCatalog').onclick=async()=>{const f=$('#catalogFile').files?.[0];if(!f)return message('#catalogMsg','Chọn file XLSX trước.','error');if(f.size>MAX_FILE_BYTES)return message('#catalogMsg','File vượt giới hạn 20 MB.','error');try{setBusy(true,'Đang đọc SKU và tên sản phẩm…');const X=await getExcelJS(),wb=new X.Workbook();await wb.xlsx.load(await f.arrayBuffer());const sh=wb.worksheets[0];if(!sh)throw new Error('File không có worksheet.');const h=new Map();sh.getRow(1).eachCell((c,col)=>h.set(normalize(c.text),col));const find=a=>a.map(normalize).map(x=>h.get(x)).find(Boolean),sc=find(['sku','mã sku','ma sku']),nc=find(['tên sku','ten sku','tên sản phẩm','ten san pham','tên hàng','ten hang','product name','sku name']);if(!sc||!nc)throw new Error('File phải có cột SKU và Tên SKU/Tên sản phẩm.');const m=new Map();for(let r=2;r<=sh.rowCount;r++){const sku=String(sh.getRow(r).getCell(sc).text||'').trim(),name=String(sh.getRow(r).getCell(nc).text||'').trim();if(!sku&&!name)continue;if(!sku||!name)throw new Error(`Dòng ${r}: thiếu SKU hoặc tên sản phẩm`);if(m.has(sku)&&m.get(sku)!==name)throw new Error(`SKU ${sku} có nhiều tên khác nhau`);m.set(sku,name);}if(!m.size)throw new Error('Không tìm thấy SKU hợp lệ.');const items=[...m].map(([sku,product_name])=>({sku,product_name})),res=await api('replace-catalog',{items,source_name:f.name});message('#catalogMsg',`Đã cập nhật ${Number(res.active_count||items.length).toLocaleString('vi-VN')} SKU · phiên ${res.revision}.`,'good');}catch(e){message('#catalogMsg',safeMessage(e),'error');}finally{setBusy(false);}};
 }
-
-function renderSku() {
-  $('#content').innerHTML = `<div class="heading"><div><p class="eyebrow">MASTER</p><h2>SKU</h2></div></div><article class="card"><p>Import SKU theo file Excel. Chỉ publish khi server chấp nhận từng batch.</p><input id="skuFile" type="file" accept=".xlsx"><button id="importSku" class="primary">IMPORT SKU</button><div id="skuMsg" class="message" hidden></div></article>`;
-  $('#importSku').onclick = importSkuXlsx;
-}
-async function importSkuXlsx() {
-  const file = $('#skuFile')?.files?.[0]; if (!file) return message('#skuMsg','Chọn file trước.','error');
-  try {
-    setBusy(true,'Đang đọc SKU…');
-    const ExcelJS = await getExcelJS(); const wb = new ExcelJS.Workbook(); await wb.xlsx.load(await file.arrayBuffer()); const ws=wb.worksheets[0];
-    const h=new Map();ws.getRow(1).eachCell((c,i)=>h.set(normalize(c.text),i));const skuCol=h.get('sku'),nameCol=h.get('ten san pham');if(!skuCol||!nameCol)throw new Error('Thiếu cột SKU hoặc Tên sản phẩm.');
-    const map=new Map();for(let r=2;r<=ws.rowCount;r++){const sku=String(ws.getRow(r).getCell(skuCol).text||'').trim();const name=String(ws.getRow(r).getCell(nameCol).text||'').trim();if(sku&&name)map.set(sku,name);}
-    const items=[...map].map(([sku,product_name])=>({sku,product_name}));for(let i=0;i<items.length;i+=1000){await api('import-skus',{items:items.slice(i,i+1000)});$('#busyText').textContent=`Đã import ${Math.min(i+1000,items.length)} / ${items.length} SKU…`;}
-    message('#skuMsg',`Hoàn tất ${items.length.toLocaleString('vi-VN')} SKU.`,'good');
-  } catch(error){message('#skuMsg',safeMessage(error),'error');}finally{setBusy(false);}
-}
-
-async function renderUsers() {
-  $('#content').innerHTML = `<div class="heading"><div><p class="eyebrow">ACCESS</p><h2>Nhân sự & quyền</h2></div><button id="refreshUsers" class="secondary">Làm mới</button></div><div id="users"></div>`;
-  $('#refreshUsers').onclick = renderUsers;
-  try {
-    const data = await api('list-users'); state.managedUsers = data.users;
-    $('#users').innerHTML = data.users.length ? data.users.map((u)=>`<article class="card user-card"><div><strong>${escapeHtml(u.employee_code)} · ${escapeHtml(u.full_name)}</strong><span>${escapeHtml(ROLES[u.role]||u.role)} · ${u.active?'HOẠT ĐỘNG':'ĐÃ KHÓA'}${u.contractor?` · ${escapeHtml(u.contractor)}`:''}</span></div><button class="secondary" data-edit-user="${u.id}">CHỈNH SỬA</button></article>`).join('') : '<div class="card muted">Không có nhân sự trong phạm vi quyền.</div>';
-    $$('[data-edit-user]').forEach((b)=>b.onclick=()=>editUser(b.dataset.editUser));
-  } catch(error){$('#users').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(error))}</div>`;}
+async function renderUsers(){
+ $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">STAFF</p><h2>Nhân sự & quyền</h2></div><button id="staffSync" class="secondary">ĐỒNG BỘ NGUỒN NGAY</button></div><div id="staffStatus"></div><div id="usersBody"></div>`;
+ const load=async()=>{try{const [d,st]=await Promise.all([api('list-users'),api('staff-sync-status')]);state.managedUsers=d.users||[];const last=st.runs?.[0];$('#staffStatus').innerHTML=`<article class="card"><b>Nguồn DANH MỤC NHÂN SỰ</b><p>${last?`${escapeHtml(last.status)} · ${formatTime(last.finished_at)} · ${Number(last.eligible_rows||0)} nhân sự hợp lệ`:'Chưa đồng bộ.'}</p><p class="muted">Site 1291 / Kho HY1. Chuyên viên, Trưởng nhóm, Trưởng kho → Admin Event; còn lại → Picker. 6281280 được bảo vệ tuyệt đối. Nhân sự mất khỏi nguồn chỉ ngừng hoạt động, lịch sử vẫn giữ.</p></article>`;$('#usersBody').innerHTML=`<div class="table-wrap"><table><thead><tr><th>User</th><th>Họ tên</th><th>Vị trí</th><th>Quyền</th><th>Nguồn</th><th>Trạng thái</th></tr></thead><tbody>${state.managedUsers.map(u=>`<tr><td><b>${escapeHtml(u.employee_code)}</b>${u.protected_account?' 🔒':''}</td><td>${escapeHtml(u.full_name)}</td><td>${escapeHtml(u.source_position||'—')}</td><td>${escapeHtml(ROLES[u.role]||u.role)}</td><td>${u.source_kind==='GSHEET'?'Google Sheet':'Tạo thêm'}</td><td>${u.active?'Hoạt động':'Ngừng'}</td></tr>`).join('')}</tbody></table></div><article class="card"><h3>Tạo thêm tài khoản ngoài danh sách nguồn</h3><p class="muted">${role()==='ADMIN_INVENT'?'Admin Event chỉ được tạo thêm Picker.':'Admin hệ thống được tạo Admin Event, Người báo hàng hoặc Picker.'} Nếu bỏ trống mật khẩu, server dùng mật khẩu mặc định lưu an toàn.</p><div class="form-grid"><label>Mã nhân viên<input id="newCode"></label><label>Họ tên<input id="newName"></label><label>Nhà thầu<input id="newContractor"></label><label>Quyền<select id="newRole">${(role()==='ADMIN'?['ADMIN_INVENT','INVENT','PICKER']:['PICKER']).map(r=>`<option value="${r}">${ROLES[r]}</option>`).join('')}</select></label><label>Mật khẩu riêng (không bắt buộc)<input id="newPassword" type="password" autocomplete="new-password"></label></div><button id="createExtraUser" class="primary">TẠO TÀI KHOẢN</button><div id="userMsg" class="message" hidden></div></article>`;$('#createExtraUser').onclick=async()=>{try{const item={employee_code:$('#newCode').value.trim(),full_name:$('#newName').value.trim(),contractor:$('#newContractor').value.trim(),role:$('#newRole').value,active:true,initial_password:$('#newPassword').value},r=await api('import-users',{items:[item]});if(r.failed)throw new Error(r.errors?.[0]||'Không tạo được tài khoản');message('#userMsg','Đã tạo tài khoản.','good');await load();}catch(e){message('#userMsg',safeMessage(e),'error');}};}catch(e){$('#usersBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}};
+ $('#staffSync').onclick=async()=>{try{setBusy(true,'Đang đồng bộ DANH MỤC NHÂN SỰ…');const r=await api('staff-sync-now');alert(`Đồng bộ ${r.status}: tạo ${r.created||0}, cập nhật ${r.updated||0}, ngừng ${r.deactivated||0}, lỗi ${r.failed||0}.`);await load();}catch(e){alert(safeMessage(e));}finally{setBusy(false);}};load();
 }
 async function editUser(id) {
   const user=state.managedUsers.find((u)=>u.id===id);if(!user)return;
@@ -582,12 +454,8 @@ async function renderDevices() {
   } catch(error){$('#deviceBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(error))}</div>`;}
 }
 
-async function renderIntegrations() {
-  $('#content').innerHTML = `<div class="heading"><div><p class="eyebrow">INTEGRATION</p><h2>Tích hợp</h2></div></div><div id="integrationStatus"></div>
-    <article class="card"><h3>Credential Supra</h3><p class="muted">Chỉ Admin hệ thống. Giá trị chỉ gửi một lần qua HTTPS đến Edge Function, không lưu browser storage và không hiển thị lại.</p>
-    <div class="form-grid" id="credentialFields">${['authorization','token','apisid','appid','sid','scid','usid','warehouse'].map(k=>`<label>${k}<input data-cred="${k}" type="password" autocomplete="off"></label>`).join('')}</div><button id="saveCred" class="danger">LƯU CREDENTIAL MỚI</button><div id="credMsg" class="message" hidden></div></article>`;
-  try { const c=await api('inventory-connection-status'); $('#integrationStatus').innerHTML=`<article class="card"><h3>Supra</h3><div class="row"><span>Trạng thái</span><b>${escapeHtml(c.status)}</b></div><div class="row"><span>Credential version</span><b>${Number(c.credential_version||0)}</b></div><div class="row"><span>Contract POC</span><b>${c.contract_verified?'VERIFIED':'CHƯA XÁC MINH'}</b></div><div class="row"><span>Test gần nhất</span><b>${formatTime(c.last_tested_at)}</b></div></article>`; } catch(error){$('#integrationStatus').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(error))}</div>`;}
-  $('#saveCred').onclick=async()=>{if(!confirm('Credential cũ sẽ được thay bằng bản mã hóa mới. Tiếp tục?'))return;const credentials={};$$('[data-cred]').forEach(i=>{if(i.value.trim())credentials[i.dataset.cred]=i.value.trim();});try{setBusy(true,'Đang mã hóa credential phía server…');const r=await api('inventory-credential-update',{credentials});$$('[data-cred]').forEach(i=>i.value='');message('#credMsg',`Đã lưu an toàn credential version ${r.credential_version}. Cần POC read-only trước khi bật sync Supra.`,'good');}catch(error){message('#credMsg',safeMessage(error),'error');}finally{setBusy(false);}};
+async function renderIntegrations(){
+ $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">SYSTEM</p><h2>Hệ thống & dung lượng</h2></div></div><div id="serviceBody"></div>`;try{const d=await api('service-metrics'),u=d.usage||{},l=d.free_limits||{},db=Number(u.database_bytes||0),lim=Number(l.database_bytes||1);$('#serviceBody').innerHTML=`<div class="metrics"><article class="metric"><span>Database</span><strong>${(db/1048576).toFixed(1)} MB</strong></article><article class="metric"><span>SKU hoạt động</span><strong>${Number(u.sku_active||0).toLocaleString('vi-VN')}</strong></article><article class="metric"><span>Nhân sự hoạt động</span><strong>${Number(u.profiles_active||0)}</strong></article><article class="metric"><span>Thiết bị FCM</span><strong>${Number(u.active_device_tokens||0)}</strong></article></div><div class="panel-grid"><article class="card"><h3>Ngưỡng kiểm soát 0 đồng</h3><p>Database: ${(db/lim*100).toFixed(1)}% / 500 MB</p><p>Storage: 1 GB · Egress: 5 GB/tháng · MAU: 50.000/tháng · Edge Functions: 500.000 lượt/tháng · Realtime: 2.000.000 message/tháng · 200 kết nối đồng thời · tối đa 2 project active.</p><p class="muted">Thông tin dùng để cảnh báo vận hành; hệ thống không tự bật Billing.</p></article><article class="card"><h3>Dữ liệu kỹ thuật</h3><p>Notification events: ${Number(u.notification_events||0).toLocaleString('vi-VN')}</p><p>Diagnostic log: ${(Number(u.diagnostic_log_bytes||0)/1048576).toFixed(2)} MB</p><p>Google Sheet chờ: ${Number(u.sheet_pending||0)}</p><p>Catalog revision: ${Number(u.catalog_revision||0)}</p></article></div>`;}catch(e){$('#serviceBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}
 }
 
 async function renderLogs() {
@@ -598,21 +466,11 @@ async function renderLogs() {
 async function downloadLog(id){try{setBusy(true,'Đang tạo link tải log…');const r=await api('download-log',{id});location.href=r.url;}catch(error){alert(safeMessage(error));}finally{setBusy(false);}}
 
 async function renderSla(){
-  $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">OPERATIONS</p><h2>SLA vận hành</h2></div></div><form id="slaForm" class="card form-grid"><label>Nhắc nhận xử lý (phút)<input id="ack" type="number" min="1" max="480"></label><label>Chu kỳ nhắc (phút)<input id="reminder" type="number" min="1" max="480"></label><label>Quá thời gian xử lý (phút)<input id="replenish" type="number" min="1" max="480"></label><label>Nhắc Picker ACK (phút)<input id="pickerAck" type="number" min="1" max="60"></label><button class="primary span">LƯU SLA VẬN HÀNH</button><div id="slaMsg" class="message span" hidden></div></form>`;
-  try{const c=await api('get-operational-config');$('#ack').value=c.acknowledge_minutes;$('#reminder').value=c.reminder_minutes;$('#replenish').value=c.replenish_minutes;$('#pickerAck').value=c.picker_ack_reminder_minutes;}catch(error){message('#slaMsg',safeMessage(error),'error');}
-  $('#slaForm').onsubmit=async(event)=>{event.preventDefault();try{setBusy(true,'Đang lưu SLA…');await api('save-operational-config',{acknowledge_minutes:Number($('#ack').value),reminder_minutes:Number($('#reminder').value),replenish_minutes:Number($('#replenish').value),picker_ack_reminder_minutes:Number($('#pickerAck').value)});message('#slaMsg','Đã lưu SLA vận hành. Không có auto-SKIP.','good');}catch(error){message('#slaMsg',safeMessage(error),'error');}finally{setBusy(false);}};
+ $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">SLA</p><h2>Mốc thời gian vận hành</h2></div></div><div id="slaBody"></div>`;try{const c=await api('get-operational-config');$('#slaBody').innerHTML=`<article class="card"><div class="form-grid"><label>Thời gian nhận xử lý (phút)<input id="ackMin" type="number" min="1" max="480" value="${c.acknowledge_minutes}"><small>Từ lúc Picker báo đến khi Người báo hàng nhận xử lý.</small></label><label>Chu kỳ nhắc xử lý (phút)<input id="reminderMin" type="number" min="1" max="480" value="${c.reminder_minutes}"><small>Khoảng cách giữa các lần nhắc khi ticket còn mở.</small></label><label>Thời gian châm hàng (phút)<input id="replenishMin" type="number" min="1" max="480" value="${c.replenish_minutes}"><small>Mốc theo dõi sau khi đã nhận ticket.</small></label><label>Nhắc Picker xác nhận (phút)<input id="pickerAckMin" type="number" min="1" max="60" value="${c.picker_ack_reminder_minutes}"><small>Chỉ cho cảnh báo ĐÃ CÓ HÀNG hoặc CHO PHÉP SKIP.</small></label><label class="check"><input id="autoSkipEnabled" type="checkbox" ${c.auto_skip_enabled?'checked':''}> Tự động cho phép SKIP khi quá thời gian</label><label>Mốc tự động SKIP (phút)<input id="autoSkipAfter" type="number" min="15" max="4320" value="${c.auto_skip_after_minutes||120}"><small>120 phút = 2 giờ. Có thể tắt hoàn toàn.</small></label></div><button id="saveSla" class="primary">LƯU MỐC THỜI GIAN</button><div id="slaMsg" class="message" hidden></div></article>`;$('#saveSla').onclick=async()=>{try{await api('save-operational-config',{acknowledge_minutes:Number($('#ackMin').value),reminder_minutes:Number($('#reminderMin').value),replenish_minutes:Number($('#replenishMin').value),picker_ack_reminder_minutes:Number($('#pickerAckMin').value),auto_skip_enabled:$('#autoSkipEnabled').checked,auto_skip_after_minutes:Number($('#autoSkipAfter').value)});message('#slaMsg','Đã lưu cấu hình vận hành.','good');}catch(e){message('#slaMsg',safeMessage(e),'error');}};}catch(e){$('#slaBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}
 }
 
 async function renderConfig(){
-  $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">SYSTEM</p><h2>Cấu hình hệ thống</h2></div></div><form id="configForm" class="card form-grid">
-    <label>Retention nghiệp vụ (ngày)<input id="retention" type="number" min="7" max="365"></label><label>Retention log (ngày)<input id="logRetention" type="number" min="1" max="60"></label>
-    <label>Fresh tồn (phút)<input id="fresh" type="number" min="1" max="120"></label><label>Stale tồn (phút)<input id="stale" type="number" min="2" max="480"></label>
-    <label>Chu kỳ sync tồn (phút)<input id="invInterval" type="number" min="10" max="120"></label><label>Giờ bắt đầu<input id="startHour" type="number" min="0" max="23"></label><label>Giờ kết thúc<input id="endHour" type="number" min="0" max="23"></label>
-    <label class="check"><input id="autoInventory" type="checkbox"> Bật lịch tự động khi kết nối Supra đã VERIFIED</label>
-    <button class="primary span">LƯU CẤU HÌNH HỆ THỐNG</button><div id="configMsg" class="message span" hidden></div></form>`;
-  let current;
-  try{current=await api('get-config');$('#retention').value=current.retention_days;$('#logRetention').value=current.diagnostic_log_retention_days;$('#fresh').value=current.inventory_fresh_minutes;$('#stale').value=current.inventory_stale_minutes;$('#invInterval').value=current.inventory_sync_interval_minutes;$('#startHour').value=current.inventory_operating_start_hour;$('#endHour').value=current.inventory_operating_end_hour;$('#autoInventory').checked=Boolean(current.inventory_auto_sync_enabled);}catch(error){message('#configMsg',safeMessage(error),'error');}
-  $('#configForm').onsubmit=async(event)=>{event.preventDefault();try{setBusy(true,'Đang lưu cấu hình…');await api('save-config',{...current,retention_days:Number($('#retention').value),diagnostic_log_retention_days:Number($('#logRetention').value),inventory_fresh_minutes:Number($('#fresh').value),inventory_stale_minutes:Number($('#stale').value),inventory_sync_interval_minutes:Number($('#invInterval').value),inventory_operating_start_hour:Number($('#startHour').value),inventory_operating_end_hour:Number($('#endHour').value),inventory_auto_sync_enabled:$('#autoInventory').checked});message('#configMsg','Đã lưu cấu hình hệ thống.','good');}catch(error){message('#configMsg',safeMessage(error),'error');}finally{setBusy(false);}};
+ $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">CONFIG</p><h2>Cấu hình hệ thống</h2></div></div><div id="configBody"></div>`;try{const c=await api('get-config');$('#configBody').innerHTML=`<article class="card"><div class="form-grid"><label>Lưu lịch sử nghiệp vụ (ngày)<input id="retentionDays" type="number" min="7" max="365" value="${c.retention_days}"><small>Giữ ticket/audit theo chu kỳ, không phụ thuộc trạng thái nhân sự.</small></label><label>Lưu log chẩn đoán (ngày)<input id="logDays" type="number" min="1" max="60" value="${c.diagnostic_log_retention_days}"><small>Log cũ tự xóa để kiểm soát dung lượng.</small></label><label class="check"><input id="staffAuto" type="checkbox" ${c.staff_auto_sync_enabled?'checked':''}> Tự động đồng bộ DANH MỤC NHÂN SỰ</label><label>Chu kỳ đồng bộ nhân sự (phút)<input id="staffInterval" type="number" min="15" max="1440" value="${c.staff_sync_interval_minutes||60}"><small>Khuyến nghị 60 phút để giảm network/quota.</small></label><label class="check"><input id="cfgAutoSkip" type="checkbox" ${c.auto_skip_enabled?'checked':''}> Bật tự động cho phép SKIP</label><label>Mốc tự động SKIP (phút)<input id="cfgAutoSkipAfter" type="number" min="15" max="4320" value="${c.auto_skip_after_minutes||120}"></label></div><button id="saveConfig" class="primary">LƯU CẤU HÌNH</button><div id="configMsg" class="message" hidden></div></article>`;$('#saveConfig').onclick=async()=>{try{await api('save-config',{...c,retention_days:Number($('#retentionDays').value),diagnostic_log_retention_days:Number($('#logDays').value),staff_auto_sync_enabled:$('#staffAuto').checked,staff_sync_interval_minutes:Number($('#staffInterval').value),auto_skip_enabled:$('#cfgAutoSkip').checked,auto_skip_after_minutes:Number($('#cfgAutoSkipAfter').value)});message('#configMsg','Đã lưu cấu hình hệ thống.','good');}catch(e){message('#configMsg',safeMessage(e),'error');}};}catch(e){$('#configBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}
 }
 
 async function renderVersions(){

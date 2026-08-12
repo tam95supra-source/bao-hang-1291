@@ -9,7 +9,6 @@ import vn.pickpack1291.baohang.BuildConfig
 import vn.pickpack1291.baohang.data.AppConfig
 import vn.pickpack1291.baohang.data.AuthSession
 import vn.pickpack1291.baohang.data.ImportUserRow
-import vn.pickpack1291.baohang.data.InventoryStatus
 import vn.pickpack1291.baohang.data.IssueBoard
 import vn.pickpack1291.baohang.data.OperationalConfig
 import vn.pickpack1291.baohang.data.PendingAlert
@@ -138,7 +137,7 @@ class ApiClient(
         )
     }
 
-    data class CatalogPage(val items: List<SkuItem>, val hasMore: Boolean, val syncUntil: String)
+    data class CatalogPage(val items: List<SkuItem>, val hasMore: Boolean, val syncUntil: String, val revision: Long)
 
     suspend fun catalogPage(afterSku: String?, updatedSince: String?, syncUntil: String?, limit: Int = 1000): CatalogPage {
         val payload = JSONObject().put("limit", limit)
@@ -153,12 +152,9 @@ class ApiClient(
                 add(SkuItem(item.getString("sku"), item.getString("product_name")))
             }
         }
-        return CatalogPage(result, response.optBoolean("has_more", result.size == limit), response.getString("sync_until"))
+        return CatalogPage(result, response.optBoolean("has_more", result.size == limit), response.getString("sync_until"), response.optLong("catalog_revision", 1L))
     }
 
-    suspend fun inventoryStatus(sku: String): InventoryStatus = InventoryStatus.fromJson(
-        invoke("inventory-status", JSONObject().put("sku", sku))
-    )
 
     suspend fun getOperationalConfig(): OperationalConfig = OperationalConfig.fromJson(invoke("get-operational-config", JSONObject()))
     suspend fun saveOperationalConfig(config: OperationalConfig): OperationalConfig = OperationalConfig.fromJson(
@@ -171,6 +167,12 @@ class ApiClient(
         val array = JSONArray()
         items.forEach { array.put(JSONObject().put("sku", it.sku).put("product_name", it.productName)) }
         return invoke("import-skus", JSONObject().put("items", array))
+    }
+
+    suspend fun replaceCatalog(items: List<SkuItem>, sourceName: String): JSONObject {
+        val array = JSONArray()
+        items.forEach { array.put(JSONObject().put("sku", it.sku).put("product_name", it.productName)) }
+        return invoke("replace-catalog", JSONObject().put("items", array).put("source_name", sourceName))
     }
 
     suspend fun listUsers(): List<UserProfile> {
@@ -234,7 +236,7 @@ class ApiClient(
         val encodedId = URLEncoder.encode(userId, StandardCharsets.UTF_8.name())
         val result = requestArray(
             "GET",
-            "$baseUrl/rest/v1/profiles?id=eq.$encodedId&select=id,employee_code,full_name,contractor,role,active",
+            "$baseUrl/rest/v1/profiles?id=eq.$encodedId&select=id,employee_code,full_name,contractor,role,active,source_kind,source_position,protected_account",
             accessToken,
             "profile_fetch"
         )

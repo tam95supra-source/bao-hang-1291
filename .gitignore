@@ -17,3 +17,6 @@ release-notes.txt
 .DS_Store
 *.inspect.ndjson
 *_preview.png
+
+__pycache__/
+*.pyc

@@ -32,6 +32,10 @@ class StockMessagingService : FirebaseMessagingService() {
         val sku = data["sku"].orEmpty()
         val product = data["product_name"].orEmpty()
         val status = data["status"].orEmpty()
+        if (status !in setOf("AVAILABLE", "SKIP_ALLOWED")) {
+            app.diagnostics.info("picker_notification_suppressed", mapOf("status" to status))
+            return
+        }
         val body = data["message"].orEmpty().ifBlank { message.notification?.body.orEmpty() }
 
         // Notification is a hint, never the source of truth. A locally cached newer issue
@@ -76,7 +80,7 @@ class StockMessagingService : FirebaseMessagingService() {
 
         NotificationHelper.alert(this, sku, status, body, eventId)
         if (Settings.canDrawOverlays(this)) {
-            val canClaim = status == "OPEN" && app.session.effectiveRole in setOf(UserRole.ADMIN, UserRole.ADMIN_INVENT, UserRole.INVENT)
+            val canClaim = false
             val overlay = OverlayAlertService.intent(
                 this, eventId, issueId, sku, product, status, body,
                 data["critical"] == "true", canClaim
