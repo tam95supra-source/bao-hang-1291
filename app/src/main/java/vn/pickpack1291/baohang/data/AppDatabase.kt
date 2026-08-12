@@ -5,6 +5,8 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONObject
+import java.text.Normalizer
+import java.util.Locale
 
 class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VERSION) {
     override fun onConfigure(db: SQLiteDatabase) {
@@ -18,10 +20,12 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
             """CREATE TABLE sku_catalog(
                 sku TEXT PRIMARY KEY,
                 product_name TEXT NOT NULL,
+                search_text TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )"""
         )
         db.execSQL("CREATE INDEX idx_sku_name ON sku_catalog(product_name)")
+        db.execSQL("CREATE INDEX idx_sku_search ON sku_catalog(search_text)")
         db.execSQL(
             """CREATE TABLE issue_cache(
                 id TEXT PRIMARY KEY,
@@ -51,8 +55,21 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        if (oldVersion < 2) {
-            db.execSQL("ALTER TABLE issue_cache ADD COLUMN latest_message TEXT NOT NULL DEFAULT ''")
+        if (oldVersion < 2) db.execSQL("ALTER TABLE issue_cache ADD COLUMN latest_message TEXT NOT NULL DEFAULT ''")
+        if (oldVersion < 3) {
+            db.execSQL("ALTER TABLE sku_catalog ADD COLUMN search_text TEXT NOT NULL DEFAULT ''")
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_sku_search ON sku_catalog(search_text)")
+            val cursor = db.rawQuery("SELECT sku,product_name FROM sku_catalog", null)
+            cursor.use {
+                val values = ContentValues()
+                while (it.moveToNext()) {
+                    val sku = it.getString(0)
+                    values.clear()
+                    values.put("search_text", normalize("$sku ${it.getString(1)}"))
+                    db.update("sku_catalog", values, "sku=?", arrayOf(sku))
+                }
+            }
+            db.delete("metadata", "key=?", arrayOf("catalog_last_sync"))
         }
     }
 
@@ -65,10 +82,9 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
                 values.clear()
                 values.put("sku", item.sku)
                 values.put("product_name", item.productName)
+                values.put("search_text", normalize("${item.sku} ${item.productName}"))
                 values.put("updated_at", System.currentTimeMillis().toString())
-                writableDatabase.insertWithOnConflict(
-                    "sku_catalog", null, values, SQLiteDatabase.CONFLICT_REPLACE
-                )
+                writableDatabase.insertWithOnConflict("sku_catalog", null, values, SQLiteDatabase.CONFLICT_REPLACE)
             }
             writableDatabase.setTransactionSuccessful()
         } finally {
@@ -77,21 +93,31 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
     }
 
     fun searchSkus(query: String, limit: Int = 20): List<SkuItem> {
-        val normalized = query.trim()
+        val normalized = normalize(query)
         if (normalized.isBlank()) return emptyList()
-        val prefix = "$normalized%"
-        val contains = "%$normalized%"
+        val tokens = normalized.split(' ').filter { it.isNotBlank() }.take(6)
+        val where = tokens.joinToString(" AND ") { "(lower(sku) LIKE ? OR search_text LIKE ?)" }
+        val args = mutableListOf<String>()
+        tokens.forEach { token -> args += "%$token%"; args += "%$token%" }
+        val skuRaw = query.trim().lowercase(Locale.ROOT)
+        val prefix = "$skuRaw%"
+        args += skuRaw
+        args += prefix
+        args += "%$skuRaw%"
+        args += limit.toString()
         val cursor = readableDatabase.rawQuery(
             """SELECT sku, product_name FROM sku_catalog
-               WHERE sku LIKE ? OR product_name LIKE ?
-               ORDER BY CASE WHEN sku = ? THEN 0 WHEN sku LIKE ? THEN 1 ELSE 2 END, sku
+               WHERE $where
+               ORDER BY CASE
+                 WHEN lower(sku)=? THEN 0
+                 WHEN lower(sku) LIKE ? THEN 1
+                 WHEN lower(sku) LIKE ? THEN 2
+                 ELSE 3 END, sku
                LIMIT ?""",
-            arrayOf(prefix, contains, normalized, prefix, limit.toString())
+            args.toTypedArray()
         )
         return cursor.use {
-            buildList {
-                while (it.moveToNext()) add(SkuItem(it.getString(0), it.getString(1)))
-            }
+            buildList { while (it.moveToNext()) add(SkuItem(it.getString(0), it.getString(1))) }
         }
     }
 
@@ -116,9 +142,7 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
                 values.put("assigned_name", issue.assignedName)
                 values.put("latest_reporter_name", issue.latestReporterName)
                 values.put("latest_message", issue.latestMessage)
-                writableDatabase.insertWithOnConflict(
-                    "issue_cache", null, values, SQLiteDatabase.CONFLICT_REPLACE
-                )
+                writableDatabase.insertWithOnConflict("issue_cache", null, values, SQLiteDatabase.CONFLICT_REPLACE)
             }
             writableDatabase.setTransactionSuccessful()
         } finally {
@@ -186,6 +210,12 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
 
     companion object {
         private const val DB_NAME = "bao_hang_1291.db"
-        private const val DB_VERSION = 2
+        private const val DB_VERSION = 3
+
+        fun normalize(value: String): String = Normalizer.normalize(value.trim(), Normalizer.Form.NFD)
+            .replace(Regex("\\p{M}+"), "")
+            .lowercase(Locale.ROOT)
+            .replace('đ', 'd')
+            .replace(Regex("\\s+"), " ")
     }
 }
