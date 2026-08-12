@@ -658,6 +658,24 @@ async function route(req: Request) {
       if (error) throw error;
       return data;
     }
+    // Stable 1.1.x compatibility only. Detailed inventory integration is retired;
+    // These routes never read credentials, sessions, source APIs, snapshots, or quantity data.
+    case "inventory-status": return {
+      sku: required(body.sku, "SKU"), freshness_status: "UNKNOWN", stock_status: "NO_DATA", snapshot_captured_at: null,
+    };
+    case "inventory-current":
+      requireRole(context, ["ADMIN", "ADMIN_INVENT", "INVENT"]);
+      return { items: [] };
+    case "inventory-summary":
+      requireRole(context, ["ADMIN", "ADMIN_INVENT"]);
+      return { current_sku_count: 0, snapshot: null, jobs: [], connection: { enabled: false, status: "RETIRED" }, config: {} };
+    case "inventory-sync-start":
+    case "inventory-recovery-start":
+    case "inventory-recovery-stage":
+    case "inventory-recovery-finalize":
+    case "inventory-job-cancel":
+      requireRole(context, ["ADMIN", "ADMIN_INVENT"]);
+      throw new HttpError(410, "Chức năng tồn kho chi tiết đã ngừng. Vui lòng dùng Danh mục SKU / Tên hàng ở phiên bản mới.");
     case "replace-catalog": return replaceCatalog(context, body);
     case "staff-sync-now": requireRole(context,["ADMIN","ADMIN_INVENT"]); return syncStaffDirectory("MANUAL",context.userId);
     case "staff-sync-status": return staffSyncStatus(context);
