@@ -1,8 +1,8 @@
 {
   "action": "publish",
   "channel": "beta",
-  "versionName": "1.2.0",
-  "versionCode": 3,
+  "versionName": "1.3.0",
+  "versionCode": 4,
   "mandatory": false,
-  "releaseNotes": "Beta 1.2.0: triển khai target D1-D12 — role hiển thị chuẩn Picker/Người báo hàng/Admin Event/Admin hệ thống; CLAIM chuyển sang ĐANG XỬ LÝ và cấm claim đè; REASSIGN có lý do/audit; notification có issue version; Realtime foreground; outbox Android one-shot tiết kiệm pin; SLA vận hành tách quyền; Tồn Bin snapshot/staging/finalize nguyên tử và recovery XLSX. Đồng bộ trực tiếp Supra vẫn fail-closed cho tới khi POC read-only xác minh contract nguồn."
+  "releaseNotes": "Beta 1.3.0: chuyển hoàn toàn sang danh mục SKU/Tên hàng từ file Tồn Bin, loại bỏ cơ chế kết nối Supra và dữ liệu tồn chi tiết; đồng bộ tự động nhân sự HY1/1291 từ Google Sheet với bảo vệ tài khoản Admin hệ thống; bổ sung cấu hình mốc vận hành và Auto SKIP; Picker chỉ nhận cảnh báo nổi bật khi ĐÃ CÓ HÀNG/CHÂM HÀNG hoặc ĐƯỢC PHÉP SKIP với giao diện xanh/đỏ 40%; App và Web tự cập nhật dữ liệu realtime, hỗ trợ quay lại chuẩn Android; nâng cấp tổng quan, báo cáo vận hành, quản trị người dùng và giám sát dung lượng/quota theo tiêu chí 0 đồng."
 }
