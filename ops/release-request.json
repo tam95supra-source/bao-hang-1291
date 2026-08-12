@@ -4,5 +4,6 @@
   "versionName": "1.0.0",
   "versionCode": 1,
   "mandatory": false,
-  "releaseNotes": "Production pipeline validation with APK Analyzer; do not publish."
+  "releaseNotes": "Validate signed production APK after full role, web operations, shortage workflow, search and diagnostic log update. Do not publish.",
+  "validationAttempt": 5
 }
