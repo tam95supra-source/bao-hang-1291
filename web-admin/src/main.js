@@ -421,59 +421,6 @@ async function loadPendingAlerts() {
 }
 
 async function renderInventory(){return renderSku();}
-async function loadInventoryRows() {
-  const target = $('#inventoryRows'); if (!target) return;
-  try {
-    const data = await api('inventory-current',{ query:$('#inventorySearch')?.value.trim() || '', limit:200 });
-    target.innerHTML = `<div class="table-wrap"><table><thead><tr><th>SKU</th><th>Tồn Bin pickable</th><th>Chờ xuất</th><th>Khả dụng</th><th>Khác</th><th>Freshness</th><th>Snapshot</th></tr></thead><tbody>${data.items.map(i=>`<tr><td>${escapeHtml(i.sku)}</td><td>${escapeHtml(i.pickable_bin_qty)}</td><td>${escapeHtml(i.pickable_pending_out_qty)}</td><td><b>${escapeHtml(i.pickable_available_qty)}</b></td><td>${escapeHtml(i.other_stock_qty)}</td><td>${escapeHtml(i.freshness_status)}</td><td>${formatTime(i.snapshot_captured_at)}</td></tr>`).join('')}</tbody></table></div>`;
-  } catch (error) { target.innerHTML = `<div class="message" data-type="error">${escapeHtml(safeMessage(error))}</div>`; }
-}
-async function importInventoryXlsx() {
-  const file = $('#inventoryFile')?.files?.[0];
-  if (!file) return message('#inventoryImportMsg','Chọn file XLSX trước.','error');
-  if (file.size > MAX_FILE_BYTES) return message('#inventoryImportMsg','File vượt giới hạn 20 MB.','error');
-  try {
-    setBusy(true,'Đang đọc và kiểm tra Tồn Bin…');
-    const ExcelJS = await getExcelJS();
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(await file.arrayBuffer());
-    const sheet = workbook.worksheets[0];
-    if (!sheet) throw new Error('File không có worksheet.');
-    const header = new Map();
-    sheet.getRow(1).eachCell((cell, col) => header.set(normalize(cell.text), col));
-    const requiredCols = ['sku','ton bin','ton cho xuat','tinh chat lt'];
-    for (const key of requiredCols) if (!header.get(key)) throw new Error(`Thiếu cột bắt buộc: ${key}`);
-    const binCodeCol = header.get('ma vtlt') || header.get('ma ptlt') || null;
-    const items = [];
-    for (let rowNo = 2; rowNo <= sheet.rowCount; rowNo++) {
-      const row = sheet.getRow(rowNo);
-      const sku = String(row.getCell(header.get('sku')).text || '').trim();
-      if (!sku) continue;
-      const binQty = Number(String(row.getCell(header.get('ton bin')).value ?? row.getCell(header.get('ton bin')).text ?? 0).replace(',','.'));
-      const pendingRaw = row.getCell(header.get('ton cho xuat')).value ?? row.getCell(header.get('ton cho xuat')).text ?? 0;
-      const pending = Number(String(pendingRaw || 0).replace(',','.')) || 0;
-      if (!Number.isFinite(binQty) || binQty < 0 || pending < 0) throw new Error(`Dòng ${rowNo}: số tồn không hợp lệ.`);
-      const storage = String(row.getCell(header.get('tinh chat lt')).text || '').trim();
-      const storageNorm = normalize(storage);
-      items.push({ row_key:String(rowNo), sku, bin_code:binCodeCol ? String(row.getCell(binCodeCol).text || '').trim() : '', storage_type:storage, is_pickable:['pickable','co the lay hang'].includes(storageNorm), bin_qty:binQty, pending_out_qty:pending });
-    }
-    if (!items.length) throw new Error('Không có dòng tồn hợp lệ.');
-    const start = await api('inventory-recovery-start',{ client_request_id:uuid() });
-    const jobId = start.job.id;
-    let staged = 0;
-    for (let index = 0; index < items.length; index += 500) {
-      const batch = items.slice(index,index+500);
-      const result = await api('inventory-recovery-stage',{ job_id:jobId, batch_index:index/500, items:batch });
-      staged = Number(result.total_staged || staged + batch.length);
-      $('#busyText').textContent = `Đã staging ${staged.toLocaleString('vi-VN')} / ${items.length.toLocaleString('vi-VN')} dòng…`;
-    }
-    const result = await api('inventory-recovery-finalize',{ job_id:jobId, source_captured_at:new Date(file.lastModified || Date.now()).toISOString() });
-    message('#inventoryImportMsg',`Hoàn tất ${items.length.toLocaleString('vi-VN')} dòng · ${result.state}. Snapshot chỉ đổi sau finalize nguyên tử.`,'good');
-    await renderInventory();
-  } catch (error) { message('#inventoryImportMsg',safeMessage(error),'error'); }
-  finally { setBusy(false); }
-}
-
 async function renderReports(){
  $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">REPORT</p><h2>Báo cáo vận hành kho</h2></div></div><div id="reportBody"></div>`;try{const r=await api('reports-summary');$('#reportBody').innerHTML=`<div class="metrics"><article class="metric"><span>Lượt báo 30 ngày</span><strong>${Number(r.reports||0).toLocaleString('vi-VN')}</strong></article><article class="metric"><span>Ticket 30 ngày</span><strong>${Number(r.issues||0).toLocaleString('vi-VN')}</strong></article><article class="metric"><span>Đang mở</span><strong>${Number(r.active_now||0)}</strong></article><article class="metric"><span>Quá mốc phản hồi</span><strong>${Number(r.overdue_now||0)}</strong></article><article class="metric"><span>Trung vị nhận</span><strong>${r.median_claim_minutes??'—'} phút</strong></article><article class="metric"><span>P95 hoàn tất</span><strong>${r.p95_resolution_minutes??'—'} phút</strong></article></div><div class="panel-grid"><article class="card"><h3>24 giờ gần nhất</h3><p>Lượt báo: <b>${Number(r.last_24h?.reports||0)}</b> · Ticket: <b>${Number(r.last_24h?.issues||0)}</b> · Hoàn tất: <b>${Number(r.last_24h?.resolved||0)}</b></p><p>Có hàng/châm bù: <b>${Number(r.last_24h?.available||0)}</b> · Cho SKIP: <b>${Number(r.last_24h?.skipped||0)}</b></p></article><article class="card"><h3>Chất lượng xử lý</h3><p>Trung vị hoàn tất: <b>${r.median_resolution_minutes??'—'} phút</b> · P95: <b>${r.p95_resolution_minutes??'—'} phút</b></p><p>Tái phát: <b>${Number(r.recurrent_episodes||0)}</b> · Auto SKIP 30 ngày: <b>${Number(r.auto_skip_count_30d||0)}</b></p></article></div><article class="card"><h3>SKU phát sinh nhiều nhất</h3><div class="table-wrap"><table><thead><tr><th>SKU</th><th>Tên sản phẩm</th><th>Lượt báo</th></tr></thead><tbody>${(r.top_skus||[]).map(x=>`<tr><td><b>${escapeHtml(x.sku)}</b></td><td>${escapeHtml(x.product_name||'')}</td><td>${Number(x.reports||0)}</td></tr>`).join('')}</tbody></table></div></article>`;}catch(e){$('#reportBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}
 }
@@ -483,18 +430,6 @@ async function renderSku(){
  const load=async()=>{try{const q=$('#catalogSearch').value.trim();if(!q){$('#catalogRows').innerHTML='<p class="muted">Nhập từ khóa để tra cứu.</p>';return;}const d=await api('search-skus',{query:q,limit:100});$('#catalogRows').innerHTML=`<div class="table-wrap"><table><thead><tr><th>SKU</th><th>Tên sản phẩm</th></tr></thead><tbody>${d.items.map(i=>`<tr><td><b>${escapeHtml(i.sku)}</b></td><td>${escapeHtml(i.product_name)}</td></tr>`).join('')}</tbody></table></div>`;}catch(e){$('#catalogRows').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}};$('#catalogSearchBtn').onclick=load;$('#catalogSearch').addEventListener('keydown',e=>{if(e.key==='Enter')load();});
  if(can)$('#replaceCatalog').onclick=async()=>{const f=$('#catalogFile').files?.[0];if(!f)return message('#catalogMsg','Chọn file XLSX trước.','error');if(f.size>MAX_FILE_BYTES)return message('#catalogMsg','File vượt giới hạn 20 MB.','error');try{setBusy(true,'Đang đọc SKU và tên sản phẩm…');const X=await getExcelJS(),wb=new X.Workbook();await wb.xlsx.load(await f.arrayBuffer());const sh=wb.worksheets[0];if(!sh)throw new Error('File không có worksheet.');const h=new Map();sh.getRow(1).eachCell((c,col)=>h.set(normalize(c.text),col));const find=a=>a.map(normalize).map(x=>h.get(x)).find(Boolean),sc=find(['sku','mã sku','ma sku']),nc=find(['tên sku','ten sku','tên sản phẩm','ten san pham','tên hàng','ten hang','product name','sku name']);if(!sc||!nc)throw new Error('File phải có cột SKU và Tên SKU/Tên sản phẩm.');const m=new Map();for(let r=2;r<=sh.rowCount;r++){const sku=String(sh.getRow(r).getCell(sc).text||'').trim(),name=String(sh.getRow(r).getCell(nc).text||'').trim();if(!sku&&!name)continue;if(!sku||!name)throw new Error(`Dòng ${r}: thiếu SKU hoặc tên sản phẩm`);if(m.has(sku)&&m.get(sku)!==name)throw new Error(`SKU ${sku} có nhiều tên khác nhau`);m.set(sku,name);}if(!m.size)throw new Error('Không tìm thấy SKU hợp lệ.');const items=[...m].map(([sku,product_name])=>({sku,product_name})),res=await api('replace-catalog',{items,source_name:f.name});message('#catalogMsg',`Đã cập nhật ${Number(res.active_count||items.length).toLocaleString('vi-VN')} SKU · phiên ${res.revision}.`,'good');}catch(e){message('#catalogMsg',safeMessage(e),'error');}finally{setBusy(false);}};
 }
-async function importSkuXlsx() {
-  const file = $('#skuFile')?.files?.[0]; if (!file) return message('#skuMsg','Chọn file trước.','error');
-  try {
-    setBusy(true,'Đang đọc SKU…');
-    const ExcelJS = await getExcelJS(); const wb = new ExcelJS.Workbook(); await wb.xlsx.load(await file.arrayBuffer()); const ws=wb.worksheets[0];
-    const h=new Map();ws.getRow(1).eachCell((c,i)=>h.set(normalize(c.text),i));const skuCol=h.get('sku'),nameCol=h.get('ten san pham');if(!skuCol||!nameCol)throw new Error('Thiếu cột SKU hoặc Tên sản phẩm.');
-    const map=new Map();for(let r=2;r<=ws.rowCount;r++){const sku=String(ws.getRow(r).getCell(skuCol).text||'').trim();const name=String(ws.getRow(r).getCell(nameCol).text||'').trim();if(sku&&name)map.set(sku,name);}
-    const items=[...map].map(([sku,product_name])=>({sku,product_name}));for(let i=0;i<items.length;i+=1000){await api('import-skus',{items:items.slice(i,i+1000)});$('#busyText').textContent=`Đã import ${Math.min(i+1000,items.length)} / ${items.length} SKU…`;}
-    message('#skuMsg',`Hoàn tất ${items.length.toLocaleString('vi-VN')} SKU.`,'good');
-  } catch(error){message('#skuMsg',safeMessage(error),'error');}finally{setBusy(false);}
-}
-
 async function renderUsers(){
  $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">STAFF</p><h2>Nhân sự & quyền</h2></div><button id="staffSync" class="secondary">ĐỒNG BỘ NGUỒN NGAY</button></div><div id="staffStatus"></div><div id="usersBody"></div>`;
  const load=async()=>{try{const [d,st]=await Promise.all([api('list-users'),api('staff-sync-status')]);state.managedUsers=d.users||[];const last=st.runs?.[0];$('#staffStatus').innerHTML=`<article class="card"><b>Nguồn DANH MỤC NHÂN SỰ</b><p>${last?`${escapeHtml(last.status)} · ${formatTime(last.finished_at)} · ${Number(last.eligible_rows||0)} nhân sự hợp lệ`:'Chưa đồng bộ.'}</p><p class="muted">Site 1291 / Kho HY1. Chuyên viên, Trưởng nhóm, Trưởng kho → Admin Event; còn lại → Picker. 6281280 được bảo vệ tuyệt đối. Nhân sự mất khỏi nguồn chỉ ngừng hoạt động, lịch sử vẫn giữ.</p></article>`;$('#usersBody').innerHTML=`<div class="table-wrap"><table><thead><tr><th>User</th><th>Họ tên</th><th>Vị trí</th><th>Quyền</th><th>Nguồn</th><th>Trạng thái</th></tr></thead><tbody>${state.managedUsers.map(u=>`<tr><td><b>${escapeHtml(u.employee_code)}</b>${u.protected_account?' 🔒':''}</td><td>${escapeHtml(u.full_name)}</td><td>${escapeHtml(u.source_position||'—')}</td><td>${escapeHtml(ROLES[u.role]||u.role)}</td><td>${u.source_kind==='GSHEET'?'Google Sheet':'Tạo thêm'}</td><td>${u.active?'Hoạt động':'Ngừng'}</td></tr>`).join('')}</tbody></table></div><article class="card"><h3>Tạo thêm tài khoản ngoài danh sách nguồn</h3><p class="muted">${role()==='ADMIN_INVENT'?'Admin Event chỉ được tạo thêm Picker.':'Admin hệ thống được tạo Admin Event, Người báo hàng hoặc Picker.'} Nếu bỏ trống mật khẩu, server dùng mật khẩu mặc định lưu an toàn.</p><div class="form-grid"><label>Mã nhân viên<input id="newCode"></label><label>Họ tên<input id="newName"></label><label>Nhà thầu<input id="newContractor"></label><label>Quyền<select id="newRole">${(role()==='ADMIN'?['ADMIN_INVENT','INVENT','PICKER']:['PICKER']).map(r=>`<option value="${r}">${ROLES[r]}</option>`).join('')}</select></label><label>Mật khẩu riêng (không bắt buộc)<input id="newPassword" type="password" autocomplete="new-password"></label></div><button id="createExtraUser" class="primary">TẠO TÀI KHOẢN</button><div id="userMsg" class="message" hidden></div></article>`;$('#createExtraUser').onclick=async()=>{try{const item={employee_code:$('#newCode').value.trim(),full_name:$('#newName').value.trim(),contractor:$('#newContractor').value.trim(),role:$('#newRole').value,active:true,initial_password:$('#newPassword').value},r=await api('import-users',{items:[item]});if(r.failed)throw new Error(r.errors?.[0]||'Không tạo được tài khoản');message('#userMsg','Đã tạo tài khoản.','good');await load();}catch(e){message('#userMsg',safeMessage(e),'error');}};}catch(e){$('#usersBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}};
@@ -520,7 +455,7 @@ async function renderDevices() {
 }
 
 async function renderIntegrations(){
- $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">SYSTEM</p><h2>Hệ thống & dung lượng</h2></div></div><div id="serviceBody"></div>`;try{const d=await api('service-metrics'),u=d.usage||{},l=d.free_limits||{},db=Number(u.database_bytes||0),lim=Number(l.database_bytes||1);$('#serviceBody').innerHTML=`<div class="metrics"><article class="metric"><span>Database</span><strong>${(db/1048576).toFixed(1)} MB</strong></article><article class="metric"><span>SKU hoạt động</span><strong>${Number(u.sku_active||0).toLocaleString('vi-VN')}</strong></article><article class="metric"><span>Nhân sự hoạt động</span><strong>${Number(u.profiles_active||0)}</strong></article><article class="metric"><span>Thiết bị FCM</span><strong>${Number(u.active_device_tokens||0)}</strong></article></div><div class="panel-grid"><article class="card"><h3>Ngưỡng kiểm soát 0 đồng</h3><p>Database: ${(db/lim*100).toFixed(1)}% / 500 MB</p><p>Storage: 1 GB · Edge Functions: 500.000 lượt/tháng · Realtime: 2.000.000 message/tháng · 200 kết nối đồng thời.</p><p class="muted">Thông tin dùng để cảnh báo vận hành; hệ thống không tự bật Billing.</p></article><article class="card"><h3>Dữ liệu kỹ thuật</h3><p>Notification events: ${Number(u.notification_events||0).toLocaleString('vi-VN')}</p><p>Diagnostic log: ${(Number(u.diagnostic_log_bytes||0)/1048576).toFixed(2)} MB</p><p>Google Sheet chờ: ${Number(u.sheet_pending||0)}</p><p>Catalog revision: ${Number(u.catalog_revision||0)}</p></article></div>`;}catch(e){$('#serviceBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}
+ $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">SYSTEM</p><h2>Hệ thống & dung lượng</h2></div></div><div id="serviceBody"></div>`;try{const d=await api('service-metrics'),u=d.usage||{},l=d.free_limits||{},db=Number(u.database_bytes||0),lim=Number(l.database_bytes||1);$('#serviceBody').innerHTML=`<div class="metrics"><article class="metric"><span>Database</span><strong>${(db/1048576).toFixed(1)} MB</strong></article><article class="metric"><span>SKU hoạt động</span><strong>${Number(u.sku_active||0).toLocaleString('vi-VN')}</strong></article><article class="metric"><span>Nhân sự hoạt động</span><strong>${Number(u.profiles_active||0)}</strong></article><article class="metric"><span>Thiết bị FCM</span><strong>${Number(u.active_device_tokens||0)}</strong></article></div><div class="panel-grid"><article class="card"><h3>Ngưỡng kiểm soát 0 đồng</h3><p>Database: ${(db/lim*100).toFixed(1)}% / 500 MB</p><p>Storage: 1 GB · Egress: 5 GB/tháng · MAU: 50.000/tháng · Edge Functions: 500.000 lượt/tháng · Realtime: 2.000.000 message/tháng · 200 kết nối đồng thời · tối đa 2 project active.</p><p class="muted">Thông tin dùng để cảnh báo vận hành; hệ thống không tự bật Billing.</p></article><article class="card"><h3>Dữ liệu kỹ thuật</h3><p>Notification events: ${Number(u.notification_events||0).toLocaleString('vi-VN')}</p><p>Diagnostic log: ${(Number(u.diagnostic_log_bytes||0)/1048576).toFixed(2)} MB</p><p>Google Sheet chờ: ${Number(u.sheet_pending||0)}</p><p>Catalog revision: ${Number(u.catalog_revision||0)}</p></article></div>`;}catch(e){$('#serviceBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}
 }
 
 async function renderLogs() {
