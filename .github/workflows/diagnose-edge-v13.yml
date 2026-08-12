@@ -21,18 +21,18 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v1.46.3
-      - name: Apply focused parser fix
+      - name: Apply focused Web API parser fix
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
-          p = Path('supabase/functions/api/index.ts')
+          p = Path('supabase/functions/web-api/index.ts')
           s = p.read_text(encoding='utf-8')
-          bad = 'case "issue-history": {    case "issue-history": {'
+          bad = 'function isAllowedOrigin]);\n'
           if s.count(bad) != 1:
-              raise SystemExit(f'Expected exactly one duplicate issue-history marker, got {s.count(bad)}')
-          p.write_text(s.replace(bad, 'case "issue-history": {', 1), encoding='utf-8')
+              raise SystemExit(f'Expected exactly one malformed isAllowedOrigin marker, got {s.count(bad)}')
+          p.write_text(s.replace(bad, '', 1), encoding='utf-8')
           PY
       - name: Type-check and capture diagnostics
         id: check
@@ -52,8 +52,8 @@ jobs:
           cp "$RUNNER_TEMP/edge-check.txt" ops/edge_v13_typecheck.txt
           git config user.name 'bao-hang-1291-automation'
           git config user.email 'actions@users.noreply.github.com'
-          git add supabase/functions/api/index.ts ops/edge_v13_typecheck.txt
-          git commit -m 'Fix Edge route parser and capture remaining typecheck diagnostic'
+          git add supabase/functions/web-api/index.ts ops/edge_v13_typecheck.txt
+          git commit -m 'Fix Web API parser and capture remaining typecheck diagnostic'
           git push origin HEAD:work/beta-catalog-staff-ux-v13
       - name: Commit fix and remove diagnostic tooling on success
         if: steps.check.outputs.code == '0'
@@ -64,5 +64,5 @@ jobs:
           git config user.name 'bao-hang-1291-automation'
           git config user.email 'actions@users.noreply.github.com'
           git add -A
-          git commit -m 'Fix Edge route parser and remove one-time diagnostic'
+          git commit -m 'Fix Web API parser and remove one-time Edge diagnostic'
           git push origin HEAD:work/beta-catalog-staff-ux-v13
