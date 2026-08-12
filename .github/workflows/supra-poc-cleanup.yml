@@ -1,0 +1,33 @@
+name: Cleanup Supra POC
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/supra-poc-cleanup.request'
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_ID: oedasgcdjppjwidhlqdr
+    steps:
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Delete temporary POC function
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          supabase functions delete supra-poc --project-ref "$SUPABASE_PROJECT_ID"
+          if supabase functions list --project-ref "$SUPABASE_PROJECT_ID" | grep -q 'supra-poc'; then
+            echo 'Temporary supra-poc function still exists' >&2
+            exit 1
+          fi
+          echo 'SUPRA_POC_CLEANUP=PASS'
