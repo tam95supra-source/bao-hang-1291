@@ -1,0 +1,51 @@
+name: Firebase Billing Read Probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/firebase-billing-read-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Authenticate Google service account
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/cloud-billing.readonly
+          create_credentials_file: false
+
+      - name: Read Cloud Billing association
+        shell: bash
+        env:
+          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          set -euo pipefail
+          RESPONSE="$RUNNER_TEMP/billing.json"
+          CODE="$(curl -sS -o "$RESPONSE" -w '%{http_code}' \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            'https://cloudbilling.googleapis.com/v1/projects/bao-hang-1291/billingInfo')"
+          if [ "$CODE" != "200" ]; then
+            echo "CLOUD_BILLING_READ_HTTP=$CODE"
+            jq -r '.error.status // .error.message // "unknown"' "$RESPONSE" 2>/dev/null || true
+            exit 2
+          fi
+          ENABLED="$(jq -r '.billingEnabled // false' "$RESPONSE")"
+          if [ "$ENABLED" = "true" ]; then
+            echo 'FIREBASE_BILLING_ENABLED=true'
+            exit 3
+          fi
+          echo 'FIREBASE_BILLING_ENABLED=false'
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/billing.json"
