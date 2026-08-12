@@ -35,7 +35,8 @@ jobs:
           package-manager-cache: false
       - uses: denoland/setup-deno@v2
         with:
-          deno-version: v2.x
+          # Match the Deno runtime documented for Supabase Edge Functions.
+          deno-version: v1.46.3
       - name: Install pinned web dependencies
         run: npm --prefix web-admin install --ignore-scripts --no-audit --no-fund --no-package-lock
       - name: Build Web Admin
