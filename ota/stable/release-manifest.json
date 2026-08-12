@@ -1,0 +1,11 @@
+{
+  "channel": "stable",
+  "versionCode": 2,
+  "versionName": "1.1.0",
+  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/stable-v1.1.0/bao-hang-1291-stable-1.1.0.apk",
+  "sha256": "0485bed3748b77543534729343746135261167a2709aa4ca7f801e8ef7835f4e",
+  "mandatory": false,
+  "releaseNotes": "Cập nhật Báo hàng 1291: hoàn thiện 4 quyền nghiệp vụ, quản lý nhân sự cho Admin/Admin Invent, xử lý báo thiếu và ACK, tìm kiếm linh hoạt, gửi log chẩn đoán, web nghiệp vụ đầy đủ và OTA khóa theo APK Stable/Beta. Bản Stable chỉ nhận cập nhật Stable.",
+  "signerSha256": "2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0",
+  "sourceSha": "9cc61f53f669d0d308de8e09ec404d9a974099d8"
+}
