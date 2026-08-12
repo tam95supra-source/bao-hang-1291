@@ -23,16 +23,17 @@ jobs:
           node <<'NODE'
           const crypto = require('crypto');
           const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
+          if (!sa.client_email || !sa.private_key) throw new Error('Service account JSON incomplete');
           const enc = (v) => Buffer.from(typeof v === 'string' ? v : JSON.stringify(v)).toString('base64url');
           async function token() {
             const now = Math.floor(Date.now() / 1000);
             const header = enc({ alg: 'RS256', typ: 'JWT' });
-            const claim = enc({ iss: sa.client_email, scope: 'https://www.googleapis.com/auth/cloud-platform.read-only', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 900 });
+            const claim = enc({ iss: sa.client_email, scope: 'https://www.googleapis.com/auth/cloud-platform', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 900 });
             const unsigned = `${header}.${claim}`;
             const signature = crypto.sign('RSA-SHA256', Buffer.from(unsigned), sa.private_key).toString('base64url');
             const res = await fetch('https://oauth2.googleapis.com/token', {
               method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
-              body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth-type:jwt-bearer'.replace('oauth-type','oauth-grant-type'), assertion: `${unsigned}.${signature}` }),
+              body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: `${unsigned}.${signature}` }),
             });
             if (!res.ok) throw new Error(`OAuth token HTTP ${res.status}`);
             return (await res.json()).access_token;
