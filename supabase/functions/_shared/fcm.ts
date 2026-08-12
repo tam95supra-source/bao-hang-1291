@@ -16,6 +16,10 @@ function pemToBytes(pem: string): Uint8Array {
   const binary = atob(body);
   return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
+function asArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = Uint8Array.from(bytes);
+  return copy.buffer as ArrayBuffer;
+}
 async function accessToken(account: ServiceAccount): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   if (cachedToken && cachedUntil > now + 60) return cachedToken;
@@ -29,10 +33,11 @@ async function accessToken(account: ServiceAccount): Promise<string> {
   }));
   const unsigned = `${header}.${claim}`;
   const key = await crypto.subtle.importKey(
-    "pkcs8", pemToBytes(account.private_key),
+    "pkcs8", asArrayBuffer(pemToBytes(account.private_key)),
     { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"],
   );
-  const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(unsigned));
+  const signatureInput = asArrayBuffer(new TextEncoder().encode(unsigned));
+  const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, signatureInput);
   const assertion = `${unsigned}.${base64Url(new Uint8Array(signature))}`;
   const response = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
