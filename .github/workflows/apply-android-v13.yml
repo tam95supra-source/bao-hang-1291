@@ -27,15 +27,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Install verified Gradle 8.9 without cache
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -fsSLo "$RUNNER_TEMP/gradle-8.9-bin.zip" https://services.gradle.org/distributions/gradle-8.9-bin.zip
-          curl -fsSLo "$RUNNER_TEMP/gradle-8.9-bin.zip.sha256" https://services.gradle.org/distributions/gradle-8.9-bin.zip.sha256
-          echo "$(cat "$RUNNER_TEMP/gradle-8.9-bin.zip.sha256")  $RUNNER_TEMP/gradle-8.9-bin.zip" | sha256sum -c -
-          unzip -q "$RUNNER_TEMP/gradle-8.9-bin.zip" -d "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/gradle-8.9/bin" >> "$GITHUB_PATH"
       - name: Harden transformation parser and Kotlin string generation
         shell: bash
         run: |
@@ -74,6 +65,20 @@ jobs:
             exit 1
           fi
           git diff --check
+      - name: Commit transformed Android source for deterministic review
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'bao-hang-1291-automation'
+          git config user.email 'actions@users.noreply.github.com'
+          git add app
+          git diff --cached --quiet && { echo 'No Android source changes'; exit 2; }
+          git commit -m 'Implement catalog-only Android UX and final picker alerts'
+          git push origin HEAD:work/beta-catalog-staff-ux-v13
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.9'
+          cache-disabled: true
       - name: Compile and unit test Android
         id: android_compile
         shell: bash
@@ -85,6 +90,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git fetch origin work/beta-catalog-staff-ux-v13
+          git reset --hard origin/work/beta-catalog-staff-ux-v13
           { grep -E '(^e: | error: |\.kt:[0-9]+:|AAPT: error|Android resource linking failed|FAILURE: Build failed|What went wrong:|Execution failed for task)' "$RUNNER_TEMP/android-build.log" || true; } | tail -n 120 > ops/android_v13_compile_error.txt
           test -s ops/android_v13_compile_error.txt || tail -n 80 "$RUNNER_TEMP/android-build.log" > ops/android_v13_compile_error.txt
           sed -n '430,700p' app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt > ops/android_v13_main_context.txt
@@ -93,17 +100,16 @@ jobs:
           git add ops/android_v13_compile_error.txt ops/android_v13_main_context.txt
           git commit -m 'Capture Android v1.3 compile context' || true
           git push origin HEAD:work/beta-catalog-staff-ux-v13
-      - name: Remove one-time tooling
-        if: success()
-        run: rm -f ops/patch_android_v13.py ops/patch_android_v13_clean.py ops/android_v13_compile_error.txt ops/android_v13_main_context.txt .github/workflows/apply-android-v13.yml
-      - name: Commit Android source
+      - name: Remove one-time tooling after verified build
         if: success()
         shell: bash
         run: |
           set -euo pipefail
+          git fetch origin work/beta-catalog-staff-ux-v13
+          git reset --hard origin/work/beta-catalog-staff-ux-v13
+          rm -f ops/patch_android_v13.py ops/patch_android_v13_clean.py ops/android_v13_compile_error.txt ops/android_v13_main_context.txt .github/workflows/apply-android-v13.yml
           git config user.name 'bao-hang-1291-automation'
           git config user.email 'actions@users.noreply.github.com'
           git add -A
-          git diff --cached --quiet && { echo 'No Android source changes'; exit 2; }
-          git commit -m 'Implement catalog-only Android UX and final picker alerts'
+          git commit -m 'Remove one-time Android v1.3 transformation tooling'
           git push origin HEAD:work/beta-catalog-staff-ux-v13
