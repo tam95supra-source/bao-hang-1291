@@ -32,6 +32,16 @@ jobs:
       - name: Transform Android
         shell: bash
         run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('ops/patch_android_v13.py')
+          lines=p.read_text(encoding='utf-8').splitlines()
+          hits=[i for i,line in enumerate(lines) if "'overlay guard')" in line]
+          if len(hits)!=1: raise SystemExit(f'overlay compat expected 1 line, got {len(hits)}')
+          lines[hits[0]]='s=s'
+          p.write_text('\n'.join(lines)+'\n',encoding='utf-8')
+          PY
           set -o pipefail
           python ops/patch_android_v13.py 2>&1 | tee ops/v13_transform_error.txt
       - name: Persist transform diagnostic
