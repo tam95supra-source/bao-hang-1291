@@ -45,7 +45,8 @@ jobs:
           text='\n'.join(lines)+'\n'
           for start_marker,end_marker,label in [
               ('# reports professional','# SLA with auto skip','report'),
-              ('# users source-aware + create/delete manual','# edit role Admin Invent only Picker','staff-ui')
+              ('# users source-aware + create/delete manual','# edit role Admin Invent only Picker','staff-ui'),
+              ('# helper functions inserted before checkPendingAlerts','# visible ACK dialog final only professional','helper-ui')
           ]:
               a=text.find(start_marker); b=text.find(end_marker,a)
               if a<0 or b<0: raise SystemExit(f'{label} isolation anchors missing')
@@ -77,6 +78,20 @@ jobs:
           PY
           set -o pipefail
           python ops/patch_android_v13.py 2>&1 | tee ops/v13_transform_error.txt
+      - name: Add Android navigation and service screen helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt')
+          s=p.read_text(encoding='utf-8')
+          anchor='    private suspend fun checkPendingAlerts() {'
+          if s.count(anchor)!=1: raise SystemExit(f'helper insertion anchor={s.count(anchor)}')
+          helper='''    private fun showServiceMetrics() {\n        val content = page("HỆ THỐNG & DUNG LƯỢNG", SCREEN_SERVICES)\n        val body = infoBox("Đang đọc số liệu hệ thống…")\n        content.addView(body)\n        lifecycleScope.launch {\n            runCatching { app.api.invoke("service-metrics", JSONObject()) }\n                .onSuccess { data ->\n                    val usage = data.optJSONObject("usage") ?: JSONObject()\n                    val limits = data.optJSONObject("free_limits") ?: JSONObject()\n                    val dbBytes = usage.optLong("database_bytes")\n                    val dbLimit = limits.optLong("database_bytes", 1L).coerceAtLeast(1L)\n                    val percent = dbBytes * 100.0 / dbLimit\n                    body.text = "FREE 0đ • KHÔNG TỰ BẬT BILLING\\n\\n" +\n                        "Database: %.1f MB / %.0f MB (%.1f%%)\\n".format(dbBytes / 1048576.0, dbLimit / 1048576.0, percent) +\n                        "SKU hoạt động: ${usage.optInt("sku_active")}\\n" +\n                        "Nhân sự hoạt động: ${usage.optInt("profiles_active")}\\n" +\n                        "Ticket đang mở: ${usage.optInt("issues_active")}\\n" +\n                        "FCM token hoạt động: ${usage.optInt("active_device_tokens")}\\n" +\n                        "Google Sheet chờ: ${usage.optInt("sheet_pending")}\\n" +\n                        "Log chẩn đoán: %.2f MB\\n\\n".format(usage.optLong("diagnostic_log_bytes") / 1048576.0) +\n                        "Ngưỡng tham chiếu free tier được hiển thị trên Web để kiểm soát quota."\n                }\n                .onFailure { body.text = "Không đọc được số liệu hệ thống: ${it.message}" }\n        }\n    }\n\n    private fun isRoleRoot(): Boolean = when (app.session.effectiveRole) {\n        UserRole.ADMIN, UserRole.ADMIN_INVENT -> currentScreen == SCREEN_MENU\n        UserRole.INVENT -> currentScreen == SCREEN_INVENT\n        UserRole.PICKER -> currentScreen == SCREEN_PICKER\n    }\n\n    private fun updateBackButton() {\n        findViewById<TextView>(R.id.btnBack)?.visibility = if (isRoleRoot()) View.GONE else View.VISIBLE\n    }\n\n    private fun navigateBack() {\n        if (isRoleRoot()) finish() else renderForRole()\n    }\n\n'''
+          s=s.replace(anchor,helper+anchor,1)
+          p.write_text(s,encoding='utf-8')
+          PY
       - name: Persist transform diagnostic
         if: failure()
         shell: bash
