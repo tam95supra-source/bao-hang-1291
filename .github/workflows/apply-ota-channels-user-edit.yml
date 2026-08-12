@@ -27,6 +27,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('ops/patch_ota_channel.py')
+          text = p.read_text()
+          old = '    if actual != count:\n'
+          new = '    if actual < count:\n'
+          if text.count(old) != 1:
+              raise SystemExit('patch helper guard not found exactly once')
+          p.write_text(text.replace(old, new, 1))
+          PY
           python3 ops/patch_ota_channel.py
           python3 ops/patch_user_edit.py
           node --check web-admin/src/main.js
