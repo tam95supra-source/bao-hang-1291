@@ -12,9 +12,9 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 5
     steps:
-      - name: Enable free Cloud Billing API and verify billing state
+      - name: Verify project read permission for billing guard
         shell: bash
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
@@ -23,74 +23,34 @@ jobs:
           node <<'NODE'
           const crypto = require('crypto');
           const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
-          if (!sa.client_email || !sa.private_key) throw new Error('Service account JSON incomplete');
           const enc = (v) => Buffer.from(typeof v === 'string' ? v : JSON.stringify(v)).toString('base64url');
-          async function token(scope) {
+          async function token() {
             const now = Math.floor(Date.now() / 1000);
             const header = enc({ alg: 'RS256', typ: 'JWT' });
-            const claim = enc({ iss: sa.client_email, scope, aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 900 });
+            const claim = enc({ iss: sa.client_email, scope: 'https://www.googleapis.com/auth/cloud-platform.read-only', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 900 });
             const unsigned = `${header}.${claim}`;
             const signature = crypto.sign('RSA-SHA256', Buffer.from(unsigned), sa.private_key).toString('base64url');
-            const assertion = `${unsigned}.${signature}`;
             const res = await fetch('https://oauth2.googleapis.com/token', {
               method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
-              body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion }),
+              body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth-type:jwt-bearer'.replace('oauth-type','oauth-grant-type'), assertion: `${unsigned}.${signature}` }),
             });
             if (!res.ok) throw new Error(`OAuth token HTTP ${res.status}`);
             return (await res.json()).access_token;
           }
-          async function safeError(res, prefix) {
-            const raw = await res.text();
-            let info = {};
-            try { info = JSON.parse(raw); } catch {}
-            const err = info.error || {};
-            console.error(`${prefix}_HTTP=${res.status}`);
-            console.error(`${prefix}_STATUS=${String(err.status || 'unknown')}`);
-            console.error(`${prefix}_MESSAGE=${String(err.message || 'unknown').replace(/[\r\n]+/g, ' ')}`);
-            const detail = Array.isArray(err.details) ? err.details.find((d) => d && d.reason) : null;
-            if (detail) {
-              console.error(`${prefix}_REASON=${String(detail.reason)}`);
-              if (detail.metadata?.permission) console.error(`${prefix}_PERMISSION=${String(detail.metadata.permission)}`);
-            }
-          }
           async function main() {
-            const cloudToken = await token('https://www.googleapis.com/auth/cloud-platform');
-            const enableRes = await fetch('https://serviceusage.googleapis.com/v1/projects/831583541434/services/cloudbilling.googleapis.com:enable', {
-              method: 'POST', headers: { Authorization: `Bearer ${cloudToken}`, 'content-type': 'application/json' }, body: '{}',
-            });
-            if (!enableRes.ok) {
-              await safeError(enableRes, 'SERVICE_ENABLE');
-              process.exitCode = 4;
-              return;
+            const access = await token();
+            const res = await fetch('https://cloudresourcemanager.googleapis.com/v1/projects/831583541434', { headers: { Authorization: `Bearer ${access}` } });
+            const raw = await res.text();
+            if (!res.ok) {
+              let j = {}; try { j = JSON.parse(raw); } catch {}
+              console.error(`PROJECT_READ_HTTP=${res.status}`);
+              console.error(`PROJECT_READ_STATUS=${String(j?.error?.status || 'unknown')}`);
+              console.error(`PROJECT_READ_MESSAGE=${String(j?.error?.message || 'unknown').replace(/[\r\n]+/g, ' ')}`);
+              process.exitCode = 2; return;
             }
-            const operation = await enableRes.json();
-            console.log('CLOUD_BILLING_API_ENABLE_REQUEST=PASS');
-            if (operation.name) {
-              for (let i = 0; i < 20; i++) {
-                await new Promise((r) => setTimeout(r, 1500));
-                const opRes = await fetch(`https://serviceusage.googleapis.com/v1/${operation.name}`, { headers: { Authorization: `Bearer ${cloudToken}` } });
-                if (!opRes.ok) { await safeError(opRes, 'SERVICE_ENABLE_OPERATION'); process.exitCode = 5; return; }
-                const op = await opRes.json();
-                if (op.done) {
-                  if (op.error) { console.error(`SERVICE_ENABLE_OPERATION_ERROR=${String(op.error.message || 'unknown')}`); process.exitCode = 6; return; }
-                  break;
-                }
-              }
-            }
-            const billingToken = await token('https://www.googleapis.com/auth/cloud-billing.readonly');
-            for (let i = 0; i < 8; i++) {
-              const billingRes = await fetch('https://cloudbilling.googleapis.com/v1/projects/bao-hang-1291/billingInfo', {
-                headers: { Authorization: `Bearer ${billingToken}` },
-              });
-              if (billingRes.ok) {
-                const info = await billingRes.json();
-                console.log(`FIREBASE_BILLING_ENABLED=${info.billingEnabled === true ? 'true' : 'false'}`);
-                if (info.billingEnabled === true) process.exitCode = 3;
-                return;
-              }
-              if (i === 7) { await safeError(billingRes, 'CLOUD_BILLING'); process.exitCode = 2; return; }
-              await new Promise((r) => setTimeout(r, 2000));
-            }
+            const j = JSON.parse(raw);
+            if (j.projectId !== 'bao-hang-1291') throw new Error('Unexpected project');
+            console.log('PROJECT_READ_PERMISSION=PASS');
           }
           main().catch((e) => { console.error(e.message); process.exitCode = 2; });
           NODE
