@@ -1,8 +1,8 @@
 {
   "action": "publish",
-  "channel": "stable",
+  "channel": "beta",
   "versionName": "1.1.0",
   "versionCode": 2,
   "mandatory": false,
-  "releaseNotes": "Cập nhật Báo hàng 1291: hoàn thiện 4 quyền nghiệp vụ, quản lý nhân sự cho Admin/Admin Invent, xử lý báo thiếu và ACK, tìm kiếm linh hoạt, gửi log chẩn đoán, web nghiệp vụ đầy đủ và OTA khóa theo APK Stable/Beta. Bản Stable chỉ nhận cập nhật Stable."
+  "releaseNotes": "Cập nhật Báo hàng 1291 Beta: cùng đầy đủ nghiệp vụ/backend với Stable, 4 quyền, quản lý nhân sự Admin/Admin Invent, báo thiếu/ACK, tìm kiếm linh hoạt, gửi log chẩn đoán và OTA khóa theo APK. Bản Beta chỉ nhận cập nhật Beta."
 }
