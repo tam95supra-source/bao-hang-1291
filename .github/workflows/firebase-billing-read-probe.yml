@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Verify project read permission for billing guard
+      - name: Verify Cloud Billing API and project billing status
         shell: bash
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
@@ -40,18 +40,27 @@ jobs:
           }
           async function main() {
             const access = await token();
-            const res = await fetch('https://cloudresourcemanager.googleapis.com/v1/projects/831583541434', { headers: { Authorization: `Bearer ${access}` } });
+            const res = await fetch('https://cloudbilling.googleapis.com/v1/projects/bao-hang-1291/billingInfo', {
+              headers: { Authorization: `Bearer ${access}` },
+            });
             const raw = await res.text();
             if (!res.ok) {
               let j = {}; try { j = JSON.parse(raw); } catch {}
-              console.error(`PROJECT_READ_HTTP=${res.status}`);
-              console.error(`PROJECT_READ_STATUS=${String(j?.error?.status || 'unknown')}`);
-              console.error(`PROJECT_READ_MESSAGE=${String(j?.error?.message || 'unknown').replace(/[\r\n]+/g, ' ')}`);
+              console.error(`BILLING_READ_HTTP=${res.status}`);
+              console.error(`BILLING_READ_STATUS=${String(j?.error?.status || 'unknown')}`);
+              console.error(`BILLING_READ_MESSAGE=${String(j?.error?.message || 'unknown').replace(/[\r\n]+/g, ' ')}`);
               process.exitCode = 2; return;
             }
             const j = JSON.parse(raw);
-            if (j.projectId !== 'bao-hang-1291') throw new Error('Unexpected project');
-            console.log('PROJECT_READ_PERMISSION=PASS');
+            const enabled = j.billingEnabled === true;
+            console.log('CLOUD_BILLING_API_READ=PASS');
+            console.log(`FIREBASE_BILLING_ENABLED=${enabled}`);
+            if (enabled) {
+              console.error('COST_GUARD=STOP: Firebase project is linked to Cloud Billing');
+              process.exitCode = 3;
+            } else {
+              console.log('COST_GUARD=PASS: no Cloud Billing account linked');
+            }
           }
           main().catch((e) => { console.error(e.message); process.exitCode = 2; });
           NODE
