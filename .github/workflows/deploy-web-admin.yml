@@ -59,9 +59,10 @@ jobs:
           main().catch((error) => { console.error(error.message); process.exitCode = 3; });
           NODE
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
+          package-manager-cache: false
 
       - name: Prepare Web Admin assets
         shell: bash
@@ -116,7 +117,25 @@ jobs:
           grep -qi '^x-content-type-options: nosniff' "$RUNNER_TEMP/web-headers.txt"
           echo 'WEB_ADMIN_LIVE_SMOKE=PASS'
 
+      - name: Verify Web Admin API CORS and auth boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          API_URL="https://oedasgcdjppjwidhlqdr.supabase.co/functions/v1/web-api/admin-summary"
+          ORIGIN="https://bao-hang-1291.web.app"
+          curl -sS -D "$RUNNER_TEMP/cors-headers.txt" -o /dev/null -X OPTIONS "$API_URL" \
+            -H "Origin: $ORIGIN" \
+            -H 'Access-Control-Request-Method: POST' \
+            -H 'Access-Control-Request-Headers: authorization,apikey,content-type'
+          grep -qi '^access-control-allow-origin: https://bao-hang-1291.web.app' "$RUNNER_TEMP/cors-headers.txt"
+          CODE="$(curl -sS -D "$RUNNER_TEMP/api-headers.txt" -o "$RUNNER_TEMP/api-body.json" -w '%{http_code}' \
+            -X POST "$API_URL" -H "Origin: $ORIGIN" -H 'Content-Type: application/json' -d '{}')"
+          test "$CODE" = '401'
+          grep -qi '^access-control-allow-origin: https://bao-hang-1291.web.app' "$RUNNER_TEMP/api-headers.txt"
+          grep -q 'Phiên đăng nhập' "$RUNNER_TEMP/api-body.json"
+          echo 'WEB_API_CORS_AUTH_SMOKE=PASS'
+
       - name: Cleanup credential files
         if: always()
         shell: bash
-        run: rm -f "$RUNNER_TEMP/firebase-sa.json" "$RUNNER_TEMP/web-index.html" "$RUNNER_TEMP/web-headers.txt"
+        run: rm -f "$RUNNER_TEMP/firebase-sa.json" "$RUNNER_TEMP/web-index.html" "$RUNNER_TEMP/web-headers.txt" "$RUNNER_TEMP/cors-headers.txt" "$RUNNER_TEMP/api-headers.txt" "$RUNNER_TEMP/api-body.json"
