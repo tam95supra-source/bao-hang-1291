@@ -35,12 +35,36 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
-          p=Path('ops/patch_android_v13.py')
-          lines=p.read_text(encoding='utf-8').splitlines()
-          hits=[i for i,line in enumerate(lines) if "'overlay guard')" in line]
-          if len(hits)!=1: raise SystemExit(f'overlay compat expected 1 line, got {len(hits)}')
-          lines[hits[0]]='s=s'
-          p.write_text('\n'.join(lines)+'\n',encoding='utf-8')
+          patch=Path('ops/patch_android_v13.py')
+          lines=patch.read_text(encoding='utf-8').splitlines()
+          for marker in ("'overlay guard')", "'fcm final guard')"):
+              hits=[i for i,line in enumerate(lines) if marker in line]
+              if len(hits)!=1: raise SystemExit(f'compat {marker}: expected 1, got {len(hits)}')
+              lines[hits[0]]='s=s'
+          patch.write_text('\n'.join(lines)+'\n',encoding='utf-8')
+
+          fcm=Path('app/src/main/java/vn/pickpack1291/baohang/notifications/StockMessagingService.kt')
+          s=fcm.read_text(encoding='utf-8')
+          anchor='        val status = data["status"].orEmpty()\n'
+          if s.count(anchor)!=1: raise SystemExit(f'fcm source anchor count={s.count(anchor)}')
+          s=s.replace(anchor,anchor+'        if (status !in setOf("AVAILABLE", "SKIP_ALLOWED")) {\n            app.diagnostics.info("picker_notification_suppressed", mapOf("status" to status))\n            return\n        }\n',1)
+          s=s.replace('val canClaim = status == "OPEN" && app.session.effectiveRole in setOf(UserRole.ADMIN, UserRole.ADMIN_INVENT, UserRole.INVENT)','val canClaim = false')
+          fcm.write_text(s,encoding='utf-8')
+
+          overlay=Path('app/src/main/java/vn/pickpack1291/baohang/notifications/OverlayAlertService.kt')
+          s=overlay.read_text(encoding='utf-8')
+          anchor='        val status = IssueStatus.from(intent.getStringExtra(EXTRA_STATUS))\n'
+          if s.count(anchor)!=1: raise SystemExit(f'overlay source anchor count={s.count(anchor)}')
+          s=s.replace(anchor,anchor+'        if (status !in setOf(IssueStatus.AVAILABLE, IssueStatus.SKIP_ALLOWED)) { dismiss(); return }\n',1)
+          s=s.replace('val critical = intent.getBooleanExtra(EXTRA_CRITICAL, status.criticalForPicker)','val critical = true')
+          s=s.replace('val canClaim = intent.getBooleanExtra(EXTRA_CAN_CLAIM, false) && issueId.isNotBlank()','val canClaim = false')
+          s=s.replace('view.setBackgroundResource(if (critical) R.drawable.bg_overlay_critical else R.drawable.bg_overlay_info)','view.setBackgroundResource(if (status == IssueStatus.AVAILABLE) R.drawable.bg_overlay_available else R.drawable.bg_overlay_skip)')
+          s=s.replace('view.findViewById<TextView>(R.id.tvOverlayStatus).text = status.label','view.findViewById<TextView>(R.id.tvOverlayStatus).text = if (status == IssueStatus.AVAILABLE) "ĐÃ CÓ HÀNG • QUAY LẠI LẤY HÀNG" else "CHO PHÉP SKIP • TIẾP TỤC CÔNG VIỆC"')
+          s=s.replace('ack.visibility = if (critical || canClaim) View.VISIBLE else View.GONE','ack.visibility = View.VISIBLE')
+          s=s.replace('hint.visibility = if (critical) View.GONE else View.VISIBLE','hint.visibility = View.VISIBLE')
+          s=s.replace('ack.text = "ĐÃ HIỂU"','ack.text = "ĐÃ XÁC NHẬN"')
+          s=s.replace('val height = (resources.displayMetrics.heightPixels * if (critical) 0.40 else 0.34).toInt()','val height = (resources.displayMetrics.heightPixels * 0.40).toInt()')
+          overlay.write_text(s,encoding='utf-8')
           PY
           set -o pipefail
           python ops/patch_android_v13.py 2>&1 | tee ops/v13_transform_error.txt
