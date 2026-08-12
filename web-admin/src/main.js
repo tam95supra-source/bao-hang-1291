@@ -1,5 +1,10 @@
-import ExcelJS from 'exceljs';
 import './style.css';
+
+let excelModulePromise;
+async function getExcelJS() {
+  excelModulePromise ||= import('exceljs').then((module) => module.default ?? module);
+  return excelModulePromise;
+}
 
 const SUPABASE_URL = 'https://oedasgcdjppjwidhlqdr.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_LGgDehtHMSyeJ1XyJDvQiQ_cdlqIKq7';
@@ -398,6 +403,7 @@ function cellText(cell) {
 
 async function readRows(file) {
   ensureXlsx(file);
+  const ExcelJS = await getExcelJS();
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(await file.arrayBuffer());
   const sheet = workbook.worksheets[0];
@@ -628,6 +634,7 @@ async function importUsers() {
 async function downloadSkuTemplate() {
   setBusy(true, 'Đang tạo file mẫu SKU…');
   try {
+    const ExcelJS = await getExcelJS();
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('SKU');
     sheet.addRow(['SKU', 'Tên sản phẩm']);
