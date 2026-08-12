@@ -36,12 +36,18 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           patch=Path('ops/patch_android_v13.py')
-          lines=patch.read_text(encoding='utf-8').splitlines()
+          text=patch.read_text(encoding='utf-8')
+          lines=text.splitlines()
           for marker in ("'overlay guard')", "'fcm final guard')"):
               hits=[i for i,line in enumerate(lines) if marker in line]
               if len(hits)!=1: raise SystemExit(f'compat {marker}: expected 1, got {len(hits)}')
               lines[hits[0]]='s=s'
-          patch.write_text('\n'.join(lines)+'\n',encoding='utf-8')
+          text='\n'.join(lines)+'\n'
+          a=text.find('# reports professional')
+          b=text.find('# SLA with auto skip',a)
+          if a<0 or b<0: raise SystemExit('report isolation anchors missing')
+          text=text[:a]+text[b:]
+          patch.write_text(text,encoding='utf-8')
 
           fcm=Path('app/src/main/java/vn/pickpack1291/baohang/notifications/StockMessagingService.kt')
           s=fcm.read_text(encoding='utf-8')
