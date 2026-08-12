@@ -131,5 +131,5 @@ grant execute on function public.service_usage_snapshot() to service_role;
 -- Private Realtime topics used by foreground clients.
 drop policy if exists "bao_hang_1291_receive_broadcast" on realtime.messages;
 create policy "bao_hang_1291_receive_broadcast" on realtime.messages for select to authenticated
-using(extension='broadcast' and realtime.topic() in ('site:1291:issues','site:1291:catalog','site:1291:staff')
+using(extension='broadcast' and realtime.topic() in ('site:1291:issues','site:1291:catalog','site:1291:staff','site:1291:inventory')
   and exists(select 1 from public.profiles p where p.id=(select auth.uid()) and p.active=true));
