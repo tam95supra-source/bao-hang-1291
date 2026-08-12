@@ -1,0 +1,55 @@
+name: Diagnose Edge v1.3 typecheck
+
+on:
+  push:
+    branches: [work/beta-catalog-staff-ux-v13]
+    paths:
+      - '.github/workflows/diagnose-edge-v13.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: work/beta-catalog-staff-ux-v13
+          fetch-depth: 0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v1.46.3
+      - name: Type-check and capture diagnostics
+        id: check
+        shell: bash
+        run: |
+          set +e
+          deno check supabase/functions/_shared/fcm.ts supabase/functions/api/index.ts supabase/functions/web-api/index.ts > "$RUNNER_TEMP/edge-check.txt" 2>&1
+          code=$?
+          cat "$RUNNER_TEMP/edge-check.txt"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Persist diagnostics on failure
+        if: steps.check.outputs.code != '0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/edge-check.txt" ops/edge_v13_typecheck.txt
+          git config user.name 'bao-hang-1291-automation'
+          git config user.email 'actions@users.noreply.github.com'
+          git add ops/edge_v13_typecheck.txt
+          git commit -m 'Capture Edge v1.3 typecheck diagnostic'
+          git push origin HEAD:work/beta-catalog-staff-ux-v13
+      - name: Remove diagnostic workflow on success
+        if: steps.check.outputs.code == '0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/diagnose-edge-v13.yml ops/edge_v13_typecheck.txt
+          git config user.name 'bao-hang-1291-automation'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git commit -m 'Remove one-time Edge typecheck diagnostic'
+          git push origin HEAD:work/beta-catalog-staff-ux-v13
