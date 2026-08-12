@@ -1,0 +1,139 @@
+name: Final v1.3 backend and web hardening
+
+on:
+  push:
+    branches:
+      - work/beta-catalog-staff-ux-v13
+    paths:
+      - '.github/workflows/final-hardening-v13.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: work/beta-catalog-staff-ux-v13
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v1.46.3
+      - name: Apply focused consistency and dead-code fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          api_path = Path('supabase/functions/api/index.ts')
+          api = api_path.read_text(encoding='utf-8')
+
+          old = '''  const { error: insertError } = await admin.from("profiles").insert(profile);\n  if (insertError) throw insertError;'''
+          new = '''  const { error: insertError } = await admin.from("profiles").insert(profile);\n  if (insertError) {\n    const { error: cleanupError } = await admin.auth.admin.deleteUser(data.user.id);\n    if (cleanupError) console.error("Bootstrap auth rollback failed", errorText(cleanupError));\n    throw insertError;\n  }'''
+          if api.count(old) != 1:
+              raise SystemExit(f'bootstrap rollback marker mismatch: {api.count(old)}')
+          api = api.replace(old, new, 1)
+
+          old = '''const {data,error}=await admin.auth.admin.createUser({email:employeeEmail(code),password,email_confirm:true});\n        if(error||!data.user)throw error??new Error("Không tạo được tài khoản");\n        const {error:insertError}=await admin.from("profiles").insert({id:data.user.id,...profile});if(insertError)throw insertError;created++;'''
+          new = '''const {data,error}=await admin.auth.admin.createUser({email:employeeEmail(code),password,email_confirm:true});\n        if(error||!data.user)throw error??new Error("Không tạo được tài khoản");\n        const authUser=data.user;\n        const {error:insertError}=await admin.from("profiles").insert({id:authUser.id,...profile});\n        if(insertError){const {error:cleanupError}=await admin.auth.admin.deleteUser(authUser.id);if(cleanupError)console.error("Manual user auth rollback failed",errorText(cleanupError));throw insertError;}created++;'''
+          if api.count(old) != 1:
+              raise SystemExit(f'manual create rollback marker mismatch: {api.count(old)}')
+          api = api.replace(old, new, 1)
+
+          old = '''const {data,error}=await admin.auth.admin.createUser({email:employeeEmail(staff.employee_code),password:defaultPassword,email_confirm:true});if(error||!data.user)throw error??new Error("Không tạo được tài khoản");const {error:ie}=await admin.from("profiles").insert({id:data.user.id,...values});if(ie)throw ie;created++;await admin.from("sheet_export_queue").insert({event_type:"USER_UPSERT",payload:{id:data.user.id,...values}});'''
+          new = '''const {data,error}=await admin.auth.admin.createUser({email:employeeEmail(staff.employee_code),password:defaultPassword,email_confirm:true});if(error||!data.user)throw error??new Error("Không tạo được tài khoản");const authUser=data.user;const {error:ie}=await admin.from("profiles").insert({id:authUser.id,...values});if(ie){const {error:cleanupError}=await admin.auth.admin.deleteUser(authUser.id);if(cleanupError)console.error("Staff sync auth rollback failed",errorText(cleanupError));throw ie;}created++;await admin.from("sheet_export_queue").insert({event_type:"USER_UPSERT",payload:{id:authUser.id,...values}});'''
+          if api.count(old) != 1:
+              raise SystemExit(f'staff create rollback marker mismatch: {api.count(old)}')
+          api = api.replace(old, new, 1)
+
+          old = '''if(Object.keys(authValues).length){const {error}=await admin.auth.admin.updateUserById(targetId,authValues);if(error)throw error;}'''
+          new = '''if(Object.keys(authValues).length){const {error}=await admin.auth.admin.updateUserById(targetId,authValues);if(error){const {error:rollbackError}=await admin.from("profiles").update({employee_code:target.employee_code,full_name:target.full_name,contractor:target.contractor,role:target.role,active:target.active,source_kind:target.source_kind,source_position:target.source_position,updated_at:new Date().toISOString()}).eq("id",targetId);if(rollbackError)console.error("Profile rollback failed",errorText(rollbackError));throw error;}}'''
+          if api.count(old) != 1:
+              raise SystemExit(f'profile rollback marker mismatch: {api.count(old)}')
+          api = api.replace(old, new, 1)
+
+          old = '''free_limits:{database_bytes:500*1024*1024,storage_bytes:1024*1024*1024,edge_invocations_month:500000,realtime_messages_month:2000000,realtime_peak_connections:200}'''
+          new = '''free_limits:{database_bytes:500*1024*1024,storage_bytes:1024*1024*1024,egress_bytes_month:5*1024*1024*1024,mau_month:50000,edge_invocations_month:500000,realtime_messages_month:2000000,realtime_peak_connections:200,active_projects_max:2}'''
+          if api.count(old) != 1:
+              raise SystemExit(f'free limit marker mismatch: {api.count(old)}')
+          api = api.replace(old, new, 1)
+          api_path.write_text(api, encoding='utf-8')
+
+          web_path = Path('web-admin/src/main.js')
+          web = web_path.read_text(encoding='utf-8')
+          web = web.replace("['inventory','Tồn bin']", "['inventory','Danh mục SKU']")
+          web = web.replace("['integrations','Tích hợp']", "['integrations','Dịch vụ & dung lượng']")
+
+          start = web.index('async function loadInventoryRows()')
+          end = web.index('async function renderReports()', start)
+          web = web[:start] + web[end:]
+          start = web.index('async function importSkuXlsx()')
+          end = web.index('async function renderUsers()', start)
+          web = web[:start] + web[end:]
+
+          old = 'Storage: 1 GB · Edge Functions: 500.000 lượt/tháng · Realtime: 2.000.000 message/tháng · 200 kết nối đồng thời.'
+          new = 'Storage: 1 GB · Egress: 5 GB/tháng · MAU: 50.000/tháng · Edge Functions: 500.000 lượt/tháng · Realtime: 2.000.000 message/tháng · 200 kết nối đồng thời · tối đa 2 project active.'
+          if web.count(old) != 1:
+              raise SystemExit(f'web free limit marker mismatch: {web.count(old)}')
+          web = web.replace(old, new, 1)
+          web_path.write_text(web, encoding='utf-8')
+          PY
+          git diff --check
+      - name: Verify detailed inventory web code is gone
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -n -E 'inventory-recovery-(start|stage|finalize)|ton cho xuat|pickable_bin_qty|importInventoryXlsx|loadInventoryRows|importSkuXlsx' web-admin/src/main.js; then
+            echo 'Dead detailed-inventory Web code remains' >&2
+            exit 1
+          fi
+      - name: Install pinned web dependencies
+        run: npm --prefix web-admin install --ignore-scripts --no-audit --no-fund --no-package-lock
+      - name: Build Web Admin
+        run: npm --prefix web-admin run build
+      - name: Enforce web budget and static secret guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f web-admin/dist/index.html
+          if grep -R -E 'BEGIN (RSA )?PRIVATE KEY|SUPABASE_SERVICE_ROLE_KEY|service_role|SUPRA_CREDENTIAL_MASTER_KEY|encrypted_credential_bundle' web-admin/dist; then
+            echo 'Secret-like server material found in static build' >&2
+            exit 1
+          fi
+          shopt -s nullglob
+          app_js=(web-admin/dist/assets/index-*.js)
+          css=(web-admin/dist/assets/index-*.css)
+          test ${#app_js[@]} -ge 1
+          js_gzip=$(gzip -c "${app_js[0]}" | wc -c)
+          test "$js_gzip" -le 153600
+          if [ ${#css[@]} -ge 1 ]; then css_gzip=$(gzip -c "${css[0]}" | wc -c); test "$css_gzip" -le 30720; fi
+          echo "WEB_BUDGET=PASS initial_js_gzip=$js_gzip"
+      - name: Type-check Edge Functions
+        run: deno check supabase/functions/_shared/fcm.ts supabase/functions/api/index.ts supabase/functions/web-api/index.ts
+      - name: Guard public source from secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R -n -E --exclude='*.example' --exclude='BUSINESS_RULES.md' '^[[:space:]]*-----BEGIN (RSA )?PRIVATE KEY-----|"private_key"[[:space:]]*:[[:space:]]*"-----BEGIN|SUPABASE_SERVICE_ROLE_KEY[[:space:]]*=[[:space:]]*[^$[:space:]]|RELEASE_STORE_PASSWORD[[:space:]]*=[[:space:]]*[^$[:space:]]|SUPRA_CREDENTIAL_MASTER_KEY[[:space:]]*=[[:space:]]*[^$[:space:]]' supabase app web-admin docs; then
+            echo 'Possible secret value or private key material detected' >&2
+            exit 1
+          fi
+          echo 'SECRET_GUARD=PASS'
+      - name: Commit verified hardening and remove one-time workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/final-hardening-v13.yml
+          git config user.name 'bao-hang-1291-automation'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git commit -m 'Harden account consistency and trim retired inventory web code'
+          git push origin HEAD:work/beta-catalog-staff-ux-v13
