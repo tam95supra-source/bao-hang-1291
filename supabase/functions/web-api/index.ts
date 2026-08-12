@@ -16,7 +16,6 @@ const forwardedActions = new Set([
   "staff-sync-now", "staff-sync-status", "service-metrics",
   "sync-google-sheet", "reports-summary", "issue-history", "audit-history", "upload-log", "list-logs", "download-log"
 ]);
-function isAllowedOrigin]);
 function isAllowedOrigin(origin: string): boolean { return productionOrigins.has(origin) || previewOrigin.test(origin); }
 function corsHeaders(req: Request): Record<string, string> {
   const origin = req.headers.get("origin") ?? "";
