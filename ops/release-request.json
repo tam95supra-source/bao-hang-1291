@@ -1,8 +1,8 @@
 {
   "action": "publish",
   "channel": "beta",
-  "versionName": "1.1.0",
-  "versionCode": 2,
+  "versionName": "1.2.0",
+  "versionCode": 3,
   "mandatory": false,
-  "releaseNotes": "Cập nhật Báo hàng 1291 Beta: cùng đầy đủ nghiệp vụ/backend với Stable, 4 quyền, quản lý nhân sự Admin/Admin Invent, báo thiếu/ACK, tìm kiếm linh hoạt, gửi log chẩn đoán và OTA khóa theo APK. Bản Beta chỉ nhận cập nhật Beta."
+  "releaseNotes": "Beta 1.2.0: triển khai target D1-D12 — role hiển thị chuẩn Picker/Người báo hàng/Admin Event/Admin hệ thống; CLAIM chuyển sang ĐANG XỬ LÝ và cấm claim đè; REASSIGN có lý do/audit; notification có issue version; Realtime foreground; outbox Android one-shot tiết kiệm pin; SLA vận hành tách quyền; Tồn Bin snapshot/staging/finalize nguyên tử và recovery XLSX. Đồng bộ trực tiếp Supra vẫn fail-closed cho tới khi POC read-only xác minh contract nguồn."
 }
