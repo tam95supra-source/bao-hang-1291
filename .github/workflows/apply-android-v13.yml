@@ -31,6 +31,36 @@ jobs:
         with:
           gradle-version: '8.9'
           cache-disabled: true
+      - name: Harden transformation parser and Kotlin string generation
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path('ops/patch_android_v13_clean.py')
+          s = p.read_text(encoding='utf-8')
+          # Kotlin string templates may contain nested quotes. The original brace scanner
+          # is intentionally overridden with a class-member boundary scanner before any
+          # transformation runs, avoiding accidental truncation of member functions.
+          override = r'''
+          def brace_end(text, open_index):
+              member = re.search(r'(?m)^    (?=(?:private\s+)?(?:suspend\s+)?fun\s+[A-Za-z_][A-Za-z0-9_]*\s*\(|companion\s+object\b)', text[open_index + 1:])
+              if member:
+                  return open_index + 1 + member.start()
+              closing = re.search(r'(?m)^}\s*$', text[open_index + 1:])
+              if closing:
+                  return open_index + 1 + closing.start()
+              raise SystemExit('Unable to find next Kotlin member boundary')
+          '''
+          marker = '\n# ---- Models ----\n'
+          if marker not in s:
+              raise SystemExit('Models marker missing')
+          s = s.replace(marker, '\n' + override + marker, 1)
+          # Triple-double Python literals carrying Kotlin code must be raw so Kotlin
+          # \n escapes remain escapes instead of becoming illegal physical newlines.
+          s = re.sub(r'([=,+])"""', r'\1r"""', s)
+          p.write_text(s, encoding='utf-8')
+          PY
       - name: Validate transformation script
         run: python -m py_compile ops/patch_android_v13_clean.py
       - name: Apply Android source transformation
@@ -57,7 +87,7 @@ jobs:
           set -euo pipefail
           { grep -E '(^e: | error: |\.kt:[0-9]+:|AAPT: error|Android resource linking failed|FAILURE: Build failed|What went wrong:|Execution failed for task)' "$RUNNER_TEMP/android-build.log" || true; } | tail -n 120 > ops/android_v13_compile_error.txt
           test -s ops/android_v13_compile_error.txt || tail -n 80 "$RUNNER_TEMP/android-build.log" > ops/android_v13_compile_error.txt
-          sed -n '480,660p' app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt > ops/android_v13_main_context.txt
+          sed -n '430,700p' app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt > ops/android_v13_main_context.txt
           git config user.name 'bao-hang-1291-automation'
           git config user.email 'actions@users.noreply.github.com'
           git add ops/android_v13_compile_error.txt ops/android_v13_main_context.txt
