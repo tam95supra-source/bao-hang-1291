@@ -21,6 +21,19 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v1.46.3
+      - name: Apply focused parser fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('supabase/functions/api/index.ts')
+          s = p.read_text(encoding='utf-8')
+          bad = 'case "issue-history": {    case "issue-history": {'
+          if s.count(bad) != 1:
+              raise SystemExit(f'Expected exactly one duplicate issue-history marker, got {s.count(bad)}')
+          p.write_text(s.replace(bad, 'case "issue-history": {', 1), encoding='utf-8')
+          PY
       - name: Type-check and capture diagnostics
         id: check
         shell: bash
@@ -31,7 +44,7 @@ jobs:
           cat "$RUNNER_TEMP/edge-check.txt"
           echo "code=$code" >> "$GITHUB_OUTPUT"
           exit 0
-      - name: Persist diagnostics on failure
+      - name: Persist fix and diagnostics on failure
         if: steps.check.outputs.code != '0'
         shell: bash
         run: |
@@ -39,10 +52,10 @@ jobs:
           cp "$RUNNER_TEMP/edge-check.txt" ops/edge_v13_typecheck.txt
           git config user.name 'bao-hang-1291-automation'
           git config user.email 'actions@users.noreply.github.com'
-          git add ops/edge_v13_typecheck.txt
-          git commit -m 'Capture Edge v1.3 typecheck diagnostic'
+          git add supabase/functions/api/index.ts ops/edge_v13_typecheck.txt
+          git commit -m 'Fix Edge route parser and capture remaining typecheck diagnostic'
           git push origin HEAD:work/beta-catalog-staff-ux-v13
-      - name: Remove diagnostic workflow on success
+      - name: Commit fix and remove diagnostic tooling on success
         if: steps.check.outputs.code == '0'
         shell: bash
         run: |
@@ -51,5 +64,5 @@ jobs:
           git config user.name 'bao-hang-1291-automation'
           git config user.email 'actions@users.noreply.github.com'
           git add -A
-          git commit -m 'Remove one-time Edge typecheck diagnostic'
+          git commit -m 'Fix Edge route parser and remove one-time diagnostic'
           git push origin HEAD:work/beta-catalog-staff-ux-v13
