@@ -25,13 +25,12 @@ jobs:
         with:
           ref: work/beta-catalog-staff-ux-v13
           fetch-depth: 0
-      - name: Apply deterministic transformations
-        shell: bash
-        run: |
-          set -euo pipefail
-          python ops/patch_api_v13.py
-          python ops/patch_web_v13.py
-          python ops/patch_android_v13.py
+      - name: Transform Edge API
+        run: python ops/patch_api_v13.py
+      - name: Transform Web
+        run: python ops/patch_web_v13.py
+      - name: Transform Android
+        run: python ops/patch_android_v13.py
       - name: Source safety guard
         shell: bash
         run: |
@@ -42,9 +41,7 @@ jobs:
             web-admin/src app/src/main supabase/functions || { echo 'Secret-like material found' >&2; exit 1; }
           git diff --check
       - name: Remove one-time transformation tooling
-        shell: bash
-        run: |
-          rm -f ops/patch_api_v13.py ops/patch_web_v13.py ops/patch_android_v13.py .github/workflows/apply-v13-patches.yml
+        run: rm -f ops/patch_api_v13.py ops/patch_web_v13.py ops/patch_android_v13.py .github/workflows/apply-v13-patches.yml
       - name: Commit transformed source
         shell: bash
         run: |
