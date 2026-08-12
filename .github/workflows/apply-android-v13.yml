@@ -45,10 +45,28 @@ jobs:
           fi
           git diff --check
       - name: Compile and unit test Android
-        run: gradle --no-daemon testDebugUnitTest assembleDebug
+        id: android_compile
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle --no-daemon testDebugUnitTest assembleDebug 2>&1 | tee "$RUNNER_TEMP/android-build.log"
+      - name: Persist focused compile diagnostic
+        if: failure() && steps.android_compile.outcome == 'failure'
+        shell: bash
+        run: |
+          set -euo pipefail
+          { grep -E '(^e: | error: |\.kt:[0-9]+:|AAPT: error|Android resource linking failed|FAILURE: Build failed|What went wrong:|Execution failed for task)' "$RUNNER_TEMP/android-build.log" || true; } | tail -n 120 > ops/android_v13_compile_error.txt
+          test -s ops/android_v13_compile_error.txt || tail -n 80 "$RUNNER_TEMP/android-build.log" > ops/android_v13_compile_error.txt
+          git config user.name 'bao-hang-1291-automation'
+          git config user.email 'actions@users.noreply.github.com'
+          git add ops/android_v13_compile_error.txt
+          git commit -m 'Capture Android v1.3 compile diagnostic' || true
+          git push origin HEAD:work/beta-catalog-staff-ux-v13
       - name: Remove one-time tooling
-        run: rm -f ops/patch_android_v13.py ops/patch_android_v13_clean.py .github/workflows/apply-android-v13.yml
+        if: success()
+        run: rm -f ops/patch_android_v13.py ops/patch_android_v13_clean.py ops/android_v13_compile_error.txt .github/workflows/apply-android-v13.yml
       - name: Commit Android source
+        if: success()
         shell: bash
         run: |
           set -euo pipefail
