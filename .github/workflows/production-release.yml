@@ -244,7 +244,6 @@ jobs:
           published_sha="$(sha256sum "$work/published/$APK_NAME" | awk '{print $1}')"
           test "$published_sha" = "$APK_SHA256"
           cmp -s "$manifest" "$work/published/release-manifest.json"
-          trap - ERR
 
           mkdir -p "$(dirname "$POINTER")"
           cp "$manifest" "$POINTER"
@@ -252,5 +251,17 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add "$POINTER"
           git commit -m "Update $CHANNEL OTA manifest to $VERSION_NAME"
-          git push origin HEAD:main
+
+          pushed=false
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git rebase origin/main
+            if git push origin HEAD:main; then
+              pushed=true
+              break
+            fi
+            echo "OTA pointer push race on attempt $attempt; retrying." >&2
+          done
+          test "$pushed" = true
+          trap - ERR
           echo "Published $CHANNEL OTA $VERSION_NAME code=$VERSION_CODE sha256=$APK_SHA256"
