@@ -188,7 +188,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showAdmin() {
         val content = page("ADMIN HỆ THỐNG", SCREEN_MENU)
-        content.addView(infoBox("Quản trị vận hành Báo hàng 1291. Tồn Bin chỉ được dùng làm file nguồn SKU / tên sản phẩm; không sử dụng phiên hoặc credential Supra."))
+        content.addView(infoBox("Quản trị vận hành Báo hàng 1291. File Tồn Bin chỉ dùng để cập nhật SKU và tên sản phẩm; hệ thống không lưu dữ liệu tồn kho chi tiết."))
         content.addView(button("SỰ KIỆN / ĐIỀU PHỐI") { showInventBoard() })
         content.addView(button("DANH MỤC SKU / TÊN HÀNG") { showCatalog() })
         content.addView(button("BÁO CÁO VẬN HÀNH") { showReports() })

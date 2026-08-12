@@ -158,7 +158,7 @@ function renderLogin(msg = '') {
     <form id="loginForm"><label>Mã nhân viên<input id="employeeCode" required autocomplete="username"></label>
     <label>Mật khẩu<input id="password" type="password" required autocomplete="current-password"></label>
     <button class="primary wide">ĐĂNG NHẬP</button></form><div id="loginMessage" class="message" hidden></div>
-    <p class="security">Quyền được kiểm tra tại server. Web không chứa service-role key, credential Supra hoặc private key.</p>
+    <p class="security">Quyền được kiểm tra tại server. Web không chứa service-role key, thông tin xác thực máy chủ hoặc private key.</p>
   </section></main>`;
   if (msg) message('#loginMessage', msg, 'error');
   $('#loginForm').addEventListener('submit', handleLogin);
