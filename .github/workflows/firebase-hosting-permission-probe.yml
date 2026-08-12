@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  verify-clean:
+  cleanup:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
@@ -26,6 +26,12 @@ jobs:
           printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$SA_FILE"
           jq -e '.project_id and .client_email and .private_key' "$SA_FILE" >/dev/null
           echo "GOOGLE_APPLICATION_CREDENTIALS=$SA_FILE" >> "$GITHUB_ENV"
+
+      - name: Delete permission probe channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --yes firebase-tools@14.17.0 hosting:channel:delete permission-probe-31550262102 --project bao-hang-1291 --non-interactive
 
       - name: Verify no permission probe channel remains
         shell: bash
