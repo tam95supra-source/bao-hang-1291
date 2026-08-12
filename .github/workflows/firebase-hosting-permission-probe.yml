@@ -1,0 +1,42 @@
+name: Firebase Hosting Permission Probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/firebase-hosting-permission-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Prepare Firebase service account
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          test -n "$FIREBASE_SERVICE_ACCOUNT"
+          umask 077
+          SA_FILE="$RUNNER_TEMP/firebase-sa.json"
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$SA_FILE"
+          jq -e '.project_id and .client_email and .private_key' "$SA_FILE" >/dev/null
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$SA_FILE" >> "$GITHUB_ENV"
+
+      - name: Verify Firebase Hosting read access
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --yes firebase-tools@14.17.0 hosting:sites:list --project bao-hang-1291 --json > "$RUNNER_TEMP/hosting-sites.json"
+          jq -e '.status == "success"' "$RUNNER_TEMP/hosting-sites.json" >/dev/null
+          COUNT="$(jq '.result.sites | length' "$RUNNER_TEMP/hosting-sites.json")"
+          echo "FIREBASE_HOSTING_READ_ACCESS=PASS sites=$COUNT"
+
+      - name: Cleanup credential file
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/firebase-sa.json" "$RUNNER_TEMP/hosting-sites.json"
