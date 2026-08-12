@@ -126,6 +126,7 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
     }
 
     fun skuCount(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM sku_catalog", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+    fun clearSkus() { writableDatabase.delete("sku_catalog", null, null) }
 
     fun upsertIssues(issues: List<StockIssue>) {
         if (issues.isEmpty()) return

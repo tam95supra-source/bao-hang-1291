@@ -26,7 +26,8 @@ import kotlin.math.min
 class RealtimeClient(
     private val diagnostics: DiagnosticsLogger,
     private val onIssueChanged: () -> Unit,
-    private val onInventoryChanged: () -> Unit,
+    private val onCatalogChanged: () -> Unit,
+    private val onStaffChanged: () -> Unit,
     private val onStatus: (Status) -> Unit = {}
 ) {
     enum class Status { CONNECTING, ONLINE, FALLBACK, OFFLINE }
@@ -114,7 +115,8 @@ class RealtimeClient(
             reconnectAttempt = 0
             synchronized(joins) { joins.clear() }
             join(webSocket, ISSUE_TOPIC)
-            join(webSocket, INVENTORY_TOPIC)
+            join(webSocket, CATALOG_TOPIC)
+            join(webSocket, STAFF_TOPIC)
             heartbeat?.cancel(false)
             heartbeat = scheduler.scheduleAtFixedRate({
                 if (running) sendHeartbeat()
@@ -141,7 +143,8 @@ class RealtimeClient(
                     val payload = message.optJSONObject("payload") ?: return
                     when {
                         topic == ISSUE_TOPIC && payload.optString("event") == "issue_changed" -> onIssueChanged()
-                        topic == INVENTORY_TOPIC && payload.optString("event") == "snapshot_published" -> onInventoryChanged()
+                        topic == CATALOG_TOPIC && payload.optString("event") == "catalog_changed" -> onCatalogChanged()
+                        topic == STAFF_TOPIC && payload.optString("event") == "staff_changed" -> onStaffChanged()
                     }
                 }
                 "phx_error", "phx_close" -> {
@@ -221,6 +224,7 @@ class RealtimeClient(
 
     companion object {
         private const val ISSUE_TOPIC = "realtime:site:1291:issues"
-        private const val INVENTORY_TOPIC = "realtime:site:1291:inventory"
+        private const val CATALOG_TOPIC = "realtime:site:1291:catalog"
+        private const val STAFF_TOPIC = "realtime:site:1291:staff"
     }
 }

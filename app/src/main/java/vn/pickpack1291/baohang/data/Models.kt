@@ -15,7 +15,6 @@ enum class UserRole(val wire: String, val label: String) {
     val canManageOperationalSla: Boolean get() = this in setOf(ADMIN, ADMIN_INVENT)
     val canReassign: Boolean get() = this in setOf(ADMIN, ADMIN_INVENT)
     val canImportSku: Boolean get() = this in setOf(ADMIN, ADMIN_INVENT)
-    val canSeeExactInventory: Boolean get() = this != PICKER
 
     companion object {
         fun from(value: String?): UserRole = when (value?.trim()?.uppercase()) {
@@ -32,8 +31,8 @@ enum class IssueStatus(val wire: String, val label: String, val criticalForPicke
     CLAIMED("CLAIMED", "ĐANG XỬ LÝ"),
     SEARCHING("SEARCHING", "ĐANG XỬ LÝ"),
     REPLENISHING("REPLENISHING", "ĐANG XỬ LÝ"),
-    AVAILABLE("AVAILABLE", "ĐÃ CÓ HÀNG / CHÂM BÙ", true),
-    SKIP_ALLOWED("SKIP_ALLOWED", "ĐƯỢC PHÉP SKIP", true),
+    AVAILABLE("AVAILABLE", "ĐÃ CÓ HÀNG • QUAY LẠI LẤY HÀNG", true),
+    SKIP_ALLOWED("SKIP_ALLOWED", "CHO PHÉP SKIP • TIẾP TỤC CÔNG VIỆC", true),
     CLOSED("CLOSED", "ĐÃ ĐÓNG");
 
     val isOpenBucket: Boolean get() = this in setOf(OPEN, CLAIMED, SEARCHING, REPLENISHING)
@@ -50,7 +49,10 @@ data class UserProfile(
     val fullName: String,
     val contractor: String,
     val role: UserRole,
-    val active: Boolean = true
+    val active: Boolean = true,
+    val sourceKind: String = "MANUAL",
+    val sourcePosition: String = "",
+    val protectedAccount: Boolean = false
 ) {
     companion object {
         fun fromJson(json: JSONObject) = UserProfile(
@@ -59,7 +61,10 @@ data class UserProfile(
             fullName = json.optString("full_name"),
             contractor = json.optString("contractor"),
             role = UserRole.from(json.optString("role")),
-            active = json.optBoolean("active", true)
+            active = json.optBoolean("active", true),
+            sourceKind = json.optString("source_kind", "MANUAL"),
+            sourcePosition = json.optString("source_position"),
+            protectedAccount = json.optBoolean("protected_account", false)
         )
     }
 }
@@ -144,20 +149,25 @@ data class OperationalConfig(
     val acknowledgeMinutes: Int = 15,
     val reminderMinutes: Int = 5,
     val replenishMinutes: Int = 15,
-    val pickerAckReminderMinutes: Int = 3
+    val pickerAckReminderMinutes: Int = 3,
+    val autoSkipEnabled: Boolean = false,
+    val autoSkipAfterMinutes: Int = 120
 ) {
     fun toJson() = JSONObject()
         .put("acknowledge_minutes", acknowledgeMinutes)
         .put("reminder_minutes", reminderMinutes)
         .put("replenish_minutes", replenishMinutes)
         .put("picker_ack_reminder_minutes", pickerAckReminderMinutes)
-
+        .put("auto_skip_enabled", autoSkipEnabled)
+        .put("auto_skip_after_minutes", autoSkipAfterMinutes)
     companion object {
         fun fromJson(json: JSONObject) = OperationalConfig(
             acknowledgeMinutes = json.optInt("acknowledge_minutes", 15),
             reminderMinutes = json.optInt("reminder_minutes", 5),
             replenishMinutes = json.optInt("replenish_minutes", 15),
-            pickerAckReminderMinutes = json.optInt("picker_ack_reminder_minutes", 3)
+            pickerAckReminderMinutes = json.optInt("picker_ack_reminder_minutes", 3),
+            autoSkipEnabled = json.optBoolean("auto_skip_enabled", false),
+            autoSkipAfterMinutes = json.optInt("auto_skip_after_minutes", 120)
         )
     }
 }
@@ -169,12 +179,10 @@ data class AppConfig(
     val pickerAckReminderMinutes: Int = 3,
     val diagnosticLogRetentionDays: Int = 14,
     val retentionDays: Int = 60,
-    val inventoryAutoSyncEnabled: Boolean = false,
-    val inventorySyncIntervalMinutes: Int = 10,
-    val inventoryOperatingStartHour: Int = 0,
-    val inventoryOperatingEndHour: Int = 23,
-    val inventoryFreshMinutes: Int = 10,
-    val inventoryStaleMinutes: Int = 30
+    val autoSkipEnabled: Boolean = false,
+    val autoSkipAfterMinutes: Int = 120,
+    val staffAutoSyncEnabled: Boolean = true,
+    val staffSyncIntervalMinutes: Int = 60
 ) {
     fun toJson() = JSONObject()
         .put("acknowledge_minutes", acknowledgeMinutes)
@@ -183,13 +191,10 @@ data class AppConfig(
         .put("picker_ack_reminder_minutes", pickerAckReminderMinutes)
         .put("diagnostic_log_retention_days", diagnosticLogRetentionDays)
         .put("retention_days", retentionDays)
-        .put("inventory_auto_sync_enabled", inventoryAutoSyncEnabled)
-        .put("inventory_sync_interval_minutes", inventorySyncIntervalMinutes)
-        .put("inventory_operating_start_hour", inventoryOperatingStartHour)
-        .put("inventory_operating_end_hour", inventoryOperatingEndHour)
-        .put("inventory_fresh_minutes", inventoryFreshMinutes)
-        .put("inventory_stale_minutes", inventoryStaleMinutes)
-
+        .put("auto_skip_enabled", autoSkipEnabled)
+        .put("auto_skip_after_minutes", autoSkipAfterMinutes)
+        .put("staff_auto_sync_enabled", staffAutoSyncEnabled)
+        .put("staff_sync_interval_minutes", staffSyncIntervalMinutes)
     companion object {
         fun fromJson(json: JSONObject) = AppConfig(
             acknowledgeMinutes = json.optInt("acknowledge_minutes", 15),
@@ -198,34 +203,10 @@ data class AppConfig(
             pickerAckReminderMinutes = json.optInt("picker_ack_reminder_minutes", 3),
             diagnosticLogRetentionDays = json.optInt("diagnostic_log_retention_days", 14),
             retentionDays = json.optInt("retention_days", 60),
-            inventoryAutoSyncEnabled = json.optBoolean("inventory_auto_sync_enabled", false),
-            inventorySyncIntervalMinutes = json.optInt("inventory_sync_interval_minutes", 10),
-            inventoryOperatingStartHour = json.optInt("inventory_operating_start_hour", 0),
-            inventoryOperatingEndHour = json.optInt("inventory_operating_end_hour", 23),
-            inventoryFreshMinutes = json.optInt("inventory_fresh_minutes", 10),
-            inventoryStaleMinutes = json.optInt("inventory_stale_minutes", 30)
-        )
-    }
-}
-
-data class InventoryStatus(
-    val sku: String,
-    val freshnessStatus: String,
-    val stockStatus: String,
-    val snapshotCapturedAt: String?,
-    val pickableBinQty: Double? = null,
-    val pendingOutQty: Double? = null,
-    val availableQty: Double? = null
-) {
-    companion object {
-        fun fromJson(json: JSONObject) = InventoryStatus(
-            sku = json.optString("sku"),
-            freshnessStatus = json.optString("freshness_status", "UNKNOWN"),
-            stockStatus = json.optString("stock_status", "NO_DATA"),
-            snapshotCapturedAt = json.optString("snapshot_captured_at").ifBlank { null },
-            pickableBinQty = json.opt("pickable_bin_qty")?.toString()?.toDoubleOrNull(),
-            pendingOutQty = json.opt("pickable_pending_out_qty")?.toString()?.toDoubleOrNull(),
-            availableQty = json.opt("pickable_available_qty")?.toString()?.toDoubleOrNull()
+            autoSkipEnabled = json.optBoolean("auto_skip_enabled", false),
+            autoSkipAfterMinutes = json.optInt("auto_skip_after_minutes", 120),
+            staffAutoSyncEnabled = json.optBoolean("staff_auto_sync_enabled", true),
+            staffSyncIntervalMinutes = json.optInt("staff_sync_interval_minutes", 60)
         )
     }
 }

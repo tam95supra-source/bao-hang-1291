@@ -55,22 +55,23 @@ class OverlayAlertService : Service() {
         val sku = intent.getStringExtra(EXTRA_SKU).orEmpty()
         val product = intent.getStringExtra(EXTRA_PRODUCT).orEmpty()
         val status = IssueStatus.from(intent.getStringExtra(EXTRA_STATUS))
+        if (status !in setOf(IssueStatus.AVAILABLE, IssueStatus.SKIP_ALLOWED)) { dismiss(); return }
         val message = intent.getStringExtra(EXTRA_MESSAGE).orEmpty()
-        val critical = intent.getBooleanExtra(EXTRA_CRITICAL, status.criticalForPicker)
-        val canClaim = intent.getBooleanExtra(EXTRA_CAN_CLAIM, false) && issueId.isNotBlank()
+        val critical = true
+        val canClaim = false
         currentCritical = critical
         val view = LayoutInflater.from(this).inflate(R.layout.overlay_alert, null)
-        view.setBackgroundResource(if (critical) R.drawable.bg_overlay_critical else R.drawable.bg_overlay_info)
-        view.findViewById<TextView>(R.id.tvOverlayStatus).text = status.label
+        view.setBackgroundResource(if (status == IssueStatus.AVAILABLE) R.drawable.bg_overlay_available else R.drawable.bg_overlay_skip)
+        view.findViewById<TextView>(R.id.tvOverlayStatus).text = if (status == IssueStatus.AVAILABLE) "ĐÃ CÓ HÀNG • QUAY LẠI LẤY HÀNG" else "CHO PHÉP SKIP • TIẾP TỤC CÔNG VIỆC"
         view.findViewById<TextView>(R.id.tvOverlaySku).text = "SKU $sku"
         view.findViewById<TextView>(R.id.tvOverlayProduct).text = product
         view.findViewById<TextView>(R.id.tvOverlayMessage).text = message
         val ack = view.findViewById<Button>(R.id.btnOverlayAck)
         val hint = view.findViewById<TextView>(R.id.tvOverlayDismissHint)
-        ack.visibility = if (critical || canClaim) View.VISIBLE else View.GONE
-        hint.visibility = if (critical) View.GONE else View.VISIBLE
+        ack.visibility = View.VISIBLE
+        hint.visibility = View.VISIBLE
         if (critical) {
-            ack.text = "ĐÃ HIỂU"
+            ack.text = "ĐÃ XÁC NHẬN"
             ack.setOnClickListener {
                 if (!eventId.startsWith("test-")) {
                     scope.launch { (application as BaoHangApplication).repository.acknowledgeAlert(eventId) }
@@ -100,7 +101,7 @@ class OverlayAlertService : Service() {
         } else {
             view.setOnClickListener { dismiss() }
         }
-        val height = (resources.displayMetrics.heightPixels * if (critical) 0.40 else 0.34).toInt()
+        val height = (resources.displayMetrics.heightPixels * 0.40).toInt()
         val params = WindowManager.LayoutParams(
             (resources.displayMetrics.widthPixels * 0.94).toInt(), height,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

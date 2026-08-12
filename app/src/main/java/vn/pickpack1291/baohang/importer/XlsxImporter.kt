@@ -5,7 +5,6 @@ import android.net.Uri
 import android.util.Xml
 import org.xmlpull.v1.XmlPullParser
 import vn.pickpack1291.baohang.data.ImportUserRow
-import vn.pickpack1291.baohang.data.InventoryImportRow
 import vn.pickpack1291.baohang.data.SkuItem
 import vn.pickpack1291.baohang.data.UserRole
 import java.io.ByteArrayInputStream
@@ -21,7 +20,7 @@ class XlsxImporter(private val resolver: ContentResolver) {
         if (rows.isEmpty()) throw ImportException("File không có dữ liệu")
         val headers = headerMap(rows.first())
         val skuColumn = findHeader(headers, "sku", "ma sku")
-        val nameColumn = findHeader(headers, "ten san pham", "ten hang", "product name")
+        val nameColumn = findHeader(headers, "ten sku", "sku name", "ten san pham", "ten hang", "product name")
         val unique = linkedMapOf<String, SkuItem>()
         rows.drop(1).forEachIndexed { index, row ->
             val sku = row[skuColumn].orEmpty().trim()
@@ -67,46 +66,6 @@ class XlsxImporter(private val resolver: ContentResolver) {
         }
         if (unique.isEmpty()) throw ImportException("Không tìm thấy nhân sự hợp lệ")
         return unique.values.toList()
-    }
-
-    fun parseInventoryFile(uri: Uri): List<InventoryImportRow> {
-        val rows = readWorkbook(uri).rows
-        if (rows.isEmpty()) throw ImportException("File không có dữ liệu")
-        val headers = headerMap(rows.first())
-        val skuColumn = findHeader(headers, "sku", "ma sku")
-        val binQtyColumn = findHeader(headers, "ton bin")
-        val pendingColumn = findHeader(headers, "ton cho xuat")
-        val storageColumn = findHeader(headers, "tinh chat lt")
-        val binCodeColumn = findOptionalHeader(headers, "ma bin", "bin", "vi tri", "ma vtlt", "ma ptlt")
-        val result = mutableListOf<InventoryImportRow>()
-        rows.drop(1).forEachIndexed { index, row ->
-            val line = index + 2
-            val sku = row[skuColumn].orEmpty().trim()
-            if (sku.isBlank()) return@forEachIndexed
-            val binQty = parseNonNegative(row[binQtyColumn].orEmpty(), "Tồn Bin", line)
-            val pendingOut = parseNonNegative(row[pendingColumn].orEmpty().ifBlank { "0" }, "Tồn chờ Xuất", line)
-            val storage = row[storageColumn].orEmpty().trim()
-            if (storage.isBlank()) throw ImportException("Dòng $line: thiếu Tính chất LT")
-            val storageNormalized = normalize(storage)
-            result += InventoryImportRow(
-                rowKey = line.toString(),
-                sku = sku,
-                binCode = binCodeColumn?.let { row[it].orEmpty().trim() }.orEmpty(),
-                storageType = storage,
-                isPickable = storageNormalized in setOf("pickable", "co the lay hang"),
-                binQty = binQty,
-                pendingOutQty = pendingOut
-            )
-        }
-        if (result.isEmpty()) throw ImportException("Không tìm thấy dòng Tồn Bin hợp lệ")
-        return result
-    }
-
-    private fun parseNonNegative(value: String, label: String, line: Int): Double {
-        val normalized = value.trim().replace(" ", "").replace(',', '.')
-        val parsed = normalized.toDoubleOrNull() ?: throw ImportException("Dòng $line: $label không phải số")
-        if (!parsed.isFinite() || parsed < 0) throw ImportException("Dòng $line: $label không hợp lệ")
-        return parsed
     }
 
     private fun readWorkbook(uri: Uri): ParsedWorkbook {
