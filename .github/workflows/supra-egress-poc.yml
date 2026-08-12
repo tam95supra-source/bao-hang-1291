@@ -1,0 +1,53 @@
+name: Supra egress POC
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/supra-egress-poc.request'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supra-egress-poc
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Probe Supra transport without credentials
+        shell: bash
+        run: |
+          set +e
+          host='api-supra.winmart.vn'
+          base='https://api-supra.winmart.vn'
+          endpoint='/sft3-hy1/api/v1/report/stock/binStocks'
+
+          echo '=== DNS ==='
+          getent ahostsv4 "$host" | head -n 5 || true
+
+          echo '=== TLS ==='
+          timeout 15 openssl s_client -connect "$host:443" -servername "$host" -brief </dev/null 2>&1 \
+            | sed -E 's/(Session-ID|Master-Key|PSK identity|SRP username).*/[REDACTED]/I' \
+            | head -n 30
+          echo "TLS_EXIT=${PIPESTATUS[0]}"
+
+          echo '=== ROOT HTTP/1.1 ==='
+          curl --http1.1 -sS -o /dev/null --connect-timeout 10 --max-time 15 \
+            -w 'ROOT_HTTP1 status=%{http_code} remote=%{remote_ip} verify=%{ssl_verify_result}\n' \
+            "$base/"
+          echo "ROOT_HTTP1_EXIT=$?"
+
+          echo '=== BINSTOCKS HTTP/1.1 UNSIGNED ==='
+          curl --http1.1 -sS -o /dev/null --connect-timeout 10 --max-time 15 \
+            -H 'accept: application/json' \
+            -w 'BINSTOCKS_HTTP1 status=%{http_code} remote=%{remote_ip} verify=%{ssl_verify_result}\n' \
+            "$base$endpoint"
+          echo "BINSTOCKS_HTTP1_EXIT=$?"
+
+          # Diagnostic probe only: a transport failure should still leave logs available.
+          exit 0
