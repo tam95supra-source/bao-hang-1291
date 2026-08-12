@@ -52,8 +52,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if grep -R -n -E 'BEGIN (RSA )?PRIVATE KEY|SUPABASE_SERVICE_ROLE_KEY[[:space:]]*=' web-admin/src supabase/functions; then
-            echo 'Secret-like material found' >&2
+          if grep -R -n -E -- '-----BEGIN (RSA )?PRIVATE KEY-----|SUPABASE_SERVICE_ROLE_KEY[[:space:]]*=' web-admin/src supabase/functions; then
+            echo 'Actual secret-like material found' >&2
             exit 1
           fi
       - name: Verify patch whitespace
