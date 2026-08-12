@@ -1,0 +1,4 @@
+[0m[1m[31merror[0m: The module's source code could not be parsed: Expression expected at file:///home/runner/work/bao-hang-1291/bao-hang-1291/supabase/functions/api/index.ts:692:32
+
+      case "issue-history": {    case "issue-history": {
+                                 ~~~~
