@@ -1,4 +1,4 @@
-name: Deploy Supabase Edge Function
+name: Deploy Supabase Edge Functions
 
 on:
   push:
@@ -29,5 +29,8 @@ jobs:
       - uses: supabase/setup-cli@v1
         with:
           version: latest
-      - name: Deploy API Edge Function
+      - name: Deploy Android API Edge Function
         run: supabase functions deploy api --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
+      - name: Deploy Web Admin API Edge Function
+        if: ${{ hashFiles('supabase/functions/web-api/index.ts') != '' }}
+        run: supabase functions deploy web-api --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
