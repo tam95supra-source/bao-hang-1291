@@ -27,10 +27,15 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: gradle/actions/setup-gradle@v6
-        with:
-          gradle-version: '8.9'
-          cache-disabled: true
+      - name: Install verified Gradle 8.9 without cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSLo "$RUNNER_TEMP/gradle-8.9-bin.zip" https://services.gradle.org/distributions/gradle-8.9-bin.zip
+          curl -fsSLo "$RUNNER_TEMP/gradle-8.9-bin.zip.sha256" https://services.gradle.org/distributions/gradle-8.9-bin.zip.sha256
+          echo "$(cat "$RUNNER_TEMP/gradle-8.9-bin.zip.sha256")  $RUNNER_TEMP/gradle-8.9-bin.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/gradle-8.9-bin.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-8.9/bin" >> "$GITHUB_PATH"
       - name: Harden transformation parser and Kotlin string generation
         shell: bash
         run: |
@@ -39,9 +44,6 @@ jobs:
           import re
           p = Path('ops/patch_android_v13_clean.py')
           s = p.read_text(encoding='utf-8')
-          # Kotlin string templates may contain nested quotes. The original brace scanner
-          # is intentionally overridden with a class-member boundary scanner before any
-          # transformation runs, avoiding accidental truncation of member functions.
           override = r'''
           def brace_end(text, open_index):
               member = re.search(r'(?m)^    (?=(?:private\s+)?(?:suspend\s+)?fun\s+[A-Za-z_][A-Za-z0-9_]*\s*\(|companion\s+object\b)', text[open_index + 1:])
@@ -56,8 +58,6 @@ jobs:
           if marker not in s:
               raise SystemExit('Models marker missing')
           s = s.replace(marker, '\n' + override + marker, 1)
-          # Triple-double Python literals carrying Kotlin code must be raw so Kotlin
-          # \n escapes remain escapes instead of becoming illegal physical newlines.
           s = re.sub(r'([=,+])"""', r'\1r"""', s)
           p.write_text(s, encoding='utf-8')
           PY
