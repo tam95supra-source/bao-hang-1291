@@ -154,6 +154,31 @@ class ApiClient(
         return invoke("import-skus", JSONObject().put("items", array))
     }
 
+    suspend fun listUsers(): List<UserProfile> {
+        val array = invoke("list-users", JSONObject()).optJSONArray("users") ?: JSONArray()
+        return buildList { for (i in 0 until array.length()) add(UserProfile.fromJson(array.getJSONObject(i))) }
+    }
+
+    suspend fun updateUser(
+        id: String,
+        employeeCode: String,
+        fullName: String,
+        contractor: String,
+        role: vn.pickpack1291.baohang.data.UserRole,
+        active: Boolean,
+        newPassword: String
+    ): UserProfile {
+        val payload = JSONObject()
+            .put("id", id)
+            .put("employee_code", employeeCode)
+            .put("full_name", fullName)
+            .put("contractor", contractor)
+            .put("role", role.wire)
+            .put("active", active)
+        if (newPassword.isNotBlank()) payload.put("new_password", newPassword)
+        return UserProfile.fromJson(invoke("update-user", payload).getJSONObject("profile"))
+    }
+
     suspend fun importUsers(items: List<ImportUserRow>): JSONObject {
         val array = JSONArray()
         items.forEach {
@@ -177,7 +202,8 @@ class ApiClient(
             .put("sha256", bundle.sha256)
             .put("client_created_at", bundle.createdAt)
             .put("device_name", bundle.deviceName)
-            .put("app_version", BuildConfig.VERSION_NAME)
+            .put("app_version", "${BuildConfig.VERSION_NAME} [${BuildConfig.OTA_CHANNEL.uppercase()}]")
+            .put("ota_channel", BuildConfig.OTA_CHANNEL)
     )
 
     suspend fun invoke(action: String, payload: JSONObject): JSONObject = withContext(Dispatchers.IO) {

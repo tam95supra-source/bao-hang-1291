@@ -11,7 +11,7 @@ const previewOrigin = /^https:\/\/bao-hang-1291--[a-z0-9-]+\.web\.app$/i;
 const forwardedActions = new Set([
   "session-profile", "search-skus", "report-shortage", "active-issues", "issue-board", "my-issues",
   "claim-issue", "update-issue", "pending-alerts", "ack-alert", "get-config", "save-config",
-  "import-skus", "import-users", "sync-google-sheet", "reports-summary", "issue-history", "audit-history",
+  "import-skus", "import-users", "list-users", "update-user", "sync-google-sheet", "reports-summary", "issue-history", "audit-history",
   "upload-log", "list-logs", "download-log",
 ]);
 function isAllowedOrigin(origin: string): boolean { return productionOrigins.has(origin) || previewOrigin.test(origin); }

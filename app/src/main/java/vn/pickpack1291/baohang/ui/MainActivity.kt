@@ -13,6 +13,7 @@ import android.view.ViewGroup
 import android.widget.ArrayAdapter
 import android.widget.AutoCompleteTextView
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -29,11 +30,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import vn.pickpack1291.baohang.BaoHangApplication
+import vn.pickpack1291.baohang.BuildConfig
 import vn.pickpack1291.baohang.R
 import vn.pickpack1291.baohang.data.AppConfig
 import vn.pickpack1291.baohang.data.IssueBoard
 import vn.pickpack1291.baohang.data.SkuItem
 import vn.pickpack1291.baohang.data.StockIssue
+import vn.pickpack1291.baohang.data.UserProfile
 import vn.pickpack1291.baohang.data.UserRole
 import vn.pickpack1291.baohang.importer.XlsxImporter
 import vn.pickpack1291.baohang.update.AppUpdater
@@ -67,7 +70,7 @@ class MainActivity : AppCompatActivity() {
             renderForRole()
             checkPendingAlerts()
         }
-        AppUpdater(this).check()
+        AppUpdater(this, app.diagnostics).check()
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching { app.repository.flushOutbox() }
             runCatching { app.repository.syncCatalog() }
@@ -103,6 +106,12 @@ class MainActivity : AppCompatActivity() {
         scroll.addView(content, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         container.addView(scroll, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         content.addView(text(title, 22, true).apply { setPadding(0, 0, 0, dp(10)) })
+        content.addView(infoBox("Phiên bản ${BuildConfig.VERSION_NAME} • Kênh ${BuildConfig.OTA_CHANNEL.uppercase()}"))
+        if (BuildConfig.UPDATE_MANIFEST_URL.isNotBlank()) {
+            content.addView(button("KIỂM TRA CẬP NHẬT ${BuildConfig.OTA_CHANNEL.uppercase()}") {
+                AppUpdater(this, app.diagnostics).check(showUpToDate = true)
+            })
+        }
         if (app.session.profile?.role == UserRole.ADMIN && app.session.adminTestRole != null) {
             content.addView(button("THOÁT CHẾ ĐỘ KIỂM THỬ") {
                 app.repository.setAdminTestRole(null)
@@ -119,6 +128,7 @@ class MainActivity : AppCompatActivity() {
         content.addView(button("GIAO DIỆN NGƯỜI LẤY HÀNG") { showPicker() })
         content.addView(button("BÁO CÁO 30 NGÀY") { showReports() })
         content.addView(button("CẤU HÌNH HỆ THỐNG") { showConfig() })
+        content.addView(button("QUẢN LÝ NHÂN SỰ") { showUsers() })
         content.addView(button("IMPORT SKU.EXCEL") { chooseSku.launch(XLSX_MIME) })
         content.addView(button("IMPORT NHÂN SỰ.EXCEL") { chooseUsers.launch(XLSX_MIME) })
         content.addView(button("TẢI FILE NHÂN SỰ MẪU") { saveTemplate.launch("MAU_NHAN_SU_BAO_HANG_1291.xlsx") })
@@ -135,6 +145,7 @@ class MainActivity : AppCompatActivity() {
         val content = page("ADMIN INVENT")
         content.addView(button("BÁO HÀNG") { showInventBoard() })
         content.addView(button("BÁO CÁO 30 NGÀY") { showReports() })
+        content.addView(button("QUẢN LÝ NHÂN SỰ") { showUsers() })
         content.addView(button("IMPORT SKU.EXCEL") { chooseSku.launch(XLSX_MIME) })
         content.addView(button("ĐỒNG BỘ GOOGLE SHEET") { syncSheet() })
         addDiagnosticsButton(content)
@@ -302,6 +313,121 @@ class MainActivity : AppCompatActivity() {
                 .setPositiveButton("ĐÃ HIỂU") { _, _ -> lifecycleScope.launch { app.repository.acknowledgeAlert(alert.eventId) } }
                 .show()
         }
+    }
+
+
+    private fun showUsers() {
+        val content = page("QUẢN LÝ NHÂN SỰ")
+        content.addView(button("← VỀ MENU QUYỀN") { renderForRole() })
+        content.addView(infoBox("Admin có thể sửa mọi tài khoản nhưng ADMIN duy nhất vẫn không thể bị hạ quyền/vô hiệu hóa. Admin Invent chỉ sửa tài khoản Báo hàng Invent và Người lấy hàng."))
+        val status = text("Đang tải nhân sự…", 14, false)
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        content.addView(button("LÀM MỚI") { loadUsers(list, status) })
+        content.addView(status)
+        content.addView(list)
+        addDiagnosticsButton(content)
+        loadUsers(list, status)
+    }
+
+    private fun loadUsers(target: LinearLayout, status: TextView) {
+        lifecycleScope.launch {
+            status.text = "Đang tải nhân sự…"
+            runCatching { app.repository.listUsers() }
+                .onSuccess { users ->
+                    target.removeAllViews()
+                    status.text = "${users.size} tài khoản"
+                    if (users.isEmpty()) target.addView(infoBox("Chưa có tài khoản."))
+                    users.forEach { user ->
+                        val card = LinearLayout(this@MainActivity).apply {
+                            orientation = LinearLayout.VERTICAL
+                            setPadding(dp(12), dp(10), dp(12), dp(10))
+                            setBackgroundResource(R.drawable.bg_card)
+                            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(4), 0, dp(4)) }
+                        }
+                        card.addView(text("${user.employeeCode} • ${user.fullName}", 16, true))
+                        card.addView(text("${user.role.label} • ${if (user.active) "Đang hoạt động" else "Đã khóa"}${if (user.contractor.isNotBlank()) " • ${user.contractor}" else ""}", 13, false))
+                        val canEdit = when (app.session.effectiveRole) {
+                            UserRole.ADMIN -> true
+                            UserRole.ADMIN_INVENT -> user.role in setOf(UserRole.INVENT, UserRole.PICKER)
+                            else -> false
+                        }
+                        if (canEdit) card.addView(button("CHỈNH SỬA") { editUser(user) { loadUsers(target, status) } })
+                        target.addView(card)
+                    }
+                }
+                .onFailure { error ->
+                    status.text = "Lỗi: ${error.message}"
+                    app.diagnostics.error("user_list_failed", error)
+                }
+        }
+    }
+
+    private fun editUser(user: UserProfile, refresh: () -> Unit) {
+        val effective = app.session.effectiveRole
+        val allowedRoles = when {
+            user.role == UserRole.ADMIN -> listOf(UserRole.ADMIN)
+            effective == UserRole.ADMIN -> listOf(UserRole.ADMIN_INVENT, UserRole.INVENT, UserRole.PICKER)
+            else -> listOf(UserRole.INVENT, UserRole.PICKER)
+        }
+        val wrap = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0) }
+        fun field(hintText: String, value: String): EditText = EditText(this).apply {
+            hint = hintText
+            setText(value)
+            wrap.addView(this)
+        }
+        val employeeCode = field("Mã nhân viên", user.employeeCode)
+        val fullName = field("Họ tên", user.fullName)
+        val contractor = field("Nhà thầu", user.contractor)
+        val roleField = AutoCompleteTextView(this).apply {
+            hint = "Quyền"
+            threshold = 0
+            setText(user.role.wire, false)
+            setAdapter(ArrayAdapter(this@MainActivity, android.R.layout.simple_dropdown_item_1line, allowedRoles.map { it.wire }))
+            setOnClickListener { showDropDown() }
+            isEnabled = user.role != UserRole.ADMIN
+            wrap.addView(this)
+        }
+        val active = CheckBox(this).apply {
+            text = "Tài khoản đang hoạt động"
+            isChecked = user.active
+            isEnabled = user.role != UserRole.ADMIN
+            wrap.addView(this)
+        }
+        val password = EditText(this).apply {
+            hint = "Mật khẩu mới (để trống nếu giữ nguyên)"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            wrap.addView(this)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Chỉnh sửa ${user.employeeCode}")
+            .setView(wrap)
+            .setNegativeButton("HỦY", null)
+            .setPositiveButton("LƯU") { _, _ ->
+                val roleWire = roleField.text.toString().trim().uppercase()
+                val selectedRole = allowedRoles.firstOrNull { it.wire == roleWire }
+                if (selectedRole == null) {
+                    toast("Quyền không hợp lệ")
+                    return@setPositiveButton
+                }
+                lifecycleScope.launch {
+                    runCatching {
+                        app.repository.updateUser(
+                            user,
+                            employeeCode.text.toString().trim(),
+                            fullName.text.toString().trim(),
+                            contractor.text.toString().trim(),
+                            selectedRole,
+                            active.isChecked,
+                            password.text.toString()
+                        )
+                    }.onSuccess { updated ->
+                        toast("Đã cập nhật ${updated.employeeCode}")
+                        if (updated.id == app.session.profile?.id) runCatching { app.repository.refreshProfile() }
+                        refresh()
+                    }.onFailure { error -> toast(error.message ?: "Không cập nhật được nhân sự") }
+                }
+            }
+            .show()
     }
 
     private fun showReports() {

@@ -23,6 +23,10 @@
         android:theme="@style/Theme.BaoHang1291"
         android:usesCleartextTraffic="false">
 
+        <meta-data
+            android:name="vn.pickpack1291.baohang.OTA_CHANNEL"
+            android:value="${otaChannel}" />
+
         <activity
             android:name=".ui.MainActivity"
             android:exported="false" />

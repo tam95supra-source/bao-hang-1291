@@ -157,7 +157,7 @@ class AppRepository(
 
     suspend fun registerCurrentDevice() {
         val token = FirebaseMessaging.getInstance().token.await()
-        api.registerDevice(token, "${Build.MANUFACTURER} ${Build.MODEL}", BuildConfig.VERSION_NAME)
+        api.registerDevice(token, "${Build.MANUFACTURER} ${Build.MODEL}", "${BuildConfig.VERSION_NAME} [${BuildConfig.OTA_CHANNEL.uppercase()}]")
         session.markDeviceRegistered()
         diagnostics.info("device_registered", mapOf("device" to "${Build.MANUFACTURER} ${Build.MODEL}", "version" to BuildConfig.VERSION_NAME))
     }
@@ -165,7 +165,7 @@ class AppRepository(
     fun registerDeviceAsync(token: String) {
         scope.launch {
             runCatching {
-                api.registerDevice(token, "${Build.MANUFACTURER} ${Build.MODEL}", BuildConfig.VERSION_NAME)
+                api.registerDevice(token, "${Build.MANUFACTURER} ${Build.MODEL}", "${BuildConfig.VERSION_NAME} [${BuildConfig.OTA_CHANNEL.uppercase()}]")
                 session.markDeviceRegistered()
                 diagnostics.info("fcm_token_registered", mapOf("version" to BuildConfig.VERSION_NAME))
             }.onFailure { diagnostics.error("fcm_token_register_failed", it) }
@@ -185,6 +185,11 @@ class AppRepository(
     suspend fun getConfig() = api.getConfig()
     suspend fun saveConfig(config: AppConfig) = api.saveConfig(config)
     suspend fun importSkus(items: List<SkuItem>) = api.importSkus(items)
+    suspend fun listUsers() = api.listUsers()
+    suspend fun updateUser(user: UserProfile, employeeCode: String, fullName: String, contractor: String, role: UserRole, active: Boolean, newPassword: String) =
+        api.updateUser(user.id, employeeCode, fullName, contractor, role, active, newPassword).also {
+            diagnostics.info("user_updated", mapOf("target_employee_code" to it.employeeCode, "target_role" to it.role.wire, "active" to it.active))
+        }
     suspend fun importUsers(items: List<ImportUserRow>) = api.importUsers(items)
     suspend fun syncGoogleSheet() = api.syncGoogleSheet()
     suspend fun reportsSummary() = api.reportsSummary()
