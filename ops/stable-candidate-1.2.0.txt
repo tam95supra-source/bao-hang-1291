@@ -1,0 +1,1 @@
+Stable 1.2.0 code 3 is validation/build-only until Beta physical acceptance. Do not publish Stable OTA from this marker.
