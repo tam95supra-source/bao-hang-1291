@@ -21,7 +21,7 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v1.46.3
-      - name: Add no-data/retired compatibility routes
+      - name: Add no-data retired compatibility routes
         shell: bash
         run: |
           set -euo pipefail
@@ -32,28 +32,30 @@ jobs:
           marker = '    case "replace-catalog": return replaceCatalog(context, body);\n'
           if s.count(marker) != 1:
               raise SystemExit(f'Expected one replace-catalog route marker, got {s.count(marker)}')
-          compat = '''    // Stable 1.1.x compatibility only. Detailed inventory integration is retired;
-    // these routes never read credentials, sessions, source APIs, snapshots, or quantity data.
-    case "inventory-status": return {
-      sku: required(body.sku, "SKU"), freshness_status: "UNKNOWN", stock_status: "NO_DATA", snapshot_captured_at: null,
-    };
-    case "inventory-current":
-      requireRole(context, ["ADMIN", "ADMIN_INVENT", "INVENT"]);
-      return { items: [] };
-    case "inventory-summary":
-      requireRole(context, ["ADMIN", "ADMIN_INVENT"]);
-      return { current_sku_count: 0, snapshot: null, jobs: [], connection: { enabled: false, status: "RETIRED" }, config: {} };
-    case "inventory-sync-start":
-    case "inventory-recovery-start":
-    case "inventory-recovery-stage":
-    case "inventory-recovery-finalize":
-    case "inventory-job-cancel":
-      requireRole(context, ["ADMIN", "ADMIN_INVENT"]);
-      throw new HttpError(410, "Chức năng tồn kho chi tiết đã ngừng. Vui lòng dùng Danh mục SKU / Tên hàng ở phiên bản mới.");
-'''
+          lines = [
+              '    // Stable 1.1.x compatibility only. Detailed inventory integration is retired;',
+              '    // These routes never read credentials, sessions, source APIs, snapshots, or quantity data.',
+              '    case "inventory-status": return {',
+              '      sku: required(body.sku, "SKU"), freshness_status: "UNKNOWN", stock_status: "NO_DATA", snapshot_captured_at: null,',
+              '    };',
+              '    case "inventory-current":',
+              '      requireRole(context, ["ADMIN", "ADMIN_INVENT", "INVENT"]);',
+              '      return { items: [] };',
+              '    case "inventory-summary":',
+              '      requireRole(context, ["ADMIN", "ADMIN_INVENT"]);',
+              '      return { current_sku_count: 0, snapshot: null, jobs: [], connection: { enabled: false, status: "RETIRED" }, config: {} };',
+              '    case "inventory-sync-start":',
+              '    case "inventory-recovery-start":',
+              '    case "inventory-recovery-stage":',
+              '    case "inventory-recovery-finalize":',
+              '    case "inventory-job-cancel":',
+              '      requireRole(context, ["ADMIN", "ADMIN_INVENT"]);',
+              '      throw new HttpError(410, "Chức năng tồn kho chi tiết đã ngừng. Vui lòng dùng Danh mục SKU / Tên hàng ở phiên bản mới.");',
+          ]
+          compat = '\n'.join(lines) + '\n'
           p.write_text(s.replace(marker, compat + marker, 1), encoding='utf-8')
           PY
-      - name: Verify no retired integration code returned
+      - name: Verify retired integration stays removed
         shell: bash
         run: |
           set -euo pipefail
