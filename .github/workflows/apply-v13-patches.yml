@@ -30,7 +30,21 @@ jobs:
       - name: Transform Web
         run: python ops/patch_web_v13.py
       - name: Transform Android
-        run: python ops/patch_android_v13.py
+        shell: bash
+        run: |
+          set -o pipefail
+          python ops/patch_android_v13.py 2>&1 | tee ops/v13_transform_error.txt
+      - name: Persist transform diagnostic
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'bao-hang-1291-automation'
+          git config user.email 'actions@users.noreply.github.com'
+          test -s ops/v13_transform_error.txt || printf 'Android transform failed without diagnostic output\n' > ops/v13_transform_error.txt
+          git add ops/v13_transform_error.txt
+          git commit -m 'Capture v1.3 transform diagnostic' || true
+          git push origin HEAD:work/beta-catalog-staff-ux-v13
       - name: Source safety guard
         shell: bash
         run: |
@@ -41,7 +55,7 @@ jobs:
             web-admin/src app/src/main supabase/functions || { echo 'Secret-like material found' >&2; exit 1; }
           git diff --check
       - name: Remove one-time transformation tooling
-        run: rm -f ops/patch_api_v13.py ops/patch_web_v13.py ops/patch_android_v13.py .github/workflows/apply-v13-patches.yml
+        run: rm -f ops/patch_api_v13.py ops/patch_web_v13.py ops/patch_android_v13.py ops/v13_transform_error.txt .github/workflows/apply-v13-patches.yml
       - name: Commit transformed source
         shell: bash
         run: |
