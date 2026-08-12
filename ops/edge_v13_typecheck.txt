@@ -1,4 +1,39 @@
-[0m[1m[31merror[0m: The module's source code could not be parsed: Expression expected at file:///home/runner/work/bao-hang-1291/bao-hang-1291/supabase/functions/api/index.ts:692:32
+[0m[32mDownload[0m https://jsr.io/@supabase/supabase-js/meta.json
+[0m[32mDownload[0m https://jsr.io/@supabase/supabase-js/2.112.3_meta.json
+[0m[32mDownload[0m https://jsr.io/@supabase/supabase-js/2.112.3/src/index.ts
+[0m[32mDownload[0m https://jsr.io/@supabase/supabase-js/2.112.3/src/SupabaseClient.ts
+[0m[32mDownload[0m https://jsr.io/@supabase/supabase-js/2.112.3/src/lib/types.ts
+[0m[32mDownload[0m https://jsr.io/@supabase/supabase-js/2.112.3/src/lib/constants.ts
+[0m[32mDownload[0m https://jsr.io/@supabase/supabase-js/2.112.3/src/lib/fetch.ts
+[0m[32mDownload[0m https://jsr.io/@supabase/supabase-js/2.112.3/src/lib/helpers.ts
+[0m[32mDownload[0m https://jsr.io/@supabase/supabase-js/2.112.3/src/lib/SupabaseAuthClient.ts
+[0m[32mDownload[0m https://jsr.io/@supabase/supabase-js/2.112.3/src/lib/rest/types/common/rpc.ts
+[0m[32mDownload[0m https://jsr.io/@supabase/supabase-js/2.112.3/src/lib/rest/types/common/common.ts
+[0m[32mDownload[0m https://jsr.io/@supabase/supabase-js/2.112.3/src/lib/version.ts
+[0m[32mDownload[0m https://jsr.io/@supabase/supabase-js/2.112.3/src/_internal/tracing/index.ts
+[0m[32mDownload[0m https://jsr.io/@supabase/supabase-js/2.112.3/src/lib/tracingRegistry.ts
+[0m[32mDownload[0m https://jsr.io/@supabase/supabase-js/2.112.3/src/_internal/tracing/types.ts
+[0m[32mDownload[0m https://jsr.io/@supabase/supabase-js/2.112.3/src/_internal/tracing/create-extractor.ts
+[0m[32mDownload[0m https://jsr.io/@supabase/supabase-js/2.112.3/src/_internal/tracing/parse.ts
+[0m[32mDownload[0m https://jsr.io/@supabase/supabase-js/2.112.3/src/_internal/tracing/validate.ts
+[0m[32mDownload[0m https://jsr.io/@supabase/supabase-js/2.112.3/src/_internal/tracing/defaults.ts
+[0m[32mDownload[0m https://registry.npmjs.org/@supabase/auth-js
+[0m[32mDownload[0m https://registry.npmjs.org/@supabase/postgrest-js
+[0m[32mDownload[0m https://registry.npmjs.org/@supabase/realtime-js
+[0m[32mDownload[0m https://registry.npmjs.org/@supabase/functions-js
+[0m[32mDownload[0m https://registry.npmjs.org/@supabase/storage-js
+[0m[32mDownload[0m https://registry.npmjs.org/tslib
+[0m[32mDownload[0m https://registry.npmjs.org/iceberg-js
+[0m[32mDownload[0m https://registry.npmjs.org/@supabase/phoenix
+[0m[32mDownload[0m https://registry.npmjs.org/@supabase/storage-js/-/storage-js-2.112.3.tgz
+[0m[32mDownload[0m https://registry.npmjs.org/@supabase/realtime-js/-/realtime-js-2.112.3.tgz
+[0m[32mDownload[0m https://registry.npmjs.org/@supabase/auth-js/-/auth-js-2.112.3.tgz
+[0m[32mDownload[0m https://registry.npmjs.org/@supabase/functions-js/-/functions-js-2.112.3.tgz
+[0m[32mDownload[0m https://registry.npmjs.org/@supabase/postgrest-js/-/postgrest-js-2.112.3.tgz
+[0m[32mDownload[0m https://registry.npmjs.org/tslib/-/tslib-2.8.1.tgz
+[0m[32mDownload[0m https://registry.npmjs.org/iceberg-js/-/iceberg-js-0.8.1.tgz
+[0m[32mDownload[0m https://registry.npmjs.org/@supabase/phoenix/-/phoenix-0.4.5.tgz
+[0m[1m[31merror[0m: The module's source code could not be parsed: Expected '(', got ']' at file:///home/runner/work/bao-hang-1291/bao-hang-1291/supabase/functions/web-api/index.ts:19:25
 
-      case "issue-history": {    case "issue-history": {
-                                 ~~~~
+  function isAllowedOrigin]);
+                          ~
