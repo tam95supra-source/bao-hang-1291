@@ -9,9 +9,12 @@ const LOG_BUCKET = "diagnostic-logs";
 const MAX_LOG_BYTES = 2 * 1024 * 1024;
 const ACTIVE_STATUSES = ["OPEN", "CLAIMED", "SEARCHING", "REPLENISHING"];
 const SITE_ID = "1291";
+const PROTECTED_ADMIN_CODE = "6281280";
+const STAFF_SHEET_ID = "1FRROqCp1lmkuHc3lc4UBpVI5_ZrtiPI1thlEymv458E";
+const STAFF_SHEET_NAME = "DANH MỤC NHÂN SỰ";
 
 type Role = "ADMIN" | "ADMIN_INVENT" | "INVENT" | "PICKER";
-type Profile = { id: string; employee_code: string; full_name: string; contractor: string; role: Role; active: boolean };
+type Profile = { id: string; employee_code: string; full_name: string; contractor: string; role: Role; active: boolean; source_kind?: string; source_position?: string; protected_account?: boolean };
 type Context = { userId: string; profile: Profile; effectiveRole: Role; client: SupabaseClient };
 
 class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
@@ -96,8 +99,8 @@ async function notifyUsers(userIds: string[], issue: Record<string, unknown>, st
   const titleMap: Record<string, string> = {
     OPEN: `Báo thiếu • SKU ${issue.sku}`,
     CLAIMED: `Đã nhận xử lý • SKU ${issue.sku}`,
-    AVAILABLE: `Đã có hàng • SKU ${issue.sku}`,
-    SKIP_ALLOWED: `Được phép SKIP • SKU ${issue.sku}`,
+    AVAILABLE: `ĐÃ CÓ HÀNG • SKU ${issue.sku}`,
+    SKIP_ALLOWED: `CHO PHÉP SKIP • SKU ${issue.sku}`,
     REASSIGNED: `Điều phối xử lý • SKU ${issue.sku}`,
   };
   const rows = unique.map((userId) => ({
@@ -231,101 +234,69 @@ async function bootstrapAdmin(req: Request, body: Record<string, unknown>) {
 
 async function importUsers(context: Context, items: Record<string, unknown>[]) {
   requireRole(context, ["ADMIN", "ADMIN_INVENT"]);
-  let created = 0;
-  let updated = 0;
+  let created = 0, updated = 0;
   const errors: string[] = [];
   for (const [index, item] of items.entries()) {
     try {
       const code = required(item.employee_code, "Mã nhân viên").trim();
-      const role = String(item.role ?? "").trim().toUpperCase() as Role;
-      const allowedRoles = context.effectiveRole === "ADMIN" ? new Set(["ADMIN_INVENT", "INVENT", "PICKER"]) : new Set(["INVENT", "PICKER"]);
-      if (!allowedRoles.has(role)) throw new Error(context.effectiveRole === "ADMIN" ? "Quyền chỉ được là ADMIN_INVENT, INVENT hoặc PICKER" : "Admin Event chỉ được quản lý Người báo hàng hoặc Picker");
-      const { data: existing } = await admin.from("profiles").select("id,role").ilike("employee_code", code).maybeSingle();
-      if (existing?.role === "ADMIN") throw new Error("Tài khoản ADMIN duy nhất được bảo vệ");
-      if (context.effectiveRole === "ADMIN_INVENT" && existing && !["INVENT", "PICKER"].includes(existing.role)) throw new Error("Admin Event không được sửa tài khoản quyền cao");
-      const profile = {
-        employee_code: code,
-        full_name: required(item.full_name, "Họ tên"),
-        contractor: String(item.contractor ?? ""),
-        role,
-        active: Boolean(item.active),
-        updated_at: new Date().toISOString(),
-      };
+      if (code === PROTECTED_ADMIN_CODE) throw new Error("Tài khoản quản trị cao nhất được bảo vệ");
+      const role = String(item.role ?? "PICKER").trim().toUpperCase() as Role;
+      const allowed = context.effectiveRole === "ADMIN" ? new Set<Role>(["ADMIN_INVENT","INVENT","PICKER"]) : new Set<Role>(["PICKER"]);
+      if (!allowed.has(role)) throw new Error(context.effectiveRole === "ADMIN" ? "Admin hệ thống chỉ tạo thêm Admin Event, Người báo hàng hoặc Picker" : "Admin Event chỉ được tạo thêm Picker / Người lấy hàng");
+      const { data: existing, error: existingError } = await admin.from("profiles").select("id,role,source_kind,protected_account").ilike("employee_code", code).maybeSingle();
+      if (existingError) throw existingError;
+      if (existing?.protected_account || existing?.role === "ADMIN") throw new Error("Tài khoản quản trị cao nhất được bảo vệ");
+      if (existing?.source_kind === "GSHEET") throw new Error("Nhân sự đồng bộ từ Google Sheet chỉ được cập nhật từ nguồn");
+      const profile = { employee_code:code, full_name:required(item.full_name,"Họ tên"), contractor:String(item.contractor??""), role,
+        active:item.active===undefined?true:Boolean(item.active), source_kind:"MANUAL", source_position:"", source_last_seen_at:null, protected_account:false, updated_at:new Date().toISOString() };
       if (existing) {
-        const { error } = await admin.from("profiles").update(profile).eq("id", existing.id);
-        if (error) throw error;
-        updated++;
+        const { error } = await admin.from("profiles").update(profile).eq("id", existing.id); if (error) throw error; updated++;
       } else {
-        const password = required(item.initial_password, "Mật khẩu khởi tạo");
-        if (password.length < 8) throw new Error("Mật khẩu mới cần ít nhất 8 ký tự");
-        const { data, error } = await admin.auth.admin.createUser({ email: employeeEmail(code), password, email_confirm: true });
-        if (error || !data.user) throw error ?? new Error("Không tạo được tài khoản");
-        const { error: insertError } = await admin.from("profiles").insert({ id: data.user.id, ...profile });
-        if (insertError) throw insertError;
-        created++;
+        let password=String(item.initial_password??"").trim();
+        if(!password){const {data,error}=await admin.rpc("get_staff_default_password_service");if(error)throw error;password=String(data??"");}
+        if(password.length<8) throw new Error("Mật khẩu khởi tạo không hợp lệ");
+        const {data,error}=await admin.auth.admin.createUser({email:employeeEmail(code),password,email_confirm:true});
+        if(error||!data.user)throw error??new Error("Không tạo được tài khoản");
+        const {error:insertError}=await admin.from("profiles").insert({id:data.user.id,...profile});if(insertError)throw insertError;created++;
       }
-      await admin.from("sheet_export_queue").insert({ event_type: "USER_UPSERT", payload: profile });
-    } catch (error) {
-      errors.push(`Dòng ${index + 1}: ${errorText(error)}`);
-    }
+      await admin.from("sheet_export_queue").insert({event_type:"USER_UPSERT",payload:profile});
+    } catch(error){errors.push(`Dòng ${index+1}: ${errorText(error)}`);}
   }
-  return { created, updated, failed: errors.length, errors: errors.slice(0, 30) };
+  return {created,updated,failed:errors.length,errors:errors.slice(0,30)};
 }
 
 async function listUsers(context: Context) {
   requireRole(context, ["ADMIN", "ADMIN_INVENT"]);
-  let query = admin.from("profiles").select("id,employee_code,full_name,contractor,role,active", { count: "exact" }).order("employee_code").limit(2000);
-  if (context.effectiveRole === "ADMIN_INVENT") query = query.in("role", ["INVENT", "PICKER"]);
-  const { data, error, count } = await query;
-  if (error) throw error;
-  if ((count ?? 0) > 2000) throw new HttpError(409, "Số nhân sự vượt giới hạn 2000 tài khoản");
-  return { users: data ?? [], count: count ?? 0 };
+  let query=admin.from("profiles").select("id,employee_code,full_name,contractor,role,active,source_kind,source_position,source_last_seen_at,protected_account",{count:"exact"}).order("employee_code").limit(5000);
+  if(context.effectiveRole==="ADMIN_INVENT") query=query.neq("role","ADMIN");
+  const {data,error,count}=await query;if(error)throw error;
+  if((count??0)>5000)throw new HttpError(409,"Số nhân sự vượt giới hạn 5000 tài khoản");
+  return {users:data??[],count:count??0};
 }
 
 async function updateManagedUser(context: Context, body: Record<string, unknown>) {
-  requireRole(context, ["ADMIN", "ADMIN_INVENT"]);
-  const targetId = required(body.id, "User ID");
-  const { data: target, error: targetError } = await admin.from("profiles")
-    .select("id,employee_code,full_name,contractor,role,active").eq("id", targetId).single();
-  if (targetError || !target) throw new HttpError(404, "Không tìm thấy tài khoản");
-  if (context.effectiveRole === "ADMIN_INVENT" && !["INVENT", "PICKER"].includes(target.role)) throw new HttpError(403, "Admin Event chỉ được sửa Người báo hàng hoặc Picker");
-  const employeeCode = required(body.employee_code, "Mã nhân viên");
-  const fullName = required(body.full_name, "Họ tên");
-  const contractor = String(body.contractor ?? "").trim();
-  const role = String(body.role ?? target.role).trim().toUpperCase() as Role;
-  const active = typeof body.active === "boolean" ? body.active : Boolean(target.active);
-  const newPassword = String(body.new_password ?? "");
-  if (!["ADMIN", "ADMIN_INVENT", "INVENT", "PICKER"].includes(role)) throw new HttpError(400, "Quyền không hợp lệ");
-  if (newPassword && newPassword.length < 8) throw new HttpError(400, "Mật khẩu mới cần ít nhất 8 ký tự");
-  if (target.role === "ADMIN") {
-    if (context.effectiveRole !== "ADMIN") throw new HttpError(403, "Tài khoản ADMIN được bảo vệ");
-    if (role !== "ADMIN" || !active) throw new HttpError(409, "ADMIN_PROTECTED");
-  } else {
-    if (role === "ADMIN") throw new HttpError(409, "ADMIN_ALREADY_EXISTS");
-    if (context.effectiveRole === "ADMIN_INVENT" && !["INVENT", "PICKER"].includes(role)) throw new HttpError(403, "Admin Event không được cấp quyền cao hơn quyền của mình");
+  requireRole(context,["ADMIN","ADMIN_INVENT"]);
+  const targetId=required(body.id,"User ID");
+  const {data:target,error:targetError}=await admin.from("profiles").select("id,employee_code,full_name,contractor,role,active,source_kind,source_position,protected_account").eq("id",targetId).single();
+  if(targetError||!target)throw new HttpError(404,"Không tìm thấy tài khoản");
+  if(target.protected_account||target.employee_code===PROTECTED_ADMIN_CODE||target.role==="ADMIN")throw new HttpError(409,"ADMIN_PROTECTED");
+  if(target.source_kind==="GSHEET")throw new HttpError(409,"SOURCE_MANAGED_USER");
+  if(context.effectiveRole==="ADMIN_INVENT"&&target.role!=="PICKER")throw new HttpError(403,"Admin Event chỉ được quản lý Picker tạo thêm ngoài danh sách nguồn");
+  const employeeCode=required(body.employee_code,"Mã nhân viên"),fullName=required(body.full_name,"Họ tên"),contractor=String(body.contractor??"").trim();
+  const role=String(body.role??target.role).trim().toUpperCase() as Role,active=typeof body.active==="boolean"?body.active:Boolean(target.active),newPassword=String(body.new_password??"");
+  if(!["ADMIN_INVENT","INVENT","PICKER"].includes(role))throw new HttpError(400,"Quyền không hợp lệ");
+  if(context.effectiveRole==="ADMIN_INVENT"&&role!=="PICKER")throw new HttpError(403,"Admin Event chỉ được quản lý Picker");
+  if(newPassword&&newPassword.length<8)throw new HttpError(400,"Mật khẩu mới cần ít nhất 8 ký tự");
+  if(employeeCode===PROTECTED_ADMIN_CODE)throw new HttpError(409,"ADMIN_PROTECTED");
+  if(employeeCode.toLowerCase()!==String(target.employee_code).toLowerCase()){
+    const {data:duplicate,error}=await admin.from("profiles").select("id").ilike("employee_code",employeeCode).neq("id",targetId).maybeSingle();if(error)throw error;if(duplicate)throw new HttpError(409,"Mã nhân viên đã tồn tại");
   }
-  if (employeeCode.toLowerCase() !== String(target.employee_code).toLowerCase()) {
-    const { data: duplicate, error: duplicateError } = await admin.from("profiles").select("id")
-      .ilike("employee_code", employeeCode).neq("id", targetId).maybeSingle();
-    if (duplicateError) throw duplicateError;
-    if (duplicate) throw new HttpError(409, "Mã nhân viên đã tồn tại");
-  }
-  const values = { employee_code: employeeCode, full_name: fullName, contractor, role, active, updated_at: new Date().toISOString() };
-  const { data: updated, error: updateError } = await admin.from("profiles").update(values).eq("id", targetId)
-    .select("id,employee_code,full_name,contractor,role,active").single();
-  if (updateError || !updated) throw updateError ?? new Error("Không cập nhật được hồ sơ");
-  const authValues: { email?: string; password?: string } = {};
-  if (employeeCode.toLowerCase() !== String(target.employee_code).toLowerCase()) authValues.email = employeeEmail(employeeCode);
-  if (newPassword) authValues.password = newPassword;
-  if (Object.keys(authValues).length) {
-    const { error: authError } = await admin.auth.admin.updateUserById(targetId, authValues);
-    if (authError) {
-      await admin.from("profiles").update({ employee_code: target.employee_code, full_name: target.full_name, contractor: target.contractor, role: target.role, active: target.active, updated_at: new Date().toISOString() }).eq("id", targetId);
-      throw authError;
-    }
-  }
-  await admin.from("sheet_export_queue").insert({ event_type: "USER_UPSERT", payload: values });
-  return { profile: updated };
+  const values={employee_code:employeeCode,full_name:fullName,contractor,role,active,source_kind:"MANUAL",updated_at:new Date().toISOString()};
+  const {data:updated,error:updateError}=await admin.from("profiles").update(values).eq("id",targetId).select("id,employee_code,full_name,contractor,role,active,source_kind,source_position,source_last_seen_at,protected_account").single();
+  if(updateError||!updated)throw updateError??new Error("Không cập nhật được hồ sơ");
+  const authValues:{email?:string;password?:string}={};if(employeeCode.toLowerCase()!==String(target.employee_code).toLowerCase())authValues.email=employeeEmail(employeeCode);if(newPassword)authValues.password=newPassword;
+  if(Object.keys(authValues).length){const {error}=await admin.auth.admin.updateUserById(targetId,authValues);if(error)throw error;}
+  await admin.from("sheet_export_queue").insert({event_type:"USER_UPSERT",payload:values});return {profile:updated};
 }
 
 async function syncSheet() {
@@ -388,18 +359,11 @@ async function resendPendingCritical() {
 }
 
 async function slaTick(req: Request) {
-  const expected = Deno.env.get("CRON_SECRET") ?? "";
-  if (!expected || req.headers.get("x-cron-secret") !== expected) throw new HttpError(403, "Cron secret không đúng");
-  const { data: events, error } = await admin.rpc("process_sla");
-  if (error) throw error;
-  for (const event of events ?? []) {
-    const issue = (await issueRows([event.issue_id]))[0];
-    if (!issue) continue;
-    await notifyUsers(await inventUserIds(), issue, issue.status, `SKU ${issue.sku} đã quá thời gian xử lý; cần phản hồi ngay.`);
-  }
-  await resendPendingCritical();
-  try { await syncSheet(); } catch (error) { console.warn("Sheet sync deferred", errorText(error)); }
-  return { processed: events?.length ?? 0, critical_reminder_checked: true };
+  const expected=Deno.env.get("CRON_SECRET")??"";if(!expected||req.headers.get("x-cron-secret")!==expected)throw new HttpError(403,"Cron secret không đúng");
+  const {data:events,error}=await admin.rpc("process_sla");if(error)throw error;for(const event of events??[]){const issue=(await issueRows([event.issue_id]))[0];if(issue)await notifyUsers(await inventUserIds(),issue,issue.status,`SKU ${issue.sku} đã vượt mốc thời gian vận hành; cần kiểm tra và phản hồi.`);}
+  const {data:autoSkipped,error:autoSkipError}=await admin.rpc("auto_skip_overdue_service");if(autoSkipError)throw autoSkipError;for(const row of autoSkipped??[]){const issue=(await issueRows([row.issue_id]))[0];if(issue)await notifyUsers(await reporterIds(issue.id),issue,"SKIP_ALLOWED",`Không tìm thấy hàng để bổ sung cho SKU ${issue.sku} trong thời gian quy định. Bạn được phép SKIP SKU này và tiếp tục công việc.`,true);}
+  await resendPendingCritical();if(await staffSyncDue().catch(()=>false)){try{await syncStaffDirectory("AUTO",null);}catch(error){console.warn("Staff sync deferred",errorText(error));}}try{await syncSheet();}catch(error){console.warn("Sheet sync deferred",errorText(error));}
+  return {processed:events?.length??0,auto_skipped:autoSkipped?.length??0,critical_reminder_checked:true};
 }
 
 async function cleanupDiagnosticLogs() {
@@ -475,200 +439,37 @@ async function diagnosticLogDownload(context: Context, body: Record<string, unkn
   return { url: signed.signedUrl, expires_in: 120 };
 }
 
-async function aesKey(): Promise<CryptoKey> {
-  const master = Deno.env.get("SUPRA_CREDENTIAL_MASTER_KEY") ?? "";
-  if (master.length < 32) throw new HttpError(503, "SUPRA_CREDENTIAL_MASTER_KEY chưa được cấu hình an toàn");
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(master));
-  return crypto.subtle.importKey("raw", digest, "AES-GCM", false, ["encrypt", "decrypt"]);
+function parseCsv(text: string): string[][] {
+  const rows:string[][]=[];let row:string[]=[],cell="",quoted=false;
+  for(let i=0;i<text.length;i++){const c=text[i],n=text[i+1];if(quoted){if(c==='"'&&n==='"'){cell+='"';i++;}else if(c==='"')quoted=false;else cell+=c;continue;}if(c==='"')quoted=true;else if(c===','){row.push(cell);cell="";}else if(c==='\n'){row.push(cell.replace(/\r$/,""));rows.push(row);row=[];cell="";}else cell+=c;}
+  if(cell.length||row.length){row.push(cell.replace(/\r$/,""));rows.push(row);}return rows;
 }
-async function encryptCredential(bundle: Record<string, unknown>): Promise<string> {
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const plaintext = new TextEncoder().encode(JSON.stringify(bundle));
-  const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await aesKey(), plaintext));
-  return `v1:${b64(iv)}:${b64(encrypted)}`;
+function staffRole(position:string,employeeCode:string):Role{if(employeeCode===PROTECTED_ADMIN_CODE)return "ADMIN";return ["chuyen vien","truong nhom","truong kho"].includes(normalizeSearch(position))?"ADMIN_INVENT":"PICKER";}
+async function staffDefaultPassword():Promise<string>{const {data,error}=await admin.rpc("get_staff_default_password_service");if(error)throw error;const v=String(data??"");if(v.length<8)throw new HttpError(503,"Mật khẩu mặc định nhân sự chưa được cấu hình an toàn");return v;}
+async function staffSyncDue():Promise<boolean>{const {data:cfg,error}=await admin.from("app_config").select("staff_auto_sync_enabled,staff_sync_interval_minutes").eq("singleton",true).single();if(error)throw error;if(!cfg.staff_auto_sync_enabled)return false;const {data:last,error:e}=await admin.from("staff_sync_runs").select("finished_at").in("status",["SUCCEEDED","NO_CHANGE"]).order("finished_at",{ascending:false}).limit(1).maybeSingle();if(e)throw e;if(!last?.finished_at)return true;return Date.now()-new Date(last.finished_at).getTime()>=Math.max(15,Number(cfg.staff_sync_interval_minutes??60))*60000;}
+async function syncStaffDirectory(triggerSource:"AUTO"|"MANUAL"|"DEPLOY",actorId:string|null=null){
+  const {data:running}=await admin.from("staff_sync_runs").select("id,started_at").eq("status","RUNNING").gte("started_at",new Date(Date.now()-15*60000).toISOString()).limit(1).maybeSingle();if(running)return {status:"RUNNING",run_id:running.id,reused:true};
+  const {data:run,error:runError}=await admin.from("staff_sync_runs").insert({trigger_source:triggerSource,source_sheet_id:STAFF_SHEET_ID,requested_by:actorId}).select().single();if(runError||!run)throw runError??new Error("Không tạo được phiên đồng bộ nhân sự");
+  try{
+    const url=`https://docs.google.com/spreadsheets/d/${STAFF_SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(STAFF_SHEET_NAME)}`;const response=await fetch(url,{headers:{accept:"text/csv"},redirect:"follow"});if(!response.ok)throw new Error(`Google Sheet HTTP ${response.status}`);const text=await response.text();if(!text||text.length>5000000)throw new Error("Dữ liệu DANH MỤC NHÂN SỰ rỗng hoặc vượt giới hạn an toàn");
+    const rows=parseCsv(text);if(rows.length<2)throw new Error("DANH MỤC NHÂN SỰ không có dữ liệu");const headers=rows[0].map(normalizeSearch);const col=(...names:string[])=>{const a=names.map(normalizeSearch);const i=headers.findIndex(h=>a.includes(h));if(i<0)throw new Error(`Thiếu cột ${names[0]}`);return i;};
+    const cCode=col("Mã nhân viên"),cName=col("Họ tên"),cContractor=col("Nhà thầu"),cPosition=col("Vị trí chính"),cSite=col("Site"),cWarehouse=col("Kho");const byCode=new Map<string,{employee_code:string;full_name:string;contractor:string;source_position:string;role:Role}>();
+    for(const row of rows.slice(1)){const code=String(row[cCode]??"").trim(),full_name=String(row[cName]??"").trim();if(!code||!full_name)continue;if(String(row[cSite]??"").trim()!=="1291"||String(row[cWarehouse]??"").trim().toUpperCase()!=="HY1")continue;const source_position=String(row[cPosition]??"").trim();byCode.set(code,{employee_code:code,full_name,contractor:String(row[cContractor]??"").trim(),source_position,role:staffRole(source_position,code)});}
+    if(!byCode.size)throw new Error("Không có nhân sự Site 1291 / Kho HY1 trong nguồn");const canonical=[...byCode.values()].sort((a,b)=>a.employee_code.localeCompare(b.employee_code)).map(x=>`${x.employee_code}|${x.full_name}|${x.contractor}|${x.source_position}|${x.role}`).join("\n");const sourceHash=await sha256(canonical);
+    const {data:last}=await admin.from("staff_sync_runs").select("source_hash").in("status",["SUCCEEDED","NO_CHANGE"]).order("finished_at",{ascending:false}).limit(1).maybeSingle();if(triggerSource==="AUTO"&&last?.source_hash===sourceHash){await admin.from("staff_sync_runs").update({status:"NO_CHANGE",source_hash:sourceHash,source_rows:Math.max(0,rows.length-1),eligible_rows:byCode.size,finished_at:new Date().toISOString()}).eq("id",run.id);return {status:"NO_CHANGE",run_id:run.id,eligible_rows:byCode.size};}
+    const {data:profiles,error:profileError}=await admin.from("profiles").select("id,employee_code,full_name,contractor,role,active,source_kind,source_position,protected_account").limit(10000);if(profileError)throw profileError;const existing=new Map((profiles??[]).map((p:any)=>[String(p.employee_code).toLowerCase(),p]));const defaultPassword=await staffDefaultPassword();let created=0,updated=0,deactivated=0,failed=0;const failures:string[]=[],seen:string[]=[];
+    for(const staff of byCode.values()){const key=staff.employee_code.toLowerCase();seen.push(key);try{const old:any=existing.get(key);if(staff.employee_code===PROTECTED_ADMIN_CODE){if(old){const values={full_name:staff.full_name,contractor:staff.contractor,role:"ADMIN",active:true,protected_account:true,source_position:staff.source_position,source_last_seen_at:new Date().toISOString(),updated_at:new Date().toISOString()};const {error}=await admin.from("profiles").update(values).eq("id",old.id);if(error)throw error;updated++;}continue;}const values={employee_code:staff.employee_code,full_name:staff.full_name,contractor:staff.contractor,role:staff.role,active:true,source_kind:"GSHEET",source_position:staff.source_position,source_last_seen_at:new Date().toISOString(),protected_account:false,updated_at:new Date().toISOString()};if(old){if(old.protected_account||old.role==="ADMIN")continue;const {error}=await admin.from("profiles").update(values).eq("id",old.id);if(error)throw error;updated++;await admin.from("sheet_export_queue").insert({event_type:"USER_UPSERT",payload:{id:old.id,...values}});}else{const {data,error}=await admin.auth.admin.createUser({email:employeeEmail(staff.employee_code),password:defaultPassword,email_confirm:true});if(error||!data.user)throw error??new Error("Không tạo được tài khoản");const {error:ie}=await admin.from("profiles").insert({id:data.user.id,...values});if(ie)throw ie;created++;await admin.from("sheet_export_queue").insert({event_type:"USER_UPSERT",payload:{id:data.user.id,...values}});}}catch(error){failed++;failures.push(`${staff.employee_code}: ${errorText(error)}`);}}
+    if(failed===0){const missing=(profiles??[]).filter((p:any)=>p.source_kind==="GSHEET"&&!p.protected_account&&p.employee_code!==PROTECTED_ADMIN_CODE&&!seen.includes(String(p.employee_code).toLowerCase())&&p.active);for(const p of missing){const {error}=await admin.from("profiles").update({active:false,updated_at:new Date().toISOString()}).eq("id",p.id);if(error){failed++;failures.push(`${p.employee_code}: ${errorText(error)}`);continue;}deactivated++;await admin.from("sheet_export_queue").insert({event_type:"USER_UPSERT",payload:{id:p.id,employee_code:p.employee_code,full_name:p.full_name,contractor:p.contractor,role:p.role,active:false}});}}
+    await admin.from("profiles").update({role:"ADMIN",active:true,protected_account:true}).eq("employee_code",PROTECTED_ADMIN_CODE);const status=failed?"PARTIAL":"SUCCEEDED";await admin.from("staff_sync_runs").update({status,source_hash:sourceHash,source_rows:Math.max(0,rows.length-1),eligible_rows:byCode.size,created_count:created,updated_count:updated,deactivated_count:deactivated,failed_count:failed,error_summary:failures.slice(0,20).join("; ").slice(0,3000),finished_at:new Date().toISOString()}).eq("id",run.id);await admin.rpc("broadcast_staff_change_service",{p_payload:{run_id:run.id,status,created,updated,deactivated}}).catch(()=>{});return {status,run_id:run.id,eligible_rows:byCode.size,created,updated,deactivated,failed,errors:failures.slice(0,20)};
+  }catch(error){await admin.from("staff_sync_runs").update({status:"FAILED",failed_count:1,error_summary:errorText(error).slice(0,3000),finished_at:new Date().toISOString()}).eq("id",run.id);throw error;}
 }
-async function inventoryConnectionStatus(context: Context) {
-  requireRole(context, ["ADMIN", "ADMIN_INVENT"]);
-  const { data, error } = await admin.rpc("get_supra_connection_service", { p_site: SITE_ID });
-  if (error) throw error;
-  const c = data ?? {};
-  return {
-    warehouse_site_id: c.warehouse_site_id ?? SITE_ID,
-    warehouse_code: c.warehouse_code ?? "",
-    client_code: c.client_code ?? "",
-    enabled: Boolean(c.enabled),
-    status: c.status ?? "DISABLED",
-    credential_version: Number(c.credential_version ?? 0),
-    contract_verified: Boolean(c.source_contract?.verified === true),
-    last_tested_at: c.last_tested_at ?? null,
-    last_test_error: context.effectiveRole === "ADMIN" ? c.last_test_error ?? "" : "",
-    updated_at: c.updated_at ?? null,
-  };
-}
-async function updateInventoryCredential(context: Context, body: Record<string, unknown>) {
-  requireRole(context, ["ADMIN"]);
-  const credentials = body.credentials;
-  if (!credentials || typeof credentials !== "object" || Array.isArray(credentials)) throw new HttpError(400, "Bộ credential Supra không hợp lệ");
-  const allowed = ["authorization", "token", "apisid", "appid", "sid", "scid", "usid", "warehouse"];
-  const clean: Record<string, string> = {};
-  for (const key of allowed) {
-    const value = String((credentials as Record<string, unknown>)[key] ?? "").trim();
-    if (value) clean[key] = value;
-  }
-  for (const key of ["authorization", "token", "apisid", "sid", "scid", "usid"]) if (!clean[key]) throw new HttpError(400, `Credential Supra thiếu ${key}`);
-  const cipher = await encryptCredential(clean);
-  const { data, error } = await admin.rpc("set_supra_connection_service", {
-    p_site: SITE_ID, p_ciphertext: cipher, p_updated_by: context.userId, p_enabled: false,
-    p_status: "SOURCE_CONTRACT_UNVERIFIED", p_source_contract: { verified: false },
-  });
-  if (error) throw error;
-  return { ...data, credential_saved: true, credential_visible: false, requires_read_only_poc: true };
-}
+async function staffSyncStatus(context:Context){requireRole(context,["ADMIN","ADMIN_INVENT"]);const {data,error}=await admin.from("staff_sync_runs").select("*").order("started_at",{ascending:false}).limit(10);if(error)throw error;return {runs:data??[],source_sheet_id:STAFF_SHEET_ID,source_sheet_name:STAFF_SHEET_NAME};}
+async function replaceCatalog(context:Context,body:Record<string,unknown>){requireRole(context,["ADMIN","ADMIN_INVENT"]);const items=Array.isArray(body.items)?body.items as Record<string,unknown>[]:[];if(!items.length||items.length>10000)throw new HttpError(400,"File danh mục cần từ 1 đến 10.000 SKU");const clean=items.map(item=>({sku:required(item.sku,"SKU").trim(),product_name:required(item.product_name,"Tên sản phẩm").trim()}));const canonical=clean.slice().sort((a,b)=>a.sku.localeCompare(b.sku)).map(x=>`${x.sku}|${x.product_name}`).join("\n");const sourceSha=await sha256(canonical);const {data,error}=await admin.rpc("replace_sku_catalog_service",{p_items:clean,p_actor:context.userId,p_source_name:String(body.source_name??"Tồn Bin XLSX").slice(0,240),p_source_sha:sourceSha});if(error)throw error;return {...data,source_sha256:sourceSha};}
+async function deleteManagedUser(context:Context,body:Record<string,unknown>){requireRole(context,["ADMIN","ADMIN_INVENT"]);const id=required(body.id,"User ID");const {data:t,error}=await admin.from("profiles").select("id,employee_code,full_name,contractor,role,active,source_kind,protected_account").eq("id",id).single();if(error||!t)throw new HttpError(404,"Không tìm thấy tài khoản");if(t.protected_account||t.employee_code===PROTECTED_ADMIN_CODE||t.role==="ADMIN")throw new HttpError(409,"ADMIN_PROTECTED");if(t.source_kind==="GSHEET")throw new HttpError(409,"SOURCE_MANAGED_USER");if(context.effectiveRole==="ADMIN_INVENT"&&t.role!=="PICKER")throw new HttpError(403,"Admin Event chỉ được quản lý Picker tạo thêm");const {error:ue}=await admin.from("profiles").update({active:false,updated_at:new Date().toISOString()}).eq("id",id);if(ue)throw ue;await admin.from("sheet_export_queue").insert({event_type:"USER_UPSERT",payload:{...t,active:false,updated_at:new Date().toISOString()}});return {deleted:true,soft_deleted:true,id};}
+async function serviceMetrics(context:Context){requireRole(context,["ADMIN","ADMIN_INVENT"]);const [{data:usage,error},{data:lastStaff},{data:cfg}]=await Promise.all([admin.rpc("service_usage_snapshot"),admin.from("staff_sync_runs").select("status,finished_at,eligible_rows,failed_count").order("started_at",{ascending:false}).limit(1).maybeSingle(),admin.from("app_config").select("retention_days,diagnostic_log_retention_days,staff_auto_sync_enabled,staff_sync_interval_minutes,auto_skip_enabled,auto_skip_after_minutes").eq("singleton",true).single()]);if(error)throw error;return {usage,last_staff_sync:lastStaff??null,config:cfg??{},free_limits:{database_bytes:500*1024*1024,storage_bytes:1024*1024*1024,edge_invocations_month:500000,realtime_messages_month:2000000,realtime_peak_connections:200},cost_policy:{billing_enabled:false,paid_services_allowed:false,guard:"Firebase deploy chặn nếu billingEnabled=true"}};}
 
-function freshness(capturedAt: string | null, freshMinutes: number, staleMinutes: number): "UNKNOWN" | "FRESH" | "AGING" | "STALE" {
-  if (!capturedAt) return "UNKNOWN";
-  const age = (Date.now() - new Date(capturedAt).getTime()) / 60_000;
-  if (!Number.isFinite(age)) return "UNKNOWN";
-  if (age <= freshMinutes) return "FRESH";
-  if (age <= staleMinutes) return "AGING";
-  return "STALE";
-}
-async function inventoryConfig() {
-  const { data, error } = await admin.from("app_config").select("inventory_fresh_minutes,inventory_stale_minutes,inventory_auto_sync_enabled,inventory_sync_interval_minutes,inventory_operating_start_hour,inventory_operating_end_hour").eq("singleton", true).single();
-  if (error) throw error;
-  return data;
-}
-async function inventoryStatus(context: Context, body: Record<string, unknown>) {
-  const sku = required(body.sku, "SKU");
-  const [cfg, current] = await Promise.all([
-    inventoryConfig(),
-    admin.from("inventory_current").select("sku,snapshot_id,snapshot_captured_at,pickable_bin_qty,pickable_pending_out_qty,pickable_available_qty,other_stock_qty").eq("warehouse_site_id", SITE_ID).eq("sku", sku).maybeSingle(),
-  ]);
-  if (current.error) throw current.error;
-  if (!current.data) return { sku, freshness_status: "UNKNOWN", stock_status: "NO_DATA", snapshot_captured_at: null };
-  const fresh = freshness(current.data.snapshot_captured_at, Number(cfg.inventory_fresh_minutes), Number(cfg.inventory_stale_minutes));
-  const stockStatus = fresh === "STALE" ? "STALE" : Number(current.data.pickable_available_qty) > 0 ? "AVAILABLE" : "ZERO";
-  const base: Record<string, unknown> = { sku, freshness_status: fresh, stock_status: stockStatus, snapshot_captured_at: current.data.snapshot_captured_at, snapshot_id: current.data.snapshot_id };
-  if (context.effectiveRole !== "PICKER") Object.assign(base, {
-    pickable_bin_qty: current.data.pickable_bin_qty,
-    pickable_pending_out_qty: current.data.pickable_pending_out_qty,
-    pickable_available_qty: current.data.pickable_available_qty,
-    other_stock_qty: current.data.other_stock_qty,
-  });
-  return base;
-}
-async function inventoryCurrent(context: Context, body: Record<string, unknown>) {
-  requireRole(context, ["ADMIN", "ADMIN_INVENT", "INVENT"]);
-  const limit = Math.min(500, Math.max(1, Number(body.limit ?? 100)));
-  let query = admin.from("inventory_current").select("sku,snapshot_id,snapshot_captured_at,pickable_bin_qty,pickable_pending_out_qty,pickable_available_qty,other_stock_qty")
-    .eq("warehouse_site_id", SITE_ID).order("sku").limit(limit);
-  const q = String(body.query ?? "").trim().replace(/[%_]/g, "");
-  if (q) query = query.ilike("sku", `%${q}%`);
-  const { data, error } = await query;
-  if (error) throw error;
-  const cfg = await inventoryConfig();
-  return { items: (data ?? []).map((row) => ({ ...row, freshness_status: freshness(row.snapshot_captured_at, Number(cfg.inventory_fresh_minutes), Number(cfg.inventory_stale_minutes)) })) };
-}
-async function inventorySummary(context: Context) {
-  requireRole(context, ["ADMIN", "ADMIN_INVENT"]);
-  const [cfg, currentCount, snapshot, jobs, connection] = await Promise.all([
-    inventoryConfig(),
-    admin.from("inventory_current").select("sku", { count: "exact", head: true }).eq("warehouse_site_id", SITE_ID),
-    admin.from("inventory_snapshots").select("id,source,source_endpoint,source_captured_at,sha256,normalized_row_count,published_at").eq("warehouse_site_id", SITE_ID).order("published_at", { ascending: false }).limit(1).maybeSingle(),
-    admin.from("inventory_sync_jobs").select("id,state,requested_source,requested_at,started_at,finished_at,page_count,raw_row_count,normalized_row_count,error_code,error_message").eq("warehouse_site_id", SITE_ID).order("requested_at", { ascending: false }).limit(20),
-    inventoryConnectionStatus(context),
-  ]);
-  for (const result of [currentCount, snapshot, jobs]) if (result.error) throw result.error;
-  const snap = snapshot.data;
-  return {
-    current_sku_count: currentCount.count ?? 0,
-    snapshot: snap ? { ...snap, freshness_status: freshness(snap.source_captured_at, Number(cfg.inventory_fresh_minutes), Number(cfg.inventory_stale_minutes)), sha256_short: String(snap.sha256).slice(0, 12) } : null,
-    jobs: jobs.data ?? [],
-    connection,
-    config: cfg,
-  };
-}
-async function startRecoveryInventory(context: Context, body: Record<string, unknown>) {
-  requireRole(context, ["ADMIN", "ADMIN_INVENT"]);
-  const requestId = required(body.client_request_id, "client_request_id");
-  const { data: existing, error: existingError } = await admin.from("inventory_sync_jobs").select("*").eq("client_request_id", requestId).maybeSingle();
-  if (existingError) throw existingError;
-  if (existing) return { job: existing, duplicate_request: true };
-  const { data: active, error: activeError } = await admin.from("inventory_sync_jobs").select("*").eq("warehouse_site_id", SITE_ID).in("state", ["QUEUED", "CONNECTING", "FETCHING", "VALIDATING", "PUBLISHING"]).maybeSingle();
-  if (activeError) throw activeError;
-  if (active) return { job: active, duplicate_request: false, existing_active_job: true };
-  const { data: job, error } = await admin.from("inventory_sync_jobs").insert({
-    client_request_id: requestId, warehouse_site_id: SITE_ID, warehouse_code: "HY1", source: "MANUAL_XLSX",
-    source_endpoint: "RECOVERY_XLSX", requested_by: context.userId, requested_source: "RECOVERY", state: "FETCHING", started_at: new Date().toISOString(),
-  }).select().single();
-  if (error) throw error;
-  await admin.from("inventory_sync_audit").insert({ job_id: job.id, actor_id: context.userId, action: "RECOVERY_STARTED", detail: {} });
-  return { job, duplicate_request: false };
-}
-async function stageRecoveryInventory(context: Context, body: Record<string, unknown>) {
-  requireRole(context, ["ADMIN", "ADMIN_INVENT"]);
-  const jobId = required(body.job_id, "Job ID");
-  const items = Array.isArray(body.items) ? body.items as Record<string, unknown>[] : [];
-  if (!items.length || items.length > 1000) throw new HttpError(400, "Mỗi batch tồn bin cần 1–1000 dòng");
-  const normalized: Record<string, unknown>[] = [];
-  for (const [index, item] of items.entries()) {
-    const sku = required(item.sku, `SKU dòng ${index + 1}`);
-    const rowKey = required(item.row_key ?? `${body.batch_index ?? 0}-${index}`, "row_key");
-    const binQty = numberValue(item.bin_qty, "Tồn Bin", 0);
-    const pending = numberValue(item.pending_out_qty ?? 0, "Tồn chờ Xuất", 0);
-    const storageType = String(item.storage_type ?? "").trim();
-    const binCode = String(item.bin_code ?? "").trim();
-    const isPickable = Boolean(item.is_pickable);
-    const canonical = JSON.stringify({ row_key: rowKey, sku, bin_code: binCode, storage_type: storageType, is_pickable: isPickable, bin_qty: binQty, pending_out_qty: pending });
-    normalized.push({ row_key: rowKey, sku, bin_code: binCode, storage_type: storageType, is_pickable: isPickable, bin_qty: binQty, pending_out_qty: pending, raw_row_hash: await sha256(canonical) });
-  }
-  const { data, error } = await admin.rpc("stage_inventory_items_service", { p_job_id: jobId, p_rows: normalized });
-  if (error) throw error;
-  const { data: count } = await admin.rpc("inventory_staging_count_service", { p_job_id: jobId });
-  await admin.from("inventory_sync_jobs").update({ raw_row_count: count ?? 0, normalized_row_count: count ?? 0, heartbeat_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", jobId);
-  return { staged: data ?? 0, total_staged: count ?? 0 };
-}
-async function finalizeRecoveryInventory(context: Context, body: Record<string, unknown>) {
-  requireRole(context, ["ADMIN", "ADMIN_INVENT"]);
-  const jobId = required(body.job_id, "Job ID");
-  const { data: digestInput, error: digestError } = await admin.rpc("inventory_staging_digest_input_service", { p_job_id: jobId });
-  if (digestError) throw digestError;
-  if (!digestInput) throw new HttpError(409, "Chưa có dữ liệu staging để publish");
-  const { data: count, error: countError } = await admin.rpc("inventory_staging_count_service", { p_job_id: jobId });
-  if (countError) throw countError;
-  const capturedAt = body.source_captured_at ? new Date(String(body.source_captured_at)).toISOString() : new Date().toISOString();
-  const hash = await sha256(String(digestInput));
-  const { error: updateError } = await admin.from("inventory_sync_jobs").update({
-    state: "VALIDATING", source_captured_at: capturedAt, sha256: hash, page_count: 1,
-    raw_row_count: Number(count ?? 0), normalized_row_count: Number(count ?? 0), updated_at: new Date().toISOString(),
-  }).eq("id", jobId).eq("requested_by", context.userId);
-  if (updateError) throw updateError;
-  const { data, error } = await admin.rpc("finalize_inventory_snapshot", { p_job_id: jobId });
-  if (error) throw error;
-  return data;
-}
-async function startSupraInventory(context: Context, body: Record<string, unknown>) {
-  requireRole(context, ["ADMIN", "ADMIN_INVENT"]);
-  const status = await inventoryConnectionStatus(context);
-  if (!status.credential_version) throw new HttpError(409, "SUPRA_CREDENTIAL_REQUIRED");
-  if (!status.contract_verified) throw new HttpError(409, "SOURCE_CONTRACT_UNVERIFIED");
-  if (!status.enabled || status.status !== "CONNECTED") throw new HttpError(409, "SUPRA_CONNECTION_NOT_READY");
-  // The source handover intentionally requires a read-only POC before the production JSON contract is activated.
-  // No guessed pagination or field mapping is allowed here.
-  throw new HttpError(409, "SUPRA_POC_REQUIRED");
-}
-async function cancelInventoryJob(context: Context, body: Record<string, unknown>) {
-  requireRole(context, ["ADMIN", "ADMIN_INVENT"]);
-  const id = required(body.job_id, "Job ID");
-  const { data, error } = await admin.from("inventory_sync_jobs").update({ state: "CANCELLED", finished_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-    .eq("id", id).in("state", ["QUEUED", "CONNECTING", "FETCHING", "VALIDATING"]).select("id,state");
-  if (error) throw error;
-  if (!data?.length) throw new HttpError(409, "Job không còn ở trạng thái có thể hủy");
-  await admin.from("inventory_sync_audit").insert({ job_id: id, actor_id: context.userId, action: "CANCELLED", detail: {} });
-  return { cancelled: true, job_id: id };
-}
 
-async function route(req: Request) {
+async function route(req: Request) {async function route(req: Request) {
   const action = new URL(req.url).pathname.split("/").filter(Boolean).pop() ?? "";
   const body = req.method === "POST" ? await req.json().catch(() => ({})) as Record<string, unknown> : {};
   if (action === "bootstrap-admin") return bootstrapAdmin(req, body);
@@ -681,7 +482,7 @@ async function route(req: Request) {
     case "search-skus": {
       const q = normalizeSearch(required(body.query, "Từ khóa"));
       const tokens = q.split(" ").filter(Boolean).slice(0, 6);
-      let query = admin.from("sku_catalog").select("sku,product_name").limit(Math.min(50, Math.max(1, Number(body.limit ?? 20))));
+      let query = admin.from("sku_catalog").select("sku,product_name").eq("active", true).limit(Math.min(50, Math.max(1, Number(body.limit ?? 20))));
       for (const token of tokens) query = query.ilike("search_text", `%${token.replace(/[%_]/g, "")}%`);
       const { data, error } = await query.order("sku");
       if (error) throw error;
@@ -756,8 +557,8 @@ async function route(req: Request) {
       if (["AVAILABLE", "SKIP_ALLOWED"].includes(data.status)) {
         await admin.from("notification_events").update({ acknowledged_at: new Date().toISOString() }).eq("issue_id", data.id).eq("critical", true).is("acknowledged_at", null);
         const messages: Record<string, string> = {
-          AVAILABLE: `SKU ${data.sku} đã có hàng/châm bù. Vui lòng quay lại vị trí lấy hàng.`,
-          SKIP_ALLOWED: `Không tìm thấy SKU ${data.sku}. Bạn được phép SKIP SKU này.`,
+          AVAILABLE: `SKU ${data.sku} đã được bổ sung hàng. Vui lòng quay lại vị trí lấy hàng và tiếp tục thao tác.`,
+          SKIP_ALLOWED: `Không tìm thấy hàng để bổ sung cho SKU ${data.sku}. Bạn được phép SKIP SKU này và tiếp tục công việc.`,
         };
         await notifyUsers(await reporterIds(data.id), data, data.status, messages[data.status], true);
       }
@@ -806,18 +607,14 @@ async function route(req: Request) {
       return { registered: true };
     }
     case "sync-catalog": {
-      const limit = Math.min(1000, Math.max(1, Number(body.limit ?? 1000)));
-      const syncUntil = String(body.sync_until ?? new Date().toISOString());
-      let query = admin.from("sku_catalog").select("sku,product_name,updated_at").lte("updated_at", syncUntil).order("sku").limit(limit);
-      if (body.updated_since) query = query.gt("updated_at", String(body.updated_since));
-      if (body.after_sku) query = query.gt("sku", String(body.after_sku));
-      const { data, error } = await query;
-      if (error) throw error;
-      return { items: data ?? [], has_more: (data?.length ?? 0) === limit, sync_until: syncUntil };
+      const limit=Math.min(1000,Math.max(1,Number(body.limit??1000))),syncUntil=String(body.sync_until??new Date().toISOString());
+      const {data:cs,error:se}=await admin.from("catalog_state").select("revision").eq("singleton",true).single();if(se)throw se;
+      let query=admin.from("sku_catalog").select("sku,product_name,updated_at").eq("active",true).lte("updated_at",syncUntil).order("sku").limit(limit);if(body.after_sku)query=query.gt("sku",String(body.after_sku));const {data,error}=await query;if(error)throw error;
+      return {items:data??[],has_more:(data?.length??0)===limit,sync_until:syncUntil,catalog_revision:Number(cs.revision??1)};
     }
     case "get-operational-config": {
       requireRole(context, ["ADMIN", "ADMIN_INVENT"]);
-      const { data, error } = await admin.from("app_config").select("acknowledge_minutes,reminder_minutes,replenish_minutes,picker_ack_reminder_minutes").eq("singleton", true).single();
+      const { data, error } = await admin.from("app_config").select("acknowledge_minutes,reminder_minutes,replenish_minutes,picker_ack_reminder_minutes,auto_skip_enabled,auto_skip_after_minutes").eq("singleton", true).single();
       if (error) throw error;
       return data;
     }
@@ -826,11 +623,13 @@ async function route(req: Request) {
       const values = {
         acknowledge_minutes: Number(body.acknowledge_minutes), reminder_minutes: Number(body.reminder_minutes),
         replenish_minutes: Number(body.replenish_minutes), picker_ack_reminder_minutes: Number(body.picker_ack_reminder_minutes ?? 3),
+        auto_skip_enabled: Boolean(body.auto_skip_enabled), auto_skip_after_minutes: Number(body.auto_skip_after_minutes ?? 120),
         updated_by: context.userId, updated_at: new Date().toISOString(),
       };
       if ([values.acknowledge_minutes, values.reminder_minutes, values.replenish_minutes].some((v) => !Number.isInteger(v) || v < 1 || v > 480)) throw new HttpError(400, "Cấu hình SLA phải từ 1 đến 480 phút");
       if (!Number.isInteger(values.picker_ack_reminder_minutes) || values.picker_ack_reminder_minutes < 1 || values.picker_ack_reminder_minutes > 60) throw new HttpError(400, "Nhắc Picker phải từ 1 đến 60 phút");
-      const { data, error } = await admin.from("app_config").update(values).eq("singleton", true).select("acknowledge_minutes,reminder_minutes,replenish_minutes,picker_ack_reminder_minutes").single();
+      if (!Number.isInteger(values.auto_skip_after_minutes) || values.auto_skip_after_minutes < 15 || values.auto_skip_after_minutes > 4320) throw new HttpError(400, "Mốc tự động cho phép SKIP phải từ 15 phút đến 72 giờ");
+      const { data, error } = await admin.from("app_config").update(values).eq("singleton", true).select("acknowledge_minutes,reminder_minutes,replenish_minutes,picker_ack_reminder_minutes,auto_skip_enabled,auto_skip_after_minutes").single();
       if (error) throw error;
       return data;
     }
@@ -845,21 +644,25 @@ async function route(req: Request) {
       const values: Record<string, unknown> = {
         acknowledge_minutes: Number(body.acknowledge_minutes), reminder_minutes: Number(body.reminder_minutes), replenish_minutes: Number(body.replenish_minutes),
         picker_ack_reminder_minutes: Number(body.picker_ack_reminder_minutes ?? 3), diagnostic_log_retention_days: Number(body.diagnostic_log_retention_days ?? 14),
-        retention_days: Number(body.retention_days ?? 60), inventory_auto_sync_enabled: Boolean(body.inventory_auto_sync_enabled),
-        inventory_sync_interval_minutes: Number(body.inventory_sync_interval_minutes ?? 10), inventory_operating_start_hour: Number(body.inventory_operating_start_hour ?? 0),
-        inventory_operating_end_hour: Number(body.inventory_operating_end_hour ?? 23), inventory_fresh_minutes: Number(body.inventory_fresh_minutes ?? 10), inventory_stale_minutes: Number(body.inventory_stale_minutes ?? 30),
+        retention_days: Number(body.retention_days ?? 60), auto_skip_enabled: Boolean(body.auto_skip_enabled), auto_skip_after_minutes: Number(body.auto_skip_after_minutes ?? 120),
+        staff_auto_sync_enabled: Boolean(body.staff_auto_sync_enabled ?? true), staff_sync_interval_minutes: Number(body.staff_sync_interval_minutes ?? 60),
         updated_by: context.userId, updated_at: new Date().toISOString(),
       };
       if ([values.acknowledge_minutes, values.reminder_minutes, values.replenish_minutes].some((v) => !Number.isInteger(v) || Number(v) < 1 || Number(v) > 480)) throw new HttpError(400, "Cấu hình SLA phải từ 1 đến 480 phút");
       if (!Number.isInteger(values.picker_ack_reminder_minutes) || Number(values.picker_ack_reminder_minutes) < 1 || Number(values.picker_ack_reminder_minutes) > 60) throw new HttpError(400, "Nhắc Picker phải từ 1 đến 60 phút");
       if (!Number.isInteger(values.diagnostic_log_retention_days) || Number(values.diagnostic_log_retention_days) < 1 || Number(values.diagnostic_log_retention_days) > 60) throw new HttpError(400, "Lưu log phải từ 1 đến 60 ngày");
       if (!Number.isInteger(values.retention_days) || Number(values.retention_days) < 7 || Number(values.retention_days) > 365) throw new HttpError(400, "Retention nghiệp vụ phải từ 7 đến 365 ngày");
-      if (!Number.isInteger(values.inventory_sync_interval_minutes) || Number(values.inventory_sync_interval_minutes) < 10 || Number(values.inventory_sync_interval_minutes) > 120) throw new HttpError(400, "Chu kỳ tồn bin phải từ 10 đến 120 phút");
-      if (Number(values.inventory_fresh_minutes) >= Number(values.inventory_stale_minutes)) throw new HttpError(400, "Ngưỡng stale phải lớn hơn ngưỡng fresh");
+      if (!Number.isInteger(values.auto_skip_after_minutes) || Number(values.auto_skip_after_minutes) < 15 || Number(values.auto_skip_after_minutes) > 4320) throw new HttpError(400, "Mốc tự động SKIP phải từ 15 phút đến 72 giờ");
+      if (!Number.isInteger(values.staff_sync_interval_minutes) || Number(values.staff_sync_interval_minutes) < 15 || Number(values.staff_sync_interval_minutes) > 1440) throw new HttpError(400, "Chu kỳ đồng bộ nhân sự phải từ 15 phút đến 24 giờ");
       const { data, error } = await admin.from("app_config").update(values).eq("singleton", true).select().single();
       if (error) throw error;
       return data;
     }
+    case "replace-catalog": return replaceCatalog(context, body);
+    case "staff-sync-now": requireRole(context,["ADMIN","ADMIN_INVENT"]); return syncStaffDirectory("MANUAL",context.userId);
+    case "staff-sync-status": return staffSyncStatus(context);
+    case "service-metrics": return serviceMetrics(context);
+    case "delete-user": return deleteManagedUser(context, body);
     case "list-users": return listUsers(context);
     case "update-user": return updateManagedUser(context, body);
     case "import-skus": {
@@ -867,7 +670,7 @@ async function route(req: Request) {
       const items = Array.isArray(body.items) ? body.items as Record<string, unknown>[] : [];
       if (!items.length || items.length > 1000) throw new HttpError(400, "Mỗi lô cần 1–1000 SKU");
       const now = new Date().toISOString();
-      const rows = items.map((item) => ({ sku: required(item.sku, "SKU").trim(), product_name: required(item.product_name, "Tên sản phẩm").trim(), last_imported_at: now, updated_at: now }));
+      const rows = items.map((item) => ({ sku: required(item.sku, "SKU").trim(), product_name: required(item.product_name, "Tên sản phẩm").trim(), last_imported_at: now, updated_at: now, active: true }));
       const { error } = await admin.from("sku_catalog").upsert(rows, { onConflict: "sku" });
       if (error) throw error;
       return { imported: rows.length };
@@ -879,33 +682,14 @@ async function route(req: Request) {
     }
     case "sync-google-sheet": requireRole(context, ["ADMIN", "ADMIN_INVENT"]); return syncSheet();
     case "reports-summary": {
-      requireRole(context, ["ADMIN", "ADMIN_INVENT"]);
-      const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
-      const { data, error } = await admin.from("issues").select("sku,status,report_count,first_reported_at,resolved_at,claimed_at,previous_issue_id").gte("first_reported_at", since).limit(5000);
-      if (error) throw error;
-      const rows = data ?? [];
-      const byStatus: Record<string, number> = {};
-      const skuCounts = new Map<string, number>();
-      const durations: number[] = [];
-      const claimDurations: number[] = [];
-      rows.forEach((row) => {
-        byStatus[row.status] = (byStatus[row.status] ?? 0) + 1;
-        skuCounts.set(row.sku, (skuCounts.get(row.sku) ?? 0) + Number(row.report_count ?? 1));
-        if (row.resolved_at) durations.push((new Date(row.resolved_at).getTime() - new Date(row.first_reported_at).getTime()) / 60000);
-        if (row.claimed_at) claimDurations.push((new Date(row.claimed_at).getTime() - new Date(row.first_reported_at).getTime()) / 60000);
-      });
-      const percentile = (values: number[], p: number) => values.length ? [...values].sort((a, b) => a - b)[Math.min(values.length - 1, Math.floor((values.length - 1) * p))] : null;
-      const top_skus = [...skuCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20).map(([sku, reports]) => ({ sku, reports }));
-      return {
-        days: 30, issues: rows.length, reports: rows.reduce((s, r) => s + Number(r.report_count ?? 1), 0), by_status: byStatus,
-        average_resolution_minutes: durations.length ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length) : null,
-        median_resolution_minutes: percentile(durations, .5) == null ? null : Math.round(percentile(durations, .5)!),
-        p95_resolution_minutes: percentile(durations, .95) == null ? null : Math.round(percentile(durations, .95)!),
-        median_claim_minutes: percentile(claimDurations, .5) == null ? null : Math.round(percentile(claimDurations, .5)!),
-        recurrent_episodes: rows.filter((row) => row.previous_issue_id).length, top_skus,
-      };
+      requireRole(context,["ADMIN","ADMIN_INVENT"]);const now=Date.now(),since30=new Date(now-30*86400000).toISOString(),since24=new Date(now-86400000).toISOString();
+      const {data,error}=await admin.from("issues").select("id,sku,status,report_count,first_reported_at,resolved_at,claimed_at,previous_issue_id,claimed_by").gte("first_reported_at",since30).limit(10000);if(error)throw error;const rows=data??[],byStatus:Record<string,number>={},skuCounts=new Map<string,number>(),durations:number[]=[],claimDurations:number[]=[],hourly=new Array(24).fill(0);
+      for(const row of rows){byStatus[row.status]=(byStatus[row.status]??0)+1;skuCounts.set(row.sku,(skuCounts.get(row.sku)??0)+Number(row.report_count??1));if(row.resolved_at)durations.push((new Date(row.resolved_at).getTime()-new Date(row.first_reported_at).getTime())/60000);if(row.claimed_at)claimDurations.push((new Date(row.claimed_at).getTime()-new Date(row.first_reported_at).getTime())/60000);if(row.first_reported_at>=since24)hourly[new Date(row.first_reported_at).getHours()]+=Number(row.report_count??1);}
+      const percentile=(v:number[],p:number)=>v.length?[...v].sort((a,b)=>a-b)[Math.min(v.length-1,Math.floor((v.length-1)*p))]:null;const topKeys=[...skuCounts.entries()].sort((a,b)=>b[1]-a[1]).slice(0,20).map(([sku])=>sku),skuNames=new Map<string,string>();if(topKeys.length){const {data:c}=await admin.from("sku_catalog").select("sku,product_name").in("sku",topKeys);(c??[]).forEach((r:any)=>skuNames.set(r.sku,r.product_name));}
+      const {data:cfg}=await admin.from("app_config").select("acknowledge_minutes,auto_skip_enabled,auto_skip_after_minutes").eq("singleton",true).single();const overdueCutoff=new Date(now-Math.max(1,Number(cfg?.acknowledge_minutes??15))*60000).toISOString();const {count:overdue}=await admin.from("issues").select("id",{count:"exact",head:true}).in("status",ACTIVE_STATUSES).lte("first_reported_at",overdueCutoff);const {count:autoSkipCount}=await admin.from("issue_audit").select("id",{count:"exact",head:true}).eq("action","AUTO_SKIP").gte("created_at",since30);const last24=rows.filter((r:any)=>r.first_reported_at>=since24),resolved24=last24.filter((r:any)=>r.resolved_at);
+      return {days:30,issues:rows.length,reports:rows.reduce((sum,r)=>sum+Number(r.report_count??1),0),by_status:byStatus,active_now:rows.filter((r:any)=>ACTIVE_STATUSES.includes(r.status)).length,overdue_now:overdue??0,last_24h:{issues:last24.length,reports:last24.reduce((sum,r)=>sum+Number(r.report_count??1),0),resolved:resolved24.length,available:last24.filter((r:any)=>r.status==="AVAILABLE").length,skipped:last24.filter((r:any)=>r.status==="SKIP_ALLOWED").length},average_resolution_minutes:durations.length?Math.round(durations.reduce((a,b)=>a+b,0)/durations.length):null,median_resolution_minutes:percentile(durations,.5)==null?null:Math.round(percentile(durations,.5)!),p95_resolution_minutes:percentile(durations,.95)==null?null:Math.round(percentile(durations,.95)!),median_claim_minutes:percentile(claimDurations,.5)==null?null:Math.round(percentile(claimDurations,.5)!),p95_claim_minutes:percentile(claimDurations,.95)==null?null:Math.round(percentile(claimDurations,.95)!),recurrent_episodes:rows.filter((r:any)=>r.previous_issue_id).length,auto_skip_count_30d:autoSkipCount??0,auto_skip_enabled:Boolean(cfg?.auto_skip_enabled),auto_skip_after_minutes:Number(cfg?.auto_skip_after_minutes??120),top_skus:[...skuCounts.entries()].sort((a,b)=>b[1]-a[1]).slice(0,20).map(([sku,reports])=>({sku,product_name:skuNames.get(sku)??"",reports})),hourly_reports_24h:hourly};
     }
-    case "issue-history": {
+    case "issue-history": {    case "issue-history": {
       requireRole(context, ["ADMIN", "ADMIN_INVENT"]);
       const { data, error } = await admin.from("issues").select("id").order("created_at", { ascending: false }).limit(Math.min(500, Math.max(1, Number(body.limit ?? 200))));
       if (error) throw error;
@@ -921,16 +705,6 @@ async function route(req: Request) {
     case "upload-log": return uploadDiagnosticLog(context, body);
     case "list-logs": return listDiagnosticLogs(context, body);
     case "download-log": return diagnosticLogDownload(context, body);
-    case "inventory-status": return inventoryStatus(context, body);
-    case "inventory-current": return inventoryCurrent(context, body);
-    case "inventory-summary": return inventorySummary(context);
-    case "inventory-connection-status": return inventoryConnectionStatus(context);
-    case "inventory-credential-update": return updateInventoryCredential(context, body);
-    case "inventory-sync-start": return startSupraInventory(context, body);
-    case "inventory-recovery-start": return startRecoveryInventory(context, body);
-    case "inventory-recovery-stage": return stageRecoveryInventory(context, body);
-    case "inventory-recovery-finalize": return finalizeRecoveryInventory(context, body);
-    case "inventory-job-cancel": return cancelInventoryJob(context, body);
     default: throw new HttpError(404, "Không tìm thấy chức năng");
   }
 }
@@ -955,11 +729,10 @@ Deno.serve(async (req) => {
       INVALID_ASSIGNEE: "Người nhận mới không hợp lệ hoặc đã bị khóa",
       ADMIN_PROTECTED: "Tài khoản ADMIN duy nhất được hệ thống bảo vệ",
       ADMIN_ALREADY_EXISTS: "Hệ thống chỉ cho phép duy nhất một ADMIN",
-      SUPRA_CREDENTIAL_REQUIRED: "Chưa có credential Supra trên server",
-      SOURCE_CONTRACT_UNVERIFIED: "Contract dữ liệu Supra chưa được POC read-only xác minh",
-      SUPRA_CONNECTION_NOT_READY: "Kết nối Supra chưa sẵn sàng",
-      SUPRA_POC_REQUIRED: "Cần hoàn tất POC read-only của API Supra trước khi bật đồng bộ tự động",
-      ROW_COUNT_MISMATCH: "Số dòng staging không khớp; snapshot cũ vẫn được giữ nguyên",
+      SOURCE_MANAGED_USER: "Nhân sự đồng bộ từ Google Sheet chỉ được cập nhật từ nguồn",
+      STAFF_DEFAULT_PASSWORD_NOT_CONFIGURED: "Mật khẩu mặc định nhân sự chưa được cấu hình an toàn",
+      CATALOG_ROW_COUNT_INVALID: "File danh mục SKU vượt giới hạn hoặc không có dữ liệu",
+      CATALOG_EMPTY: "Không tìm thấy SKU hợp lệ trong file",
     };
     const friendly = Object.entries(messages).find(([key]) => raw.includes(key))?.[1] ?? (status >= 500 ? "Lỗi máy chủ; dữ liệu hiện hành chưa bị thay đổi" : raw);
     return json({ error: friendly, code: Object.keys(messages).find((key) => raw.includes(key)) ?? undefined }, status);

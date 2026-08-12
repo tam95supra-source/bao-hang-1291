@@ -1,4 +1,0 @@
-  File "/home/runner/work/bao-hang-1291/bao-hang-1291/ops/patch_android_v13.py", line 286
-    }''')
-     ^
-SyntaxError: unterminated triple-quoted string literal (detected at line 305)

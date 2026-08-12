@@ -12,11 +12,11 @@ const forwardedActions = new Set([
   "session-profile", "search-skus", "report-shortage", "active-issues", "issue-board", "my-issues", "issue-detail",
   "claim-issue", "reassign-issue", "update-issue", "pending-alerts", "mark-alert-received", "mark-alert-displayed", "ack-alert",
   "get-operational-config", "save-operational-config", "get-config", "save-config",
-  "import-skus", "import-users", "list-users", "update-user", "sync-google-sheet", "reports-summary", "issue-history", "audit-history",
-  "upload-log", "list-logs", "download-log",
-  "inventory-status", "inventory-current", "inventory-summary", "inventory-connection-status", "inventory-credential-update",
-  "inventory-sync-start", "inventory-recovery-start", "inventory-recovery-stage", "inventory-recovery-finalize", "inventory-job-cancel",
+  "import-skus", "replace-catalog", "import-users", "list-users", "update-user", "delete-user",
+  "staff-sync-now", "staff-sync-status", "service-metrics",
+  "sync-google-sheet", "reports-summary", "issue-history", "audit-history", "upload-log", "list-logs", "download-log"
 ]);
+function isAllowedOrigin]);
 function isAllowedOrigin(origin: string): boolean { return productionOrigins.has(origin) || previewOrigin.test(origin); }
 function corsHeaders(req: Request): Record<string, string> {
   const origin = req.headers.get("origin") ?? "";
@@ -52,32 +52,11 @@ async function requireWebUser(req: Request) {
   return { user, profile, effectiveRole: (testRole || profile.role) as Role };
 }
 async function adminSummary(req: Request) {
-  const ctx = await requireWebUser(req);
-  if (!["ADMIN", "ADMIN_INVENT"].includes(ctx.effectiveRole)) throw new HttpError(403, "Bạn không có quyền xem tổng quan quản trị");
-  const [sku, profiles, activeUsers, openIssues, claimedIssues, pendingSheet, logs, inventory, inventoryJob] = await Promise.all([
-    admin.from("sku_catalog").select("sku", { count: "exact", head: true }),
-    admin.from("profiles").select("id", { count: "exact", head: true }),
-    admin.from("profiles").select("id", { count: "exact", head: true }).eq("active", true),
-    admin.from("issues").select("id", { count: "exact", head: true }).eq("status", "OPEN"),
-    admin.from("issues").select("id", { count: "exact", head: true }).in("status", ["CLAIMED", "SEARCHING", "REPLENISHING"]),
-    admin.from("sheet_export_queue").select("id", { count: "exact", head: true }).is("exported_at", null),
-    admin.from("diagnostic_logs").select("id", { count: "exact", head: true }),
-    admin.from("inventory_snapshots").select("id,source_captured_at,sha256,normalized_row_count").eq("warehouse_site_id", "1291").order("published_at", { ascending: false }).limit(1).maybeSingle(),
-    admin.from("inventory_sync_jobs").select("id,state,requested_at,error_code").eq("warehouse_site_id", "1291").order("requested_at", { ascending: false }).limit(1).maybeSingle(),
-  ]);
-  for (const result of [sku, profiles, activeUsers, openIssues, claimedIssues, pendingSheet, logs, inventory, inventoryJob]) if (result.error) throw result.error;
-  return {
-    sku_count: sku.count ?? 0,
-    profile_count: profiles.count ?? 0,
-    active_user_count: activeUsers.count ?? 0,
-    open_issue_count: openIssues.count ?? 0,
-    claimed_issue_count: claimedIssues.count ?? 0,
-    active_issue_count: (openIssues.count ?? 0) + (claimedIssues.count ?? 0),
-    pending_sheet_count: pendingSheet.count ?? 0,
-    diagnostic_log_count: logs.count ?? 0,
-    inventory_snapshot: inventory.data ?? null,
-    inventory_job: inventoryJob.data ?? null,
-  };
+  const ctx=await requireWebUser(req);if(!["ADMIN","ADMIN_INVENT"].includes(ctx.effectiveRole))throw new HttpError(403,"Bạn không có quyền xem tổng quan quản trị");
+  const [sku,profiles,activeUsers,openIssues,claimedIssues,pendingSheet,logs,staffRun]=await Promise.all([
+    admin.from("sku_catalog").select("sku",{count:"exact",head:true}).eq("active",true),admin.from("profiles").select("id",{count:"exact",head:true}),admin.from("profiles").select("id",{count:"exact",head:true}).eq("active",true),admin.from("issues").select("id",{count:"exact",head:true}).eq("status","OPEN"),admin.from("issues").select("id",{count:"exact",head:true}).in("status",["CLAIMED","SEARCHING","REPLENISHING"]),admin.from("sheet_export_queue").select("id",{count:"exact",head:true}).is("exported_at",null),admin.from("diagnostic_logs").select("id",{count:"exact",head:true}),admin.from("staff_sync_runs").select("status,finished_at,eligible_rows,failed_count").order("started_at",{ascending:false}).limit(1).maybeSingle()]);
+  for(const r of [sku,profiles,activeUsers,openIssues,claimedIssues,pendingSheet,logs,staffRun])if(r.error)throw r.error;
+  return {sku_count:sku.count??0,profile_count:profiles.count??0,active_user_count:activeUsers.count??0,open_issue_count:openIssues.count??0,claimed_issue_count:claimedIssues.count??0,active_issue_count:(openIssues.count??0)+(claimedIssues.count??0),pending_sheet_count:pendingSheet.count??0,diagnostic_log_count:logs.count??0,staff_sync:staffRun.data??null};
 }
 async function adminUserIndex(req: Request) {
   const ctx = await requireWebUser(req);
