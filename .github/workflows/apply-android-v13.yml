@@ -17,7 +17,7 @@ concurrency:
 jobs:
   transform:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
         with:
@@ -27,6 +27,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.9'
+          cache-disabled: true
       - name: Validate transformation script
         run: python -m py_compile ops/patch_android_v13_clean.py
       - name: Apply Android source transformation
@@ -41,7 +45,7 @@ jobs:
           fi
           git diff --check
       - name: Compile and unit test Android
-        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+        run: gradle --no-daemon testDebugUnitTest assembleDebug
       - name: Remove one-time tooling
         run: rm -f ops/patch_android_v13.py ops/patch_android_v13_clean.py .github/workflows/apply-android-v13.yml
       - name: Commit Android source
