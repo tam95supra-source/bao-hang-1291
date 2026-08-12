@@ -1,0 +1,23 @@
+name: One-time OTA staging cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/cleanup-ota-staging.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Delete merged OTA staging branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin --delete work/ota-channels-user-edit
+          echo 'OTA_STAGING_BRANCH_CLEANUP=PASS'
