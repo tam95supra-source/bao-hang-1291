@@ -1,0 +1,23 @@
+name: One-time Staging Branch Cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/cleanup-staging-branches.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Delete merged staging branches
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin --delete work/full-role-web-log-v2 work/full-role-web-log-v2-ready
+          echo 'STAGING_BRANCH_CLEANUP=PASS'
