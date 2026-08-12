@@ -1,0 +1,56 @@
+name: Apply Android v1.3 transformation
+
+on:
+  push:
+    branches: [work/beta-catalog-staff-ux-v13]
+    paths:
+      - 'ops/patch_android_v13_clean.py'
+      - '.github/workflows/apply-android-v13.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-v13-transform-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  transform:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: work/beta-catalog-staff-ux-v13
+          fetch-depth: 0
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Validate transformation script
+        run: python -m py_compile ops/patch_android_v13_clean.py
+      - name: Apply Android source transformation
+        run: python ops/patch_android_v13_clean.py
+      - name: Verify retired Android inventory/Supra paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R -n -E 'inventory-sync-start|inventory-credential-update|api-supra\.winmart\.vn|SCREEN_INVENTORY|TỒN SNAPSHOT' app/src/main; then
+            echo 'Retired Android inventory/Supra path remains' >&2
+            exit 1
+          fi
+          git diff --check
+      - name: Compile and unit test Android
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+      - name: Remove one-time tooling
+        run: rm -f ops/patch_android_v13.py ops/patch_android_v13_clean.py .github/workflows/apply-android-v13.yml
+      - name: Commit Android source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'bao-hang-1291-automation'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet && { echo 'No Android source changes'; exit 2; }
+          git commit -m 'Implement catalog-only Android UX and final picker alerts'
+          git push origin HEAD:work/beta-catalog-staff-ux-v13
