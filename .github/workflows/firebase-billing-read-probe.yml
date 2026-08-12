@@ -14,38 +14,60 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Authenticate Google service account
-        id: auth
-        uses: google-github-actions/auth@v3
-        with:
-          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          token_format: access_token
-          access_token_scopes: https://www.googleapis.com/auth/cloud-billing.readonly
-          create_credentials_file: false
-
-      - name: Read Cloud Billing association
+      - name: Read Cloud Billing association directly
         shell: bash
         env:
-          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         run: |
           set -euo pipefail
-          RESPONSE="$RUNNER_TEMP/billing.json"
-          CODE="$(curl -sS -o "$RESPONSE" -w '%{http_code}' \
-            -H "Authorization: Bearer $ACCESS_TOKEN" \
-            'https://cloudbilling.googleapis.com/v1/projects/bao-hang-1291/billingInfo')"
-          if [ "$CODE" != "200" ]; then
-            echo "CLOUD_BILLING_READ_HTTP=$CODE"
-            jq -r '.error.status // .error.message // "unknown"' "$RESPONSE" 2>/dev/null || true
-            exit 2
-          fi
-          ENABLED="$(jq -r '.billingEnabled // false' "$RESPONSE")"
-          if [ "$ENABLED" = "true" ]; then
-            echo 'FIREBASE_BILLING_ENABLED=true'
-            exit 3
-          fi
-          echo 'FIREBASE_BILLING_ENABLED=false'
-
-      - name: Cleanup
-        if: always()
-        shell: bash
-        run: rm -f "$RUNNER_TEMP/billing.json"
+          node <<'NODE'
+          const crypto = require('crypto');
+          const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
+          if (!sa.client_email || !sa.private_key) throw new Error('Service account JSON incomplete');
+          const enc = (v) => Buffer.from(typeof v === 'string' ? v : JSON.stringify(v))
+            .toString('base64url');
+          const now = Math.floor(Date.now() / 1000);
+          const header = enc({ alg: 'RS256', typ: 'JWT' });
+          const claim = enc({
+            iss: sa.client_email,
+            scope: 'https://www.googleapis.com/auth/cloud-billing.readonly',
+            aud: 'https://oauth2.googleapis.com/token',
+            iat: now,
+            exp: now + 900,
+          });
+          const unsigned = `${header}.${claim}`;
+          const signature = crypto.sign('RSA-SHA256', Buffer.from(unsigned), sa.private_key).toString('base64url');
+          const assertion = `${unsigned}.${signature}`;
+          async function main() {
+            const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+              method: 'POST',
+              headers: { 'content-type': 'application/x-www-form-urlencoded' },
+              body: new URLSearchParams({
+                grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+                assertion,
+              }),
+            });
+            if (!tokenRes.ok) throw new Error(`OAuth token HTTP ${tokenRes.status}`);
+            const token = await tokenRes.json();
+            const billingRes = await fetch('https://cloudbilling.googleapis.com/v1/projects/bao-hang-1291/billingInfo', {
+              headers: { Authorization: `Bearer ${token.access_token}` },
+            });
+            const raw = await billingRes.text();
+            if (!billingRes.ok) {
+              let message = `Cloud Billing HTTP ${billingRes.status}`;
+              try {
+                const j = JSON.parse(raw);
+                message += ` ${j?.error?.status || j?.error?.message || ''}`;
+              } catch {}
+              throw new Error(message.trim());
+            }
+            const info = JSON.parse(raw);
+            if (info.billingEnabled === true) {
+              console.log('FIREBASE_BILLING_ENABLED=true');
+              process.exitCode = 3;
+              return;
+            }
+            console.log('FIREBASE_BILLING_ENABLED=false');
+          }
+          main().catch((e) => { console.error(e.message); process.exitCode = 2; });
+          NODE
