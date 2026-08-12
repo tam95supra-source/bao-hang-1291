@@ -1,4 +1,4 @@
-name: Apply v1.3 source transformation
+name: Apply v1.3 backend web transformation
 
 on:
   push:
@@ -6,14 +6,13 @@ on:
     paths:
       - 'ops/patch_api_v13.py'
       - 'ops/patch_web_v13.py'
-      - 'ops/patch_android_v13.py'
       - '.github/workflows/apply-v13-patches.yml'
 
 permissions:
   contents: write
 
 concurrency:
-  group: v13-transform-${{ github.ref }}
+  group: v13-backend-web-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -29,92 +28,28 @@ jobs:
         run: python ops/patch_api_v13.py
       - name: Transform Web
         run: python ops/patch_web_v13.py
-      - name: Transform Android
+      - name: Fix staff realtime RPC call
         shell: bash
         run: |
-          set -euo pipefail
           python - <<'PY'
           from pathlib import Path
-          patch=Path('ops/patch_android_v13.py')
-          text=patch.read_text(encoding='utf-8')
-          lines=text.splitlines()
-          for marker in ("'overlay guard')", "'fcm final guard')"):
-              hits=[i for i,line in enumerate(lines) if marker in line]
-              if len(hits)!=1: raise SystemExit(f'compat {marker}: expected 1, got {len(hits)}')
-              lines[hits[0]]='s=s'
-          text='\n'.join(lines)+'\n'
-          for start_marker,end_marker,label in [
-              ('# reports professional','# SLA with auto skip','report'),
-              ('# users source-aware + create/delete manual','# edit role Admin Invent only Picker','staff-ui'),
-              ('# helper functions inserted before checkPendingAlerts','# visible ACK dialog final only professional','helper-ui')
-          ]:
-              a=text.find(start_marker); b=text.find(end_marker,a)
-              if a<0 or b<0: raise SystemExit(f'{label} isolation anchors missing')
-              text=text[:a]+text[b:]
-          patch.write_text(text,encoding='utf-8')
-
-          fcm=Path('app/src/main/java/vn/pickpack1291/baohang/notifications/StockMessagingService.kt')
-          s=fcm.read_text(encoding='utf-8')
-          anchor='        val status = data["status"].orEmpty()\n'
-          if s.count(anchor)!=1: raise SystemExit(f'fcm source anchor count={s.count(anchor)}')
-          s=s.replace(anchor,anchor+'        if (status !in setOf("AVAILABLE", "SKIP_ALLOWED")) {\n            app.diagnostics.info("picker_notification_suppressed", mapOf("status" to status))\n            return\n        }\n',1)
-          s=s.replace('val canClaim = status == "OPEN" && app.session.effectiveRole in setOf(UserRole.ADMIN, UserRole.ADMIN_INVENT, UserRole.INVENT)','val canClaim = false')
-          fcm.write_text(s,encoding='utf-8')
-
-          overlay=Path('app/src/main/java/vn/pickpack1291/baohang/notifications/OverlayAlertService.kt')
-          s=overlay.read_text(encoding='utf-8')
-          anchor='        val status = IssueStatus.from(intent.getStringExtra(EXTRA_STATUS))\n'
-          if s.count(anchor)!=1: raise SystemExit(f'overlay source anchor count={s.count(anchor)}')
-          s=s.replace(anchor,anchor+'        if (status !in setOf(IssueStatus.AVAILABLE, IssueStatus.SKIP_ALLOWED)) { dismiss(); return }\n',1)
-          s=s.replace('val critical = intent.getBooleanExtra(EXTRA_CRITICAL, status.criticalForPicker)','val critical = true')
-          s=s.replace('val canClaim = intent.getBooleanExtra(EXTRA_CAN_CLAIM, false) && issueId.isNotBlank()','val canClaim = false')
-          s=s.replace('view.setBackgroundResource(if (critical) R.drawable.bg_overlay_critical else R.drawable.bg_overlay_info)','view.setBackgroundResource(if (status == IssueStatus.AVAILABLE) R.drawable.bg_overlay_available else R.drawable.bg_overlay_skip)')
-          s=s.replace('view.findViewById<TextView>(R.id.tvOverlayStatus).text = status.label','view.findViewById<TextView>(R.id.tvOverlayStatus).text = if (status == IssueStatus.AVAILABLE) "ĐÃ CÓ HÀNG • QUAY LẠI LẤY HÀNG" else "CHO PHÉP SKIP • TIẾP TỤC CÔNG VIỆC"')
-          s=s.replace('ack.visibility = if (critical || canClaim) View.VISIBLE else View.GONE','ack.visibility = View.VISIBLE')
-          s=s.replace('hint.visibility = if (critical) View.GONE else View.VISIBLE','hint.visibility = View.VISIBLE')
-          s=s.replace('ack.text = "ĐÃ HIỂU"','ack.text = "ĐÃ XÁC NHẬN"')
-          s=s.replace('val height = (resources.displayMetrics.heightPixels * if (critical) 0.40 else 0.34).toInt()','val height = (resources.displayMetrics.heightPixels * 0.40).toInt()')
-          overlay.write_text(s,encoding='utf-8')
-          PY
-          set -o pipefail
-          python ops/patch_android_v13.py 2>&1 | tee ops/v13_transform_error.txt
-      - name: Add Android navigation and service screen helpers
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          p=Path('app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt')
+          p=Path('supabase/functions/api/index.ts')
           s=p.read_text(encoding='utf-8')
-          anchor='    private suspend fun checkPendingAlerts() {'
-          if s.count(anchor)!=1: raise SystemExit(f'helper insertion anchor={s.count(anchor)}')
-          helper='''    private fun showServiceMetrics() {\n        val content = page("HỆ THỐNG & DUNG LƯỢNG", SCREEN_SERVICES)\n        val body = infoBox("Đang đọc số liệu hệ thống…")\n        content.addView(body)\n        lifecycleScope.launch {\n            runCatching { app.api.invoke("service-metrics", JSONObject()) }\n                .onSuccess { data ->\n                    val usage = data.optJSONObject("usage") ?: JSONObject()\n                    val limits = data.optJSONObject("free_limits") ?: JSONObject()\n                    val dbBytes = usage.optLong("database_bytes")\n                    val dbLimit = limits.optLong("database_bytes", 1L).coerceAtLeast(1L)\n                    val percent = dbBytes * 100.0 / dbLimit\n                    body.text = "FREE 0đ • KHÔNG TỰ BẬT BILLING\\n\\n" +\n                        "Database: %.1f MB / %.0f MB (%.1f%%)\\n".format(dbBytes / 1048576.0, dbLimit / 1048576.0, percent) +\n                        "SKU hoạt động: ${usage.optInt("sku_active")}\\n" +\n                        "Nhân sự hoạt động: ${usage.optInt("profiles_active")}\\n" +\n                        "Ticket đang mở: ${usage.optInt("issues_active")}\\n" +\n                        "FCM token hoạt động: ${usage.optInt("active_device_tokens")}\\n" +\n                        "Google Sheet chờ: ${usage.optInt("sheet_pending")}\\n" +\n                        "Log chẩn đoán: %.2f MB\\n\\n".format(usage.optLong("diagnostic_log_bytes") / 1048576.0) +\n                        "Ngưỡng tham chiếu free tier được hiển thị trên Web để kiểm soát quota."\n                }\n                .onFailure { body.text = "Không đọc được số liệu hệ thống: ${it.message}" }\n        }\n    }\n\n    private fun isRoleRoot(): Boolean = when (app.session.effectiveRole) {\n        UserRole.ADMIN, UserRole.ADMIN_INVENT -> currentScreen == SCREEN_MENU\n        UserRole.INVENT -> currentScreen == SCREEN_INVENT\n        UserRole.PICKER -> currentScreen == SCREEN_PICKER\n    }\n\n    private fun updateBackButton() {\n        findViewById<TextView>(R.id.btnBack)?.visibility = if (isRoleRoot()) View.GONE else View.VISIBLE\n    }\n\n    private fun navigateBack() {\n        if (isRoleRoot()) finish() else renderForRole()\n    }\n\n'''
-          s=s.replace(anchor,helper+anchor,1)
+          old='await admin.schema("realtime").rpc("send",{payload:{run_id:run.id,status,created,updated,deactivated},event:"staff_changed",topic:"site:1291:staff",private:true}).catch(()=>{});'
+          new='await admin.rpc("broadcast_staff_change_service",{p_payload:{run_id:run.id,status,created,updated,deactivated}}).catch(()=>{});'
+          if old in s: s=s.replace(old,new)
           p.write_text(s,encoding='utf-8')
           PY
-      - name: Persist transform diagnostic
-        if: failure()
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'bao-hang-1291-automation'
-          git config user.email 'actions@users.noreply.github.com'
-          test -s ops/v13_transform_error.txt || printf 'Android transform failed without diagnostic output\n' > ops/v13_transform_error.txt
-          git add ops/v13_transform_error.txt
-          git commit -m 'Capture v1.3 transform diagnostic' || true
-          git push origin HEAD:work/beta-catalog-staff-ux-v13
       - name: Source safety guard
         shell: bash
         run: |
           set -euo pipefail
-          ! grep -R -n -E 'SUPRA_CREDENTIAL_MASTER_KEY|inventory-credential-update|inventory-sync-start|api-supra\.winmart\.vn' \
-            supabase/functions web-admin/src app/src/main || { echo 'Active Supra mechanism remains' >&2; exit 1; }
-          ! grep -R -n -E 'BEGIN (RSA )?PRIVATE KEY|SUPABASE_SERVICE_ROLE_KEY[[:space:]]*=' \
-            web-admin/src app/src/main supabase/functions || { echo 'Secret-like material found' >&2; exit 1; }
+          ! grep -R -n -E 'SUPRA_CREDENTIAL_MASTER_KEY|inventory-credential-update|inventory-sync-start|api-supra\.winmart\.vn' supabase/functions web-admin/src || { echo 'Active Supra mechanism remains' >&2; exit 1; }
+          ! grep -R -n -E 'BEGIN (RSA )?PRIVATE KEY|SUPABASE_SERVICE_ROLE_KEY[[:space:]]*=' web-admin/src supabase/functions || { echo 'Secret-like material found' >&2; exit 1; }
           git diff --check
-      - name: Remove one-time transformation tooling
-        run: rm -f ops/patch_api_v13.py ops/patch_web_v13.py ops/patch_android_v13.py ops/v13_transform_error.txt .github/workflows/apply-v13-patches.yml
-      - name: Commit transformed source
+      - name: Remove completed transformation tooling
+        run: rm -f ops/patch_api_v13.py ops/patch_web_v13.py ops/v13_transform_error.txt .github/workflows/apply-v13-patches.yml
+      - name: Commit backend and web source
         shell: bash
         run: |
           set -euo pipefail
@@ -122,5 +57,5 @@ jobs:
           git config user.email 'actions@users.noreply.github.com'
           git add -A
           git diff --cached --quiet && { echo 'No source changes'; exit 2; }
-          git commit -m 'Implement catalog-only staff sync and final picker alerts'
+          git commit -m 'Implement catalog staff sync and warehouse web operations'
           git push origin HEAD:work/beta-catalog-staff-ux-v13
