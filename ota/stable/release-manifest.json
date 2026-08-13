@@ -1,11 +1,11 @@
 {
   "channel": "stable",
-  "versionCode": 2,
-  "versionName": "1.1.0",
-  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/stable-v1.1.0/bao-hang-1291-stable-1.1.0.apk",
-  "sha256": "0485bed3748b77543534729343746135261167a2709aa4ca7f801e8ef7835f4e",
+  "versionCode": 6,
+  "versionName": "1.4.0",
+  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/stable-v1.4.0/bao-hang-1291-stable-1.4.0.apk",
+  "sha256": "cf679d5c9150c2ac6eeec30250e16de5171f37803aec573886384b70ef9b332f",
   "mandatory": false,
-  "releaseNotes": "Cập nhật Báo hàng 1291: hoàn thiện 4 quyền nghiệp vụ, quản lý nhân sự cho Admin/Admin Invent, xử lý báo thiếu và ACK, tìm kiếm linh hoạt, gửi log chẩn đoán, web nghiệp vụ đầy đủ và OTA khóa theo APK Stable/Beta. Bản Stable chỉ nhận cập nhật Stable.",
+  "releaseNotes": "Stable 1.4.0: chuẩn hóa font hệ thống chuyên nghiệp và nhẹ cho Android/Web; tái cấu trúc layout Web theo các nhóm nghiệp vụ Vận hành, Nhân sự & quyền và Hệ thống; đồng bộ cấu hình và mốc vận hành realtime hai chiều giữa Web và App qua private Supabase Realtime, không cần F5 hoặc nút làm mới; duy trì realtime sự kiện, danh mục và nhân sự; tối ưu giao diện Picker/Admin Event/Admin, bảo mật public source và kiểm soát vận hành 0 đồng.",
   "signerSha256": "2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0",
-  "sourceSha": "9cc61f53f669d0d308de8e09ec404d9a974099d8"
+  "sourceSha": "dc8717d8bc04f77e06c393fb64507b75bb8fa298"
 }
