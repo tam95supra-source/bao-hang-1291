@@ -1,11 +1,11 @@
 {
   "channel": "stable",
-  "versionCode": 6,
-  "versionName": "1.4.0",
-  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/stable-v1.4.0/bao-hang-1291-stable-1.4.0.apk",
-  "sha256": "cf679d5c9150c2ac6eeec30250e16de5171f37803aec573886384b70ef9b332f",
+  "versionCode": 8,
+  "versionName": "1.5.0",
+  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/stable-v1.5.0/bao-hang-1291-stable-1.5.0.apk",
+  "sha256": "3b0dadaaeb4e28cb7e6b27e77e2cee756496345e6739f42a6f1d6025a5b36bba",
   "mandatory": false,
-  "releaseNotes": "Stable 1.4.0: chuẩn hóa font hệ thống chuyên nghiệp và nhẹ cho Android/Web; tái cấu trúc layout Web theo các nhóm nghiệp vụ Vận hành, Nhân sự & quyền và Hệ thống; đồng bộ cấu hình và mốc vận hành realtime hai chiều giữa Web và App qua private Supabase Realtime, không cần F5 hoặc nút làm mới; duy trì realtime sự kiện, danh mục và nhân sự; tối ưu giao diện Picker/Admin Event/Admin, bảo mật public source và kiểm soát vận hành 0 đồng.",
+  "releaseNotes": "Stable 1.5.0: sửa dứt điểm Web bị nhảy giữa hai giao diện bằng một owner Realtime ticket; bổ sung footer bản quyền; Xử lý báo hàng chia rõ Chờ xử lý, Đang xử lý, Đã có hàng, Đã bỏ qua; cho phép báo lại đã có hàng từ ticket đã bỏ qua và gửi cảnh báo lại cho người liên quan; Báo cáo vận hành kho dùng thuật ngữ thuần Việt, chi tiết hơn và xuất Excel; Android đồng bộ cùng phân loại và nghiệp vụ.",
   "signerSha256": "2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0",
-  "sourceSha": "dc8717d8bc04f77e06c393fb64507b75bb8fa298"
+  "sourceSha": "cbe98588c175b824bd4f4c930732cce02c0454ad"
 }
