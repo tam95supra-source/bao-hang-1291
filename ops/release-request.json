@@ -1,8 +1,8 @@
 {
   "action": "publish",
-  "channel": "stable",
-  "versionName": "1.4.0",
-  "versionCode": 6,
+  "channel": "beta",
+  "versionName": "1.5.0",
+  "versionCode": 7,
   "mandatory": false,
-  "releaseNotes": "Stable 1.4.0: chuẩn hóa font hệ thống chuyên nghiệp và nhẹ cho Android/Web; tái cấu trúc layout Web theo các nhóm nghiệp vụ Vận hành, Nhân sự & quyền và Hệ thống; đồng bộ cấu hình và mốc vận hành realtime hai chiều giữa Web và App qua private Supabase Realtime, không cần F5 hoặc nút làm mới; duy trì realtime sự kiện, danh mục và nhân sự; tối ưu giao diện Picker/Admin Event/Admin, bảo mật public source và kiểm soát vận hành 0 đồng."
+  "releaseNotes": "Beta 1.5.0: sửa dứt điểm Web bị nhảy giữa hai giao diện bằng một owner Realtime ticket; bổ sung footer bản quyền; Xử lý báo hàng chia rõ Chờ xử lý, Đang xử lý, Đã có hàng, Đã bỏ qua; cho phép báo lại đã có hàng từ ticket đã bỏ qua và gửi cảnh báo lại cho người liên quan; Báo cáo vận hành kho dùng thuật ngữ thuần Việt, chi tiết hơn và xuất Excel; Android đồng bộ cùng phân loại và nghiệp vụ."
 }
