@@ -1,8 +1,8 @@
 {
   "action": "publish",
-  "channel": "beta",
+  "channel": "stable",
   "versionName": "1.4.0",
-  "versionCode": 5,
+  "versionCode": 6,
   "mandatory": false,
-  "releaseNotes": "Beta 1.4.0: chuẩn hóa font hệ thống chuyên nghiệp và nhẹ cho Android/Web; tái cấu trúc layout Web theo các nhóm nghiệp vụ Vận hành, Nhân sự & quyền và Hệ thống; bổ sung đồng bộ cấu hình và mốc vận hành realtime hai chiều giữa Web và App qua private Supabase Realtime, không cần F5 hoặc nút làm mới; giữ nguyên cơ chế realtime sự kiện, danh mục và nhân sự; tối ưu giao diện Picker/Admin Event/Admin, bảo mật public source và kiểm soát vận hành 0 đồng."
+  "releaseNotes": "Stable 1.4.0: chuẩn hóa font hệ thống chuyên nghiệp và nhẹ cho Android/Web; tái cấu trúc layout Web theo các nhóm nghiệp vụ Vận hành, Nhân sự & quyền và Hệ thống; đồng bộ cấu hình và mốc vận hành realtime hai chiều giữa Web và App qua private Supabase Realtime, không cần F5 hoặc nút làm mới; duy trì realtime sự kiện, danh mục và nhân sự; tối ưu giao diện Picker/Admin Event/Admin, bảo mật public source và kiểm soát vận hành 0 đồng."
 }
