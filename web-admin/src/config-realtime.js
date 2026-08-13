@@ -1,34 +1,78 @@
+import '@fontsource-variable/inter/wght.css';
 import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = 'https://oedasgcdjppjwidhlqdr.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_LGgDehtHMSyeJ1XyJDvQiQ_cdlqIKq7';
 const API_BASE = `${SUPABASE_URL}/functions/v1/web-api`;
 const SESSION_KEY = 'bao-hang-1291-web-session';
+const ISSUE_TOPIC = 'site:1291:issues';
 const CONFIG_TOPIC = 'site:1291:config';
-const ALLOWED_ROLES = new Set(['ADMIN', 'ADMIN_INVENT']);
+const CONFIG_ROLES = new Set(['ADMIN', 'ADMIN_INVENT']);
+const ISSUE_TABS = new Set(['events', 'overview', 'picker']);
+const FALLBACK_INTERVAL_MS = 6_000;
 
 const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-  realtime: { params: { eventsPerSecond: 4 } },
+  realtime: { params: { eventsPerSecond: 6 } },
 });
 
-let channel = null;
+let issueChannel = null;
+let configChannel = null;
 let connectedToken = '';
+let connectedRole = '';
+let issueFallbackTimer = null;
+let issueConnectTimer = null;
+let issueRefreshTimer = null;
 
 function readSession() {
   try {
     const session = JSON.parse(sessionStorage.getItem(SESSION_KEY) || 'null');
-    return session?.access_token && ALLOWED_ROLES.has(session?.profile?.role) ? session : null;
+    return session?.access_token && session?.profile?.role ? session : null;
   } catch {
     return null;
   }
 }
 
-async function disconnect() {
-  const previous = channel;
-  channel = null;
-  connectedToken = '';
-  if (previous) await client.removeChannel(previous).catch(() => {});
+function setTicketRealtimeState(value) {
+  document.body.dataset.ticketRealtime = value;
+  const chip = document.querySelector('[data-health="REALTIME"]');
+  const label = chip?.querySelector('em');
+  if (!chip || !label) return;
+  chip.classList.toggle('good', value === 'online');
+  chip.classList.toggle('warn', value === 'fallback' || value === 'error');
+  label.textContent = value === 'online' ? 'ONLINE' : value === 'connecting' ? 'ĐANG NỐI' : 'DỰ PHÒNG';
+}
+
+function activeTab() {
+  return document.querySelector('.tabs button.active')?.dataset?.tab || '';
+}
+
+function refreshVisibleIssues() {
+  if (document.hidden || !ISSUE_TABS.has(activeTab())) return;
+  const refreshBoard = document.getElementById('refreshBoard');
+  if (refreshBoard) {
+    refreshBoard.click();
+    return;
+  }
+  document.querySelector('.tabs button.active')?.click();
+}
+
+function scheduleIssueRefresh(delay = 90) {
+  clearTimeout(issueRefreshTimer);
+  issueRefreshTimer = setTimeout(refreshVisibleIssues, delay);
+}
+
+function stopIssueFallback() {
+  clearInterval(issueFallbackTimer);
+  issueFallbackTimer = null;
+}
+
+function startIssueFallback() {
+  if (issueFallbackTimer || document.hidden || !readSession()) return;
+  setTicketRealtimeState('fallback');
+  issueFallbackTimer = setInterval(() => {
+    if (!document.hidden && ISSUE_TABS.has(activeTab())) refreshVisibleIssues();
+  }, FALLBACK_INTERVAL_MS);
 }
 
 async function api(action, accessToken) {
@@ -59,7 +103,7 @@ function setChecked(id, value) {
 
 async function refreshVisibleConfig() {
   const session = readSession();
-  if (!session || document.hidden) return;
+  if (!session || document.hidden || !CONFIG_ROLES.has(session.profile.role)) return;
   try {
     if (document.getElementById('ackMin')) {
       const config = await api('get-operational-config', session.access_token);
@@ -85,17 +129,44 @@ async function refreshVisibleConfig() {
   }
 }
 
-async function connect() {
-  const session = readSession();
-  if (!session || document.hidden) {
-    await disconnect();
-    return;
-  }
-  if (channel && connectedToken === session.access_token) return;
-  await disconnect();
-  connectedToken = session.access_token;
-  client.realtime.setAuth(session.access_token);
-  channel = client
+async function disconnect() {
+  clearTimeout(issueConnectTimer);
+  issueConnectTimer = null;
+  clearTimeout(issueRefreshTimer);
+  issueRefreshTimer = null;
+  stopIssueFallback();
+  const channels = [issueChannel, configChannel].filter(Boolean);
+  issueChannel = null;
+  configChannel = null;
+  connectedToken = '';
+  connectedRole = '';
+  for (const channel of channels) await client.removeChannel(channel).catch(() => {});
+  setTicketRealtimeState('offline');
+}
+
+function subscribeIssue(session) {
+  setTicketRealtimeState('connecting');
+  issueChannel = client
+    .channel(ISSUE_TOPIC, { config: { private: true } })
+    .on('broadcast', { event: 'issue_changed' }, () => scheduleIssueRefresh())
+    .subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        stopIssueFallback();
+        setTicketRealtimeState('online');
+        scheduleIssueRefresh(0);
+        return;
+      }
+      if (['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(status)) startIssueFallback();
+    });
+  clearTimeout(issueConnectTimer);
+  issueConnectTimer = setTimeout(() => {
+    if (document.body.dataset.ticketRealtime !== 'online') startIssueFallback();
+  }, 5_000);
+}
+
+function subscribeConfig(session) {
+  if (!CONFIG_ROLES.has(session.profile.role)) return;
+  configChannel = client
     .channel(CONFIG_TOPIC, { config: { private: true } })
     .on('broadcast', { event: 'config_changed' }, refreshVisibleConfig)
     .subscribe((status) => {
@@ -103,11 +174,27 @@ async function connect() {
     });
 }
 
+async function connect() {
+  const session = readSession();
+  if (!session || document.hidden) {
+    await disconnect();
+    return;
+  }
+  if (issueChannel && connectedToken === session.access_token && connectedRole === session.profile.role) return;
+  await disconnect();
+  connectedToken = session.access_token;
+  connectedRole = session.profile.role;
+  client.realtime.setAuth(session.access_token);
+  subscribeIssue(session);
+  subscribeConfig(session);
+}
+
 const originalSetItem = Storage.prototype.setItem;
 Storage.prototype.setItem = function setItem(key, value) {
   originalSetItem.call(this, key, value);
   if (this === sessionStorage && key === SESSION_KEY) queueMicrotask(connect);
 };
+
 const originalRemoveItem = Storage.prototype.removeItem;
 Storage.prototype.removeItem = function removeItem(key) {
   originalRemoveItem.call(this, key);
@@ -115,7 +202,15 @@ Storage.prototype.removeItem = function removeItem(key) {
 };
 
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) disconnect(); else connect();
+  if (document.hidden) disconnect();
+  else {
+    connect();
+    scheduleIssueRefresh(0);
+    refreshVisibleConfig();
+  }
 });
-window.addEventListener('pageshow', connect);
+window.addEventListener('pageshow', () => {
+  connect();
+  scheduleIssueRefresh(0);
+});
 connect();
