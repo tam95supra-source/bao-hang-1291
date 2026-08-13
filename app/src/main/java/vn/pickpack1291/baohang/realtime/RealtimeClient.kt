@@ -28,6 +28,7 @@ class RealtimeClient(
     private val onIssueChanged: () -> Unit,
     private val onCatalogChanged: () -> Unit,
     private val onStaffChanged: () -> Unit,
+    private val onConfigChanged: () -> Unit,
     private val onStatus: (Status) -> Unit = {}
 ) {
     enum class Status { CONNECTING, ONLINE, FALLBACK, OFFLINE }
@@ -117,6 +118,7 @@ class RealtimeClient(
             join(webSocket, ISSUE_TOPIC)
             join(webSocket, CATALOG_TOPIC)
             join(webSocket, STAFF_TOPIC)
+            join(webSocket, CONFIG_TOPIC)
             heartbeat?.cancel(false)
             heartbeat = scheduler.scheduleAtFixedRate({
                 if (running) sendHeartbeat()
@@ -145,6 +147,7 @@ class RealtimeClient(
                         topic == ISSUE_TOPIC && payload.optString("event") == "issue_changed" -> onIssueChanged()
                         topic == CATALOG_TOPIC && payload.optString("event") == "catalog_changed" -> onCatalogChanged()
                         topic == STAFF_TOPIC && payload.optString("event") == "staff_changed" -> onStaffChanged()
+                        topic == CONFIG_TOPIC && payload.optString("event") == "config_changed" -> onConfigChanged()
                     }
                 }
                 "phx_error", "phx_close" -> {
@@ -226,5 +229,6 @@ class RealtimeClient(
         private const val ISSUE_TOPIC = "realtime:site:1291:issues"
         private const val CATALOG_TOPIC = "realtime:site:1291:catalog"
         private const val STAFF_TOPIC = "realtime:site:1291:staff"
+        private const val CONFIG_TOPIC = "realtime:site:1291:config"
     }
 }
