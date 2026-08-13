@@ -6,39 +6,42 @@
     android:background="@drawable/bg_overlay_info"
     android:gravity="center_horizontal"
     android:orientation="vertical"
-    android:padding="16dp">
+    android:paddingStart="18dp"
+    android:paddingEnd="18dp"
+    android:paddingTop="14dp"
+    android:paddingBottom="14dp">
 
     <TextView
         android:id="@+id/tvOverlayStatus"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center"
-        android:text="INVENT ĐANG TÌM"
+        android:text="ĐANG XỬ LÝ"
         android:textColor="@color/white"
-        android:textSize="24sp"
+        android:textSize="20sp"
         android:textStyle="bold" />
 
     <TextView
         android:id="@+id/tvOverlaySku"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
+        android:layout_marginTop="3dp"
         android:gravity="center"
         android:text="SKU 12345678"
         android:textColor="@color/white"
-        android:textSize="32sp"
+        android:textSize="30sp"
         android:textStyle="bold" />
 
     <TextView
         android:id="@+id/tvOverlayProduct"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
+        android:layout_marginTop="3dp"
         android:ellipsize="end"
         android:gravity="center"
         android:maxLines="2"
         android:textColor="#EFF8FF"
-        android:textSize="17sp" />
+        android:textSize="16sp" />
 
     <TextView
         android:id="@+id/tvOverlayMessage"
@@ -48,16 +51,17 @@
         android:layout_weight="1"
         android:gravity="center"
         android:textColor="@color/white"
-        android:textSize="18sp" />
+        android:textSize="18sp"
+        android:textStyle="bold" />
 
     <Button
         android:id="@+id/btnOverlayAck"
         android:layout_width="match_parent"
-        android:layout_height="52dp"
+        android:layout_height="54dp"
         android:background="@drawable/bg_button_success"
-        android:text="ĐÃ XÁC NHẬN"
+        android:text="XÁC NHẬN"
         android:textColor="@color/white"
-        android:textSize="17sp"
+        android:textSize="16sp"
         android:textStyle="bold"
         android:visibility="gone" />
 
@@ -65,9 +69,9 @@
         android:id="@+id/tvOverlayDismissHint"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_marginTop="5dp"
         android:gravity="center"
-        android:text="Cảnh báo nghiệp vụ • vui lòng xác nhận"
+        android:text="Cảnh báo nghiệp vụ • cần xác nhận để tiếp tục"
         android:textColor="#D5E7F5"
-        android:textSize="12sp" />
+        android:textSize="11sp" />
 </LinearLayout>
-

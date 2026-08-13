@@ -35,7 +35,6 @@ import org.json.JSONObject
 import vn.pickpack1291.baohang.BaoHangApplication
 import vn.pickpack1291.baohang.BuildConfig
 import vn.pickpack1291.baohang.R
-import vn.pickpack1291.baohang.data.AppConfig
 import vn.pickpack1291.baohang.data.IssueBoard
 import vn.pickpack1291.baohang.data.IssueStatus
 import vn.pickpack1291.baohang.data.OperationalConfig
@@ -53,6 +52,8 @@ class MainActivity : AppCompatActivity() {
     private var searchJob: Job? = null
     private var realtimeAuthJob: Job? = null
     private var currentScreen = ""
+
+    private enum class ButtonTone { PRIMARY, SECONDARY, SUCCESS, DANGER }
 
     private val realtime by lazy {
         RealtimeClient(
@@ -96,7 +97,7 @@ class MainActivity : AppCompatActivity() {
         })
         findViewById<TextView>(R.id.btnLogout).setOnClickListener {
             AlertDialog.Builder(this).setMessage("Đăng xuất khỏi thiết bị này?")
-                .setNegativeButton("HỦY", null).setPositiveButton("ĐĂNG XUẤT") { _, _ ->
+                .setNegativeButton("Hủy", null).setPositiveButton("Đăng xuất") { _, _ ->
                     realtime.stop()
                     app.repository.logout()
                     startActivity(Intent(this, LoginActivity::class.java)); finish()
@@ -148,7 +149,7 @@ class MainActivity : AppCompatActivity() {
     private fun renderForRole() {
         val profile = app.session.profile ?: return
         val effective = app.session.effectiveRole
-        val mode = if (profile.role == UserRole.ADMIN && effective != UserRole.ADMIN) " • TEST ${effective.label.uppercase()}" else ""
+        val mode = if (profile.role == UserRole.ADMIN && effective != UserRole.ADMIN) " • KIỂM THỬ ${effective.label}" else ""
         findViewById<TextView>(R.id.tvHeaderUser).text = "${profile.employeeCode} • ${profile.fullName} • ${effective.label}$mode"
         app.diagnostics.info("ui_role_render", mapOf("actual_role" to profile.role.wire, "effective_role" to effective.wire))
         when (effective) {
@@ -163,22 +164,17 @@ class MainActivity : AppCompatActivity() {
         currentScreen = screen
         container.removeAllViews()
         updateBackButton()
-        val scroll = ScrollView(this)
+        val scroll = ScrollView(this).apply { isFillViewport = true }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(14), dp(14), dp(28))
+            setPadding(dp(14), dp(14), dp(14), dp(30))
         }
         scroll.addView(content, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         container.addView(scroll, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-        content.addView(text(title, 22, true).apply { setPadding(0, 0, 0, dp(10)) })
-        content.addView(infoBox("${app.session.effectiveRole.label} • ${BuildConfig.VERSION_NAME} • ${BuildConfig.OTA_CHANNEL.uppercase()}"))
-        if (BuildConfig.UPDATE_MANIFEST_URL.isNotBlank()) {
-            content.addView(button("KIỂM TRA CẬP NHẬT ${BuildConfig.OTA_CHANNEL.uppercase()}") {
-                AppUpdater(this, app.diagnostics).check(showUpToDate = true)
-            })
-        }
+        content.addView(text(title, 23, true).apply { setPadding(0, 0, 0, dp(10)) })
         if (app.session.profile?.role == UserRole.ADMIN && app.session.adminTestRole != null) {
-            content.addView(button("THOÁT CHẾ ĐỘ KIỂM THỬ") {
+            content.addView(infoBox("Đang kiểm thử với quyền ${app.session.effectiveRole.label}. Mọi quyền API được giới hạn tương ứng."))
+            content.addView(button("Thoát chế độ kiểm thử", ButtonTone.SECONDARY) {
                 app.repository.setAdminTestRole(null)
                 renderForRole()
             })
@@ -186,40 +182,60 @@ class MainActivity : AppCompatActivity() {
         return content
     }
 
+    private fun addMaintenanceActions(content: LinearLayout) {
+        content.addView(section("Hỗ trợ hệ thống"))
+        if (BuildConfig.UPDATE_MANIFEST_URL.isNotBlank()) {
+            content.addView(button("Kiểm tra cập nhật ${BuildConfig.OTA_CHANNEL.uppercase()}", ButtonTone.SECONDARY) {
+                AppUpdater(this, app.diagnostics).check(showUpToDate = true)
+            })
+        }
+        addDiagnosticsButton(content)
+    }
+
     private fun showAdmin() {
-        val content = page("ADMIN HỆ THỐNG", SCREEN_MENU)
-        content.addView(infoBox("Quản trị vận hành Báo hàng 1291. File Tồn Bin chỉ dùng để cập nhật SKU và tên sản phẩm; hệ thống không lưu dữ liệu tồn kho chi tiết."))
-        content.addView(button("SỰ KIỆN / ĐIỀU PHỐI") { showInventBoard() })
-        content.addView(button("DANH MỤC SKU / TÊN HÀNG") { showCatalog() })
-        content.addView(button("BÁO CÁO VẬN HÀNH") { showReports() })
-        content.addView(button("NHÂN SỰ & QUYỀN") { showUsers() })
-        content.addView(button("MỐC THỜI GIAN VẬN HÀNH") { showOperationalSla() })
-        content.addView(button("HỆ THỐNG & DUNG LƯỢNG") { showServiceMetrics() })
-        content.addView(button("CẤU HÌNH HỆ THỐNG") { showConfig() })
-        content.addView(button("ĐỒNG BỘ GOOGLE SHEET BÁO CÁO") { syncSheet() })
-        addDiagnosticsButton(content)
-        content.addView(section("Kiểm thử quyền"))
-        content.addView(button("TEST • ADMIN EVENT") { enterTestRole(UserRole.ADMIN_INVENT) })
-        content.addView(button("TEST • NGƯỜI BÁO HÀNG") { enterTestRole(UserRole.INVENT) })
-        content.addView(button("TEST • PICKER") { enterTestRole(UserRole.PICKER) })
-    }    private fun showAdminEvent() {
-        val content = page("ADMIN EVENT", SCREEN_MENU)
-        content.addView(button("SỰ KIỆN / ĐIỀU PHỐI") { showInventBoard() })
-        content.addView(button("DANH MỤC SKU / TÊN HÀNG") { showCatalog() })
-        content.addView(button("BÁO CÁO VẬN HÀNH") { showReports() })
-        content.addView(button("NHÂN SỰ") { showUsers() })
-        content.addView(button("MỐC THỜI GIAN VẬN HÀNH") { showOperationalSla() })
-        content.addView(button("HỆ THỐNG & DUNG LƯỢNG") { showServiceMetrics() })
-        addDiagnosticsButton(content)
-    }    private fun enterTestRole(role: UserRole) {
+        val content = page("Quản trị hệ thống", SCREEN_MENU)
+        content.addView(infoBox("Theo dõi vận hành, nhân sự, cấu hình và dung lượng của Báo hàng 1291."))
+        content.addView(section("Vận hành"))
+        content.addView(button("Sự kiện & điều phối") { showInventBoard() })
+        content.addView(button("Danh mục SKU & tên hàng") { showCatalog() })
+        content.addView(button("Báo cáo vận hành") { showReports() })
+        content.addView(section("Quản trị"))
+        content.addView(button("Nhân sự & quyền") { showUsers() })
+        content.addView(button("Mốc thời gian vận hành") { showOperationalSla() })
+        content.addView(button("Cấu hình hệ thống") { showConfig() })
+        content.addView(section("Hệ thống"))
+        content.addView(button("Dung lượng & dịch vụ") { showServiceMetrics() })
+        content.addView(button("Đồng bộ Google Sheet báo cáo", ButtonTone.SECONDARY) { syncSheet() })
+        addMaintenanceActions(content)
+        content.addView(section("Kiểm thử phân quyền"))
+        content.addView(button("Admin Event") { enterTestRole(UserRole.ADMIN_INVENT) })
+        content.addView(button("Người báo hàng") { enterTestRole(UserRole.INVENT) })
+        content.addView(button("Picker") { enterTestRole(UserRole.PICKER) })
+    }
+
+    private fun showAdminEvent() {
+        val content = page("Điều phối sự kiện", SCREEN_MENU)
+        content.addView(infoBox("Ưu tiên xử lý sự kiện báo thiếu và điều phối nhân sự tại hiện trường."))
+        content.addView(section("Vận hành"))
+        content.addView(button("Sự kiện báo thiếu", ButtonTone.PRIMARY) { showInventBoard() })
+        content.addView(button("Danh mục SKU & tên hàng") { showCatalog() })
+        content.addView(button("Báo cáo vận hành") { showReports() })
+        content.addView(section("Quản lý"))
+        content.addView(button("Nhân sự") { showUsers() })
+        content.addView(button("Mốc thời gian vận hành") { showOperationalSla() })
+        content.addView(button("Dung lượng & dịch vụ") { showServiceMetrics() })
+        addMaintenanceActions(content)
+    }
+
+    private fun enterTestRole(role: UserRole) {
         runCatching { app.repository.setAdminTestRole(role) }
             .onSuccess { renderForRole() }
-            .onFailure { toast(it.message ?: "Không bật được test mode") }
+            .onFailure { toast(it.message ?: "Không bật được chế độ kiểm thử") }
     }
 
     private fun showInventBoard() {
-        val content = page("NGƯỜI BÁO HÀNG • SỰ KIỆN", SCREEN_INVENT)
-        val status = text("Đang tải dữ liệu…", 14, false)
+        val content = page("Sự kiện báo thiếu", SCREEN_INVENT)
+        val status = text("Đang tải dữ liệu…", 13, false).apply { setTextColor(getColor(R.color.text_secondary)) }
         val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         val boardContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         content.addView(status)
@@ -229,6 +245,14 @@ class MainActivity : AppCompatActivity() {
 
         var board: IssueBoard? = null
         var selected = 0
+        val tabButtons = mutableListOf<Button>()
+        fun updateTabs() {
+            tabButtons.forEachIndexed { index, button ->
+                val active = index == selected
+                button.setBackgroundResource(if (active) R.drawable.bg_button_primary else R.drawable.bg_button_secondary)
+                button.setTextColor(getColor(if (active) R.color.white else R.color.navy_900))
+            }
+        }
         fun draw() {
             val data = board ?: return
             val list = when (selected) {
@@ -237,17 +261,21 @@ class MainActivity : AppCompatActivity() {
                 else -> data.open
             }
             boardContainer.removeAllViews()
-            if (list.isEmpty()) boardContainer.addView(infoBox("Không có SKU ở nhóm này."))
+            if (list.isEmpty()) boardContainer.addView(infoBox("Không có SKU trong nhóm này."))
             list.forEach { issue -> boardContainer.addView(issueCard(issue, selected) { loadInventBoard(status) { board = it; draw() } }) }
             status.text = when (selected) {
                 1 -> "${list.size} SKU đang xử lý${if (app.session.effectiveRole == UserRole.INVENT) " của tôi" else ""}"
                 2 -> "${list.size} SKU đã xử lý gần đây"
-                else -> "${list.size} SKU chờ nhận"
+                else -> "${list.size} SKU đang chờ nhận"
             }
+            updateTabs()
         }
-        listOf("CHỜ NHẬN", "ĐANG XỬ LÝ", "ĐÃ XỬ LÝ").forEachIndexed { index, label ->
-            tabs.addView(button(label) { selected = index; draw() }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { setMargins(dp(2), dp(4), dp(2), dp(8)) })
+        listOf("Chờ nhận", "Đang xử lý", "Đã xử lý").forEachIndexed { index, label ->
+            val tab = button(label) { selected = index; draw() }
+            tabButtons += tab
+            tabs.addView(tab, LinearLayout.LayoutParams(0, dp(48), 1f).apply { setMargins(dp(2), dp(5), dp(2), dp(9)) })
         }
+        updateTabs()
         loadInventBoard(status) { board = it; draw() }
     }
 
@@ -256,7 +284,7 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             runCatching { app.repository.loadIssueBoard() }
                 .onSuccess(onLoaded)
-                .onFailure { status.text = "Lỗi: ${it.message}"; app.diagnostics.error("issue_board_load_failed", it) }
+                .onFailure { status.text = "Không tải được dữ liệu: ${it.message}"; app.diagnostics.error("issue_board_load_failed", it) }
         }
     }
 
@@ -264,16 +292,17 @@ class MainActivity : AppCompatActivity() {
         val elevated = app.session.effectiveRole in setOf(UserRole.ADMIN, UserRole.ADMIN_INVENT)
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(10), dp(12), dp(10))
+            setPadding(dp(13), dp(11), dp(13), dp(11))
             setBackgroundResource(R.drawable.bg_card)
         }
         card.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(5), 0, dp(5)) }
-        val recurrent = if (issue.recurrence30m) " • TÁI PHÁT ≤30P" else ""
-        card.addView(text("SKU ${issue.sku} • ${issue.reportCount} lượt • v${issue.issueVersion}$recurrent", 17, true))
-        card.addView(text(issue.productName, 14, false))
-        card.addView(text("${issue.status.label} • Báo đầu ${shortTime(issue.reportedAt)}${if (issue.assignedName.isNotBlank()) " • ${issue.assignedName}" else ""}", 12, false))
+        val recurrent = if (issue.recurrence30m) " • TÁI PHÁT ≤30 PHÚT" else ""
+        card.addView(text("SKU ${issue.sku}", 18, true))
+        card.addView(text(issue.productName, 14, false).apply { setPadding(0, dp(2), 0, dp(4)) })
+        card.addView(text("${issue.status.label} • ${issue.reportCount} lượt • v${issue.issueVersion}$recurrent", 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
+        card.addView(text("Báo lúc ${shortTime(issue.reportedAt)}${if (issue.assignedName.isNotBlank()) " • Xử lý: ${issue.assignedName}" else ""}", 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
         if (bucket == 0) {
-            card.addView(button("NHẬN XỬ LÝ") {
+            card.addView(button("Nhận xử lý", ButtonTone.PRIMARY) {
                 lifecycleScope.launch {
                     runCatching { app.repository.claimIssue(issue.id) }
                         .onSuccess { toast("Đã nhận xử lý SKU ${issue.sku}"); refresh() }
@@ -282,30 +311,30 @@ class MainActivity : AppCompatActivity() {
             })
             if (elevated) {
                 val direct = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-                direct.addView(button("CHO SKIP") { confirmIssueUpdate(issue, "NOT_FOUND", refresh) }, LinearLayout.LayoutParams(0, dp(48), 1f))
-                direct.addView(button("ĐÃ CÓ HÀNG") { confirmIssueUpdate(issue, "AVAILABLE", refresh) }, LinearLayout.LayoutParams(0, dp(48), 1f))
+                direct.addView(button("Cho phép bỏ qua", ButtonTone.DANGER) { confirmIssueUpdate(issue, "NOT_FOUND", refresh) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(0, dp(5), dp(2), 0) })
+                direct.addView(button("Đã có hàng", ButtonTone.SUCCESS) { confirmIssueUpdate(issue, "AVAILABLE", refresh) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(dp(2), dp(5), 0, 0) })
                 card.addView(direct)
             }
         } else if (bucket == 1) {
-            val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            actions.addView(button("KHÔNG THẤY • CHO SKIP") { confirmIssueUpdate(issue, "NOT_FOUND", refresh) }, LinearLayout.LayoutParams(0, dp(54), 1f))
-            actions.addView(button("ĐÃ CÓ HÀNG / CHÂM BÙ") { confirmIssueUpdate(issue, "AVAILABLE", refresh) }, LinearLayout.LayoutParams(0, dp(54), 1f))
+            val actions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            actions.addView(button("Đã có hàng / châm bù", ButtonTone.SUCCESS) { confirmIssueUpdate(issue, "AVAILABLE", refresh) })
+            actions.addView(button("Không tìm thấy • cho phép bỏ qua", ButtonTone.DANGER) { confirmIssueUpdate(issue, "NOT_FOUND", refresh) })
             card.addView(actions)
-            if (elevated) card.addView(button("ĐIỀU PHỐI LẠI") { reassignIssue(issue, refresh) })
+            if (elevated) card.addView(button("Điều phối lại") { reassignIssue(issue, refresh) })
         }
         return card
     }
 
     private fun confirmIssueUpdate(issue: StockIssue, action: String, refresh: () -> Unit) {
         val isSkip = action == "NOT_FOUND"
-        val firstMessage = if (isSkip) "Không tìm thấy SKU ${issue.sku}. Cho phép Picker SKIP?" else "Xác nhận SKU ${issue.sku} đã có hàng/châm bù?"
-        AlertDialog.Builder(this).setTitle(if (isSkip) "CHO PHÉP SKIP" else "ĐÃ CÓ HÀNG")
-            .setMessage(firstMessage).setNegativeButton("HỦY", null)
-            .setPositiveButton("XÁC NHẬN") { _, _ ->
+        val firstMessage = if (isSkip) "Không tìm thấy SKU ${issue.sku}. Cho phép Picker bỏ qua SKU này?" else "Xác nhận SKU ${issue.sku} đã có hàng hoặc đã châm bù?"
+        AlertDialog.Builder(this).setTitle(if (isSkip) "Cho phép bỏ qua" else "Đã có hàng")
+            .setMessage(firstMessage).setNegativeButton("Hủy", null)
+            .setPositiveButton("Xác nhận") { _, _ ->
                 if (isSkip) {
-                    AlertDialog.Builder(this).setTitle("XÁC NHẬN LẦN 2")
-                        .setMessage("Thao tác sẽ gửi cảnh báo bắt buộc ACK cho Picker. Cho phép SKIP SKU ${issue.sku}?")
-                        .setNegativeButton("HỦY", null).setPositiveButton("CHO SKIP") { _, _ -> updateIssue(issue, action, refresh) }.show()
+                    AlertDialog.Builder(this).setTitle("Xác nhận lần cuối")
+                        .setMessage("Picker sẽ nhận cảnh báo bắt buộc xác nhận trước khi tiếp tục. Cho phép bỏ qua SKU ${issue.sku}?")
+                        .setNegativeButton("Hủy", null).setPositiveButton("Cho phép") { _, _ -> updateIssue(issue, action, refresh) }.show()
                 } else updateIssue(issue, action, refresh)
             }.show()
     }
@@ -326,15 +355,15 @@ class MainActivity : AppCompatActivity() {
                     val labels = users.map { "${it.employeeCode} • ${it.fullName} • ${it.role.label}" }.toTypedArray()
                     AlertDialog.Builder(this@MainActivity).setTitle("Điều phối SKU ${issue.sku}")
                         .setItems(labels) { _, which -> askReassignReason(issue, users[which], refresh) }
-                        .setNegativeButton("HỦY", null).show()
+                        .setNegativeButton("Hủy", null).show()
                 }.onFailure { toast(it.message ?: "Không tải được nhân sự") }
         }
     }
 
     private fun askReassignReason(issue: StockIssue, target: UserProfile, refresh: () -> Unit) {
-        val input = EditText(this).apply { hint = "Lý do điều phối (bắt buộc)"; setPadding(dp(14), dp(8), dp(14), dp(8)) }
+        val input = EditText(this).apply { hint = "Lý do điều phối (bắt buộc)" }
         AlertDialog.Builder(this).setTitle("Chuyển cho ${target.fullName}")
-            .setView(input).setNegativeButton("HỦY", null).setPositiveButton("ĐIỀU PHỐI") { _, _ ->
+            .setView(input).setNegativeButton("Hủy", null).setPositiveButton("Điều phối") { _, _ ->
                 val reason = input.text.toString().trim()
                 if (reason.length < 3) { toast("Lý do cần ít nhất 3 ký tự"); return@setPositiveButton }
                 lifecycleScope.launch {
@@ -346,17 +375,26 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showPicker() {
-        val content = page("PICKER / NGƯỜI LẤY HÀNG", SCREEN_PICKER)
-        content.addView(infoBox("Quét hoặc tìm theo SKU / tên sản phẩm. Ứng dụng chỉ bật cảnh báo nổi bật khi ĐÃ CÓ HÀNG hoặc được CHO PHÉP SKIP."))
-        val input = AutoCompleteTextView(this).apply { hint = "Quét SKU hoặc nhập tên sản phẩm"; threshold = 1; setSingleLine(true) }
+        val content = page("Báo thiếu hàng", SCREEN_PICKER)
+        content.addView(text("Quét SKU hoặc nhập tên hàng", 14, true).apply { setPadding(0, 0, 0, dp(5)) })
+        val input = AutoCompleteTextView(this).apply { hint = "Quét SKU / nhập tên sản phẩm"; threshold = 1; setSingleLine(true) }
         val selected = infoBox("Chưa chọn SKU")
-        val reportButton = button("BÁO THIẾU") {}
+        val reportButton = button("Báo thiếu", ButtonTone.DANGER) {}
         reportButton.isEnabled = false
         val recent = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         var chosen: SkuItem? = null
-        content.addView(input); content.addView(selected); content.addView(reportButton)
-        content.addView(section("Giao dịch gần đây của tôi")); content.addView(recent); addDiagnosticsButton(content)
-        fun select(item: SkuItem) { chosen = item; selected.text = "SKU ${item.sku}\n${item.productName}"; reportButton.isEnabled = true; input.setText("") }
+        content.addView(input)
+        content.addView(selected)
+        content.addView(reportButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)).apply { setMargins(0, dp(4), 0, dp(2)) })
+        content.addView(section("Báo gần đây"))
+        content.addView(recent)
+        addDiagnosticsButton(content)
+        fun select(item: SkuItem) {
+            chosen = item
+            selected.text = "SKU ${item.sku}\n${item.productName}"
+            reportButton.isEnabled = true
+            input.setText("")
+        }
         fun suggestions(query: String) {
             searchJob?.cancel(); searchJob = lifecycleScope.launch {
                 delay(120)
@@ -376,31 +414,41 @@ class MainActivity : AppCompatActivity() {
             lifecycleScope.launch {
                 reportButton.isEnabled = false
                 runCatching { app.repository.reportShortage(item.sku) }
-                    .onSuccess { toast(it.message); chosen = null; selected.text = "Chưa chọn SKU"; loadMyIssues(recent); input.requestFocus() }
+                    .onSuccess {
+                        toast(it.message)
+                        chosen = null
+                        selected.text = "Chưa chọn SKU"
+                        loadMyIssues(recent)
+                        input.requestFocus()
+                    }
                     .onFailure { toast(it.message ?: "Không gửi được báo thiếu") }
                 reportButton.isEnabled = chosen != null
             }
         }
         loadMyIssues(recent); input.requestFocus()
-    }    private fun loadMyIssues(target: LinearLayout) {
+    }
+
+    private fun loadMyIssues(target: LinearLayout) {
         lifecycleScope.launch {
             runCatching { app.repository.loadMyIssues() }
                 .onSuccess { issues ->
                     target.removeAllViews()
                     if (issues.isEmpty()) target.addView(infoBox("Chưa có báo thiếu."))
-                    issues.take(50).forEach { issue -> target.addView(infoBox("${issue.status.label} • SKU ${issue.sku} • ${issue.reportCount} lượt • v${issue.issueVersion}\n${issue.productName}\n${shortTime(issue.reportedAt)}")) }
+                    issues.take(50).forEach { issue ->
+                        target.addView(infoBox("${issue.status.label} • SKU ${issue.sku}\n${issue.productName}\n${issue.reportCount} lượt • ${shortTime(issue.reportedAt)}"))
+                    }
                 }.onFailure { target.removeAllViews(); target.addView(infoBox("Không tải được lịch sử: ${it.message}")) }
         }
     }
 
     private fun showCatalog() {
-        val content = page("DANH MỤC SKU / TÊN HÀNG", SCREEN_CATALOG)
-        content.addView(infoBox("File Tồn Bin chỉ lấy SKU và Tên SKU / Tên sản phẩm. Không lưu số lượng tồn, bin, chờ xuất hoặc vị trí."))
-        content.addView(infoBox("SKU đang lưu trên máy: ${app.repository.skuCount()}"))
+        val content = page("Danh mục SKU & tên hàng", SCREEN_CATALOG)
+        content.addView(infoBox("Danh mục chỉ lưu SKU và tên sản phẩm; không lưu số tồn, bin hoặc vị trí."))
+        content.addView(text("${app.repository.skuCount()} SKU đang lưu trên thiết bị", 13, false).apply { setTextColor(getColor(R.color.text_secondary)) })
         if (app.session.effectiveRole in setOf(UserRole.ADMIN, UserRole.ADMIN_INVENT)) {
-            content.addView(button("CẬP NHẬT TỪ FILE TỒN BIN XLSX") { chooseSku.launch(XLSX_MIME) })
+            content.addView(button("Cập nhật từ file Tồn Bin XLSX", ButtonTone.PRIMARY) { chooseSku.launch(XLSX_MIME) })
         }
-        val input = EditText(this).apply { hint = "Tra SKU hoặc tên sản phẩm"; setSingleLine(true) }
+        val input = EditText(this).apply { hint = "Tìm theo SKU hoặc tên sản phẩm"; setSingleLine(true) }
         val result = infoBox("Nhập từ khóa để tra cứu.")
         content.addView(input); content.addView(result)
         input.addTextChangedListener(object : TextWatcher {
@@ -419,7 +467,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showReports() {
-        val content = page("BÁO CÁO VẬN HÀNH KHO", SCREEN_REPORTS)
+        val content = page("Báo cáo vận hành", SCREEN_REPORTS)
         val body = infoBox("Đang tổng hợp dữ liệu vận hành…")
         content.addView(body)
         lifecycleScope.launch {
@@ -432,29 +480,31 @@ class MainActivity : AppCompatActivity() {
                         append("\n${i + 1}. ${item.optString("sku")} • ${item.optString("product_name")} • ${item.optInt("reports")} lượt")
                     }
                 }
-                body.text = "TỔNG QUAN 24 GIỜ\n" +
-                    "Lượt báo: ${day.optInt("reports")} • Ticket: ${day.optInt("issues")} • Hoàn tất: ${day.optInt("resolved")}\n" +
-                    "Đã có hàng/châm bù: ${day.optInt("available")} • Cho SKIP: ${day.optInt("skipped")}\n\n" +
+                body.text = "24 GIỜ GẦN NHẤT\n" +
+                    "Lượt báo: ${day.optInt("reports")} • Sự kiện: ${day.optInt("issues")} • Hoàn tất: ${day.optInt("resolved")}\n" +
+                    "Đã có hàng/châm bù: ${day.optInt("available")} • Cho phép bỏ qua: ${day.optInt("skipped")}\n\n" +
                     "CHẤT LƯỢNG 30 NGÀY\n" +
                     "Đang mở: ${report.optInt("active_now")} • Quá mốc phản hồi: ${report.optInt("overdue_now")}\n" +
                     "Trung vị nhận xử lý: ${report.opt("median_claim_minutes") ?: "—"} phút • P95: ${report.opt("p95_claim_minutes") ?: "—"} phút\n" +
                     "Trung vị hoàn tất: ${report.opt("median_resolution_minutes") ?: "—"} phút • P95: ${report.opt("p95_resolution_minutes") ?: "—"} phút\n" +
-                    "Tái phát: ${report.optInt("recurrent_episodes")} • Auto SKIP: ${report.optInt("auto_skip_count_30d")}\n\n" +
+                    "Tái phát: ${report.optInt("recurrent_episodes")} • Tự động cho phép bỏ qua: ${report.optInt("auto_skip_count_30d")}\n\n" +
                     "SKU PHÁT SINH NHIỀU$topLines"
             }.onFailure { body.text = "Không tải được báo cáo: ${it.message}" }
         }
-    }    private fun showOperationalSla() {
-        val content = page("MỐC THỜI GIAN VẬN HÀNH", SCREEN_CONFIG)
+    }
+
+    private fun showOperationalSla() {
+        val content = page("Mốc thời gian vận hành", SCREEN_CONFIG)
         val ack = numberInput("Thời gian nhận xử lý (phút)")
         val reminder = numberInput("Chu kỳ nhắc xử lý (phút)")
         val replenish = numberInput("Thời gian châm hàng (phút)")
         val pickerAck = numberInput("Nhắc Picker xác nhận (phút)")
-        val autoAfter = numberInput("Mốc tự động cho phép SKIP (phút)")
-        val auto = CheckBox(this).apply { text = "Bật tự động cho phép SKIP khi quá mốc" }
+        val autoAfter = numberInput("Mốc tự động cho phép bỏ qua (phút)")
+        val auto = CheckBox(this).apply { text = "Tự động cho phép bỏ qua khi quá mốc" }
         listOf(ack.first, reminder.first, replenish.first, pickerAck.first).forEach(content::addView)
-        content.addView(infoBox("Thời gian nhận: từ lúc Picker báo đến khi có người nhận. Chu kỳ nhắc: khoảng cách nhắc ticket còn mở. Thời gian châm: mốc theo dõi sau khi nhận. Nhắc Picker chỉ áp dụng cảnh báo ĐÃ CÓ HÀNG hoặc SKIP."))
-        content.addView(auto); content.addView(autoAfter.first); content.addView(infoBox("Ví dụ 120 phút = 2 giờ. Có thể tắt hoàn toàn auto SKIP."))
-        content.addView(button("LƯU MỐC THỜI GIAN") {
+        content.addView(infoBox("Thời gian nhận tính từ lúc Picker báo đến khi có người nhận. Chu kỳ nhắc áp dụng khi sự kiện còn mở. Nhắc Picker chỉ áp dụng cho cảnh báo đã có hàng hoặc được phép bỏ qua."))
+        content.addView(auto); content.addView(autoAfter.first)
+        content.addView(button("Lưu mốc thời gian", ButtonTone.PRIMARY) {
             lifecycleScope.launch {
                 runCatching { app.repository.saveOperationalConfig(OperationalConfig(ack.second.int(), reminder.second.int(), replenish.second.int(), pickerAck.second.int(), auto.isChecked, autoAfter.second.int())) }
                     .onSuccess { toast("Đã lưu mốc thời gian vận hành") }.onFailure { toast(it.message ?: "Không lưu được") }
@@ -463,18 +513,20 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch { runCatching { app.repository.getOperationalConfig() }.onSuccess { cfg ->
             ack.second.setText(cfg.acknowledgeMinutes.toString()); reminder.second.setText(cfg.reminderMinutes.toString()); replenish.second.setText(cfg.replenishMinutes.toString()); pickerAck.second.setText(cfg.pickerAckReminderMinutes.toString()); auto.isChecked = cfg.autoSkipEnabled; autoAfter.second.setText(cfg.autoSkipAfterMinutes.toString())
         }.onFailure { toast(it.message ?: "Không tải được cấu hình") } }
-    }    private fun showConfig() {
-        val content = page("CẤU HÌNH HỆ THỐNG", SCREEN_CONFIG)
+    }
+
+    private fun showConfig() {
+        val content = page("Cấu hình hệ thống", SCREEN_CONFIG)
         val retention = numberInput("Lưu lịch sử nghiệp vụ (ngày)")
         val logRetention = numberInput("Lưu log chẩn đoán (ngày)")
         val staffInterval = numberInput("Chu kỳ đồng bộ nhân sự (phút)")
-        val autoAfter = numberInput("Mốc tự động SKIP (phút)")
-        val staffAuto = CheckBox(this).apply { text = "Tự động đồng bộ DANH MỤC NHÂN SỰ" }
-        val autoSkip = CheckBox(this).apply { text = "Bật tự động cho phép SKIP" }
-        content.addView(retention.first); content.addView(infoBox("Ticket và audit được giữ theo chu kỳ kể cả khi nhân sự đã ngừng hoạt động."))
-        content.addView(logRetention.first); content.addView(staffAuto); content.addView(staffInterval.first); content.addView(infoBox("Nguồn nhân sự: Site 1291 / Kho HY1. Khuyến nghị 60 phút để giảm network/quota."))
+        val autoAfter = numberInput("Mốc tự động cho phép bỏ qua (phút)")
+        val staffAuto = CheckBox(this).apply { text = "Tự động đồng bộ danh mục nhân sự" }
+        val autoSkip = CheckBox(this).apply { text = "Tự động cho phép bỏ qua" }
+        content.addView(retention.first); content.addView(infoBox("Sự kiện và lịch sử kiểm tra được giữ theo chu kỳ kể cả khi nhân sự đã ngừng hoạt động."))
+        content.addView(logRetention.first); content.addView(staffAuto); content.addView(staffInterval.first); content.addView(infoBox("Nguồn nhân sự: Site 1291 / Kho HY1. Chu kỳ 60 phút giúp giảm lưu lượng và quota."))
         content.addView(autoSkip); content.addView(autoAfter.first)
-        content.addView(button("LƯU CẤU HÌNH HỆ THỐNG") {
+        content.addView(button("Lưu cấu hình", ButtonTone.PRIMARY) {
             lifecycleScope.launch {
                 runCatching {
                     val old = app.repository.getConfig()
@@ -485,31 +537,35 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch { runCatching { app.repository.getConfig() }.onSuccess { cfg ->
             retention.second.setText(cfg.retentionDays.toString()); logRetention.second.setText(cfg.diagnosticLogRetentionDays.toString()); staffAuto.isChecked = cfg.staffAutoSyncEnabled; staffInterval.second.setText(cfg.staffSyncIntervalMinutes.toString()); autoSkip.isChecked = cfg.autoSkipEnabled; autoAfter.second.setText(cfg.autoSkipAfterMinutes.toString())
         }.onFailure { toast(it.message ?: "Không tải được cấu hình") } }
-    }    private fun showUsers() {
-        val content = page("NHÂN SỰ & QUYỀN", SCREEN_USERS)
+    }
+
+    private fun showUsers() {
+        val content = page("Nhân sự & quyền", SCREEN_USERS)
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        content.addView(button("ĐỒNG BỘ DANH MỤC NHÂN SỰ NGAY") {
+        content.addView(button("Đồng bộ danh mục nhân sự", ButtonTone.PRIMARY) {
             lifecycleScope.launch { runCatching { app.api.invoke("staff-sync-now", JSONObject()) }.onSuccess { toast("Đồng bộ nhân sự: ${it.optString("status")}"); showUsers() }.onFailure { toast(it.message ?: "Không đồng bộ được") } }
         })
-        content.addView(button("TẠO TÀI KHOẢN NGOÀI DANH SÁCH NGUỒN") { createExtraUser { showUsers() } })
-        content.addView(infoBox("Nhân sự Google Sheet được quản lý từ nguồn. Nếu mất khỏi nguồn, tài khoản chỉ ngừng hoạt động; lịch sử nghiệp vụ vẫn giữ. User 6281280 được bảo vệ tuyệt đối."))
+        content.addView(button("Tạo tài khoản ngoài danh sách nguồn") { createExtraUser { showUsers() } })
+        content.addView(infoBox("Nhân sự từ Google Sheet được quản lý theo nguồn. Khi mất khỏi nguồn, tài khoản ngừng hoạt động nhưng lịch sử nghiệp vụ vẫn được giữ. Tài khoản 6281280 được bảo vệ."))
         content.addView(list)
         lifecycleScope.launch {
             runCatching { app.repository.listUsers() }.onSuccess { users ->
                 if (users.isEmpty()) list.addView(infoBox("Không có nhân sự trong phạm vi quyền."))
                 users.forEach { user ->
-                    val row = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(10), dp(8), dp(10), dp(8)); setBackgroundResource(R.drawable.bg_card) }
+                    val row = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(11), dp(9), dp(11), dp(9)); setBackgroundResource(R.drawable.bg_card) }
                     row.addView(text("${user.employeeCode} • ${user.fullName}${if (user.protectedAccount) " • BẢO VỆ" else ""}", 16, true))
-                    row.addView(text("${user.role.label} • ${if (user.active) "HOẠT ĐỘNG" else "NGỪNG"} • ${if (user.sourceKind == "GSHEET") "GOOGLE SHEET" else "TẠO THÊM"}${if (user.sourcePosition.isNotBlank()) " • ${user.sourcePosition}" else ""}", 12, false))
+                    row.addView(text("${user.role.label} • ${if (user.active) "Hoạt động" else "Ngừng"} • ${if (user.sourceKind == "GSHEET") "Google Sheet" else "Tạo thêm"}${if (user.sourcePosition.isNotBlank()) " • ${user.sourcePosition}" else ""}", 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
                     if (!user.protectedAccount && user.sourceKind != "GSHEET" && (app.session.effectiveRole == UserRole.ADMIN || user.role == UserRole.PICKER)) {
-                        row.addView(button("CHỈNH SỬA") { editUser(user) { showUsers() } })
-                        row.addView(button("NGỪNG TÀI KHOẢN") { lifecycleScope.launch { runCatching { app.api.invoke("delete-user", JSONObject().put("id", user.id)) }.onSuccess { toast("Đã ngừng ${user.employeeCode}"); showUsers() }.onFailure { toast(it.message ?: "Không xử lý được") } } })
+                        row.addView(button("Chỉnh sửa") { editUser(user) { showUsers() } })
+                        row.addView(button("Ngừng tài khoản", ButtonTone.DANGER) { lifecycleScope.launch { runCatching { app.api.invoke("delete-user", JSONObject().put("id", user.id)) }.onSuccess { toast("Đã ngừng ${user.employeeCode}"); showUsers() }.onFailure { toast(it.message ?: "Không xử lý được") } } })
                     }
                     list.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(4), 0, dp(4)) })
                 }
-            }.onFailure { list.addView(infoBox("Lỗi: ${it.message}")) }
+            }.onFailure { list.addView(infoBox("Không tải được nhân sự: ${it.message}")) }
         }
-    }    private fun editUser(user: UserProfile, refresh: () -> Unit) {
+    }
+
+    private fun editUser(user: UserProfile, refresh: () -> Unit) {
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), 0, dp(16), 0) }
         val name = EditText(this).apply { hint = "Họ tên"; setText(user.fullName) }
         val contractor = EditText(this).apply { hint = "Nhà thầu"; setText(user.contractor) }
@@ -527,7 +583,7 @@ class MainActivity : AppCompatActivity() {
         }
         listOf(name, contractor, roleView, active, password).forEach(root::addView)
         AlertDialog.Builder(this).setTitle("${user.employeeCode} • ${user.fullName}").setView(root)
-            .setNegativeButton("HỦY", null).setPositiveButton("LƯU") { _, _ ->
+            .setNegativeButton("Hủy", null).setPositiveButton("Lưu") { _, _ ->
                 val role = allowedRoles.firstOrNull { it.label == roleView.text.toString() } ?: user.role
                 lifecycleScope.launch {
                     runCatching { app.repository.updateUser(user, user.employeeCode, name.text.toString().trim(), contractor.text.toString().trim(), role, active.isChecked, password.text.toString()) }
@@ -546,7 +602,7 @@ class MainActivity : AppCompatActivity() {
         val roles = if (app.session.effectiveRole == UserRole.ADMIN) listOf(UserRole.ADMIN_INVENT, UserRole.INVENT, UserRole.PICKER) else listOf(UserRole.PICKER)
         val roleView = AutoCompleteTextView(this).apply { threshold = 0; setAdapter(ArrayAdapter(this@MainActivity, android.R.layout.simple_dropdown_item_1line, roles.map { it.label })); setText(roles.first().label, false) }
         listOf(code, name, contractor, roleView, password).forEach(root::addView)
-        AlertDialog.Builder(this).setTitle("Tạo tài khoản ngoài nguồn").setView(root).setNegativeButton("HỦY", null).setPositiveButton("TẠO") { _, _ ->
+        AlertDialog.Builder(this).setTitle("Tạo tài khoản ngoài nguồn").setView(root).setNegativeButton("Hủy", null).setPositiveButton("Tạo") { _, _ ->
             val selectedRole = roles.firstOrNull { it.label == roleView.text.toString() } ?: roles.first()
             lifecycleScope.launch {
                 val row = vn.pickpack1291.baohang.data.ImportUserRow(code.text.toString().trim(), name.text.toString().trim(), contractor.text.toString().trim(), selectedRole, true, password.text.toString())
@@ -558,17 +614,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showServiceMetrics() {
-        val content = page("HỆ THỐNG & DUNG LƯỢNG", SCREEN_SERVICES)
+        val content = page("Dung lượng & dịch vụ", SCREEN_SERVICES)
         val body = infoBox("Đang đọc số liệu hệ thống…")
         content.addView(body)
         lifecycleScope.launch {
             runCatching { app.api.invoke("service-metrics", JSONObject()) }.onSuccess { data ->
                 val usage = data.optJSONObject("usage") ?: JSONObject(); val limits = data.optJSONObject("free_limits") ?: JSONObject()
                 val dbBytes = usage.optLong("database_bytes"); val dbLimit = limits.optLong("database_bytes", 1L).coerceAtLeast(1L); val percent = dbBytes * 100.0 / dbLimit
-                body.text = "FREE 0đ • KHÔNG TỰ BẬT BILLING\n\n" +
+                body.text = "GÓI MIỄN PHÍ • KHÔNG TỰ BẬT THANH TOÁN\n\n" +
                     "Database: %.1f MB / %.0f MB (%.1f%%)\n".format(dbBytes / 1048576.0, dbLimit / 1048576.0, percent) +
-                    "SKU hoạt động: ${usage.optInt("sku_active")}\nNhân sự hoạt động: ${usage.optInt("profiles_active")}\nTicket đang mở: ${usage.optInt("issues_active")}\n" +
-                    "FCM token hoạt động: ${usage.optInt("active_device_tokens")}\nGoogle Sheet chờ: ${usage.optInt("sheet_pending")}\nLog chẩn đoán: %.2f MB".format(usage.optLong("diagnostic_log_bytes") / 1048576.0)
+                    "SKU hoạt động: ${usage.optInt("sku_active")}\nNhân sự hoạt động: ${usage.optInt("profiles_active")}\nSự kiện đang mở: ${usage.optInt("issues_active")}\n" +
+                    "Thiết bị nhận thông báo: ${usage.optInt("active_device_tokens")}\nGoogle Sheet chờ: ${usage.optInt("sheet_pending")}\nLog chẩn đoán: %.2f MB".format(usage.optLong("diagnostic_log_bytes") / 1048576.0)
             }.onFailure { body.text = "Không đọc được số liệu hệ thống: ${it.message}" }
         }
     }
@@ -578,6 +634,7 @@ class MainActivity : AppCompatActivity() {
         UserRole.INVENT -> currentScreen == SCREEN_INVENT
         UserRole.PICKER -> currentScreen == SCREEN_PICKER
     }
+
     private fun updateBackButton() { findViewById<TextView>(R.id.btnBack)?.visibility = if (isRoleRoot()) View.GONE else View.VISIBLE }
     private fun navigateBack() { if (isRoleRoot()) finish() else renderForRole() }
 
@@ -588,9 +645,9 @@ class MainActivity : AppCompatActivity() {
             runCatching { app.repository.markAlertReceived(alert.eventId) }
             val dialog = AlertDialog.Builder(this@MainActivity)
                 .setTitle(alert.title.ifBlank { alert.status.label })
-                .setMessage("${alert.message}\n\nServer v${alert.issueVersion}")
+                .setMessage("${alert.message}\n\nTrạng thái v${alert.issueVersion}")
                 .setCancelable(false)
-                .setPositiveButton("ĐÃ XÁC NHẬN") { _, _ -> lifecycleScope.launch { app.repository.acknowledgeAlert(alert.eventId) } }
+                .setPositiveButton("Xác nhận") { _, _ -> lifecycleScope.launch { app.repository.acknowledgeAlert(alert.eventId) } }
                 .create()
             dialog.setOnShowListener { lifecycleScope.launch { runCatching { app.repository.markAlertDisplayed(alert.eventId) } } }
             if (!isFinishing && !isDestroyed) dialog.show()
@@ -606,11 +663,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun addDiagnosticsButton(content: LinearLayout) {
-        content.addView(button("GỬI LOG CHẨN ĐOÁN") {
+        content.addView(button("Gửi chẩn đoán", ButtonTone.SECONDARY) {
             lifecycleScope.launch {
                 runCatching { app.repository.sendDiagnosticLog() }
-                    .onSuccess { toast(if (it.optBoolean("uploaded")) "Đã gửi log an toàn" else it.optString("message", "Chưa có log")) }
-                    .onFailure { toast(it.message ?: "Không gửi được log") }
+                    .onSuccess { toast(if (it.optBoolean("uploaded")) "Đã gửi dữ liệu chẩn đoán" else it.optString("message", "Chưa có dữ liệu chẩn đoán")) }
+                    .onFailure { toast(it.message ?: "Không gửi được dữ liệu chẩn đoán") }
             }
         })
     }
@@ -622,37 +679,53 @@ class MainActivity : AppCompatActivity() {
                 val items = withContext(Dispatchers.IO) { XlsxImporter(contentResolver).parseSkuFile(uri) }
                 app.repository.replaceCatalog(items, "Tồn Bin XLSX")
                 items.size
-            }.onSuccess { toast("Đã thay danh mục bằng $it SKU / tên sản phẩm"); showCatalog() }.onFailure { toast("Lỗi: ${it.message}") }
+            }.onSuccess { toast("Đã cập nhật $it SKU và tên sản phẩm"); showCatalog() }.onFailure { toast("Lỗi: ${it.message}") }
         }
-    }    private fun numberInput(label: String): Pair<LinearLayout, EditText> {
+    }
+
+    private fun numberInput(label: String): Pair<LinearLayout, EditText> {
         val input = EditText(this).apply { inputType = InputType.TYPE_CLASS_NUMBER; setSingleLine(true) }
         val wrapper = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(text(label, 13, true))
             addView(input)
-            setPadding(0, dp(5), 0, dp(5))
+            setPadding(0, dp(5), 0, dp(7))
         }
         return wrapper to input
     }
 
     private fun EditText.int(): Int = text.toString().toIntOrNull() ?: 0
 
-    private fun button(label: String, action: () -> Unit): Button = Button(this).apply {
+    private fun button(label: String, tone: ButtonTone = ButtonTone.SECONDARY, action: () -> Unit): Button = Button(this).apply {
         text = label
         setOnClickListener { action() }
         isAllCaps = false
         setTypeface(typeface, Typeface.BOLD)
-        setPadding(dp(8), 0, dp(8), 0)
+        setPadding(dp(10), 0, dp(10), 0)
+        minHeight = dp(48)
+        setBackgroundResource(
+            when (tone) {
+                ButtonTone.PRIMARY -> R.drawable.bg_button_primary
+                ButtonTone.SUCCESS -> R.drawable.bg_button_success
+                ButtonTone.DANGER -> R.drawable.bg_button_danger
+                ButtonTone.SECONDARY -> R.drawable.bg_button_secondary
+            }
+        )
+        setTextColor(getColor(if (tone == ButtonTone.SECONDARY) R.color.navy_900 else R.color.white))
     }
 
     private fun text(value: String, size: Int, bold: Boolean): TextView = TextView(this).apply {
         text = value
         textSize = size.toFloat()
         if (bold) setTypeface(typeface, Typeface.BOLD)
-        setTextColor(getColor(R.color.navy_900))
+        setTextColor(getColor(R.color.text_primary))
+        setLineSpacing(0f, 1.08f)
     }
 
-    private fun section(value: String): TextView = text(value, 16, true).apply { setPadding(0, dp(18), 0, dp(6)) }
+    private fun section(value: String): TextView = text(value, 15, true).apply {
+        setTextColor(getColor(R.color.navy_700))
+        setPadding(0, dp(18), 0, dp(6))
+    }
 
     private fun infoBox(value: String): TextView = text(value, 14, false).apply {
         setPadding(dp(12), dp(10), dp(12), dp(10))
