@@ -1,11 +1,11 @@
 {
   "channel": "beta",
-  "versionCode": 4,
-  "versionName": "1.3.0",
-  "apkUrl": "https://raw.githubusercontent.com/tam95supra-source/bao-hang-1291/ota-assets/beta/bao-hang-1291-beta-1.3.0.apk",
-  "sha256": "d26d9ac183abf858a2345beb96348c102fbbbc9679a4eebf03df24e875e867ed",
+  "versionCode": 5,
+  "versionName": "1.4.0",
+  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.4.0/bao-hang-1291-beta-1.4.0.apk",
+  "sha256": "608197d16effca7bb674754920b9b1e594b27a37b05a39637c148de3e41b0b23",
   "mandatory": false,
-  "releaseNotes": "Beta 1.3.0: chuyển hoàn toàn sang danh mục SKU/Tên hàng từ file Tồn Bin, loại bỏ cơ chế kết nối Supra và dữ liệu tồn chi tiết; đồng bộ tự động nhân sự HY1/1291 từ Google Sheet với bảo vệ tài khoản Admin hệ thống; bổ sung cấu hình mốc vận hành và Auto SKIP; Picker chỉ nhận cảnh báo nổi bật khi ĐÃ CÓ HÀNG/CHÂM HÀNG hoặc ĐƯỢC PHÉP SKIP với giao diện xanh/đỏ 40%; App và Web tự cập nhật dữ liệu realtime, hỗ trợ quay lại chuẩn Android; nâng cấp tổng quan, báo cáo vận hành, quản trị người dùng và giám sát dung lượng/quota theo tiêu chí 0 đồng.",
+  "releaseNotes": "Beta 1.4.0: chuẩn hóa font hệ thống chuyên nghiệp và nhẹ cho Android/Web; tái cấu trúc layout Web theo các nhóm nghiệp vụ Vận hành, Nhân sự & quyền và Hệ thống; bổ sung đồng bộ cấu hình và mốc vận hành realtime hai chiều giữa Web và App qua private Supabase Realtime, không cần F5 hoặc nút làm mới; giữ nguyên cơ chế realtime sự kiện, danh mục và nhân sự; tối ưu giao diện Picker/Admin Event/Admin, bảo mật public source và kiểm soát vận hành 0 đồng.",
   "signerSha256": "2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0",
-  "sourceSha": "131f1a5253929658df884fc64d3906982c2bad88"
+  "sourceSha": "cb7b12424453ded2576384a617e4eb022753a4a5"
 }
