@@ -1,8 +1,8 @@
 {
   "action": "publish",
-  "channel": "beta",
+  "channel": "stable",
   "versionName": "1.5.0",
-  "versionCode": 7,
+  "versionCode": 8,
   "mandatory": false,
-  "releaseNotes": "Beta 1.5.0: sửa dứt điểm Web bị nhảy giữa hai giao diện bằng một owner Realtime ticket; bổ sung footer bản quyền; Xử lý báo hàng chia rõ Chờ xử lý, Đang xử lý, Đã có hàng, Đã bỏ qua; cho phép báo lại đã có hàng từ ticket đã bỏ qua và gửi cảnh báo lại cho người liên quan; Báo cáo vận hành kho dùng thuật ngữ thuần Việt, chi tiết hơn và xuất Excel; Android đồng bộ cùng phân loại và nghiệp vụ."
+  "releaseNotes": "Stable 1.5.0: sửa dứt điểm Web bị nhảy giữa hai giao diện bằng một owner Realtime ticket; bổ sung footer bản quyền; Xử lý báo hàng chia rõ Chờ xử lý, Đang xử lý, Đã có hàng, Đã bỏ qua; cho phép báo lại đã có hàng từ ticket đã bỏ qua và gửi cảnh báo lại cho người liên quan; Báo cáo vận hành kho dùng thuật ngữ thuần Việt, chi tiết hơn và xuất Excel; Android đồng bộ cùng phân loại và nghiệp vụ."
 }
