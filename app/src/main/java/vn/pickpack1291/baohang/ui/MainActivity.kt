@@ -78,6 +78,14 @@ class MainActivity : AppCompatActivity() {
                     runOnUiThread { if (currentScreen == SCREEN_USERS) showUsers() }
                 }
             },
+            onConfigChanged = {
+                runOnUiThread {
+                    when (currentScreen) {
+                        SCREEN_SLA -> showOperationalSla()
+                        SCREEN_CONFIG -> showConfig()
+                    }
+                }
+            },
             onStatus = { app.diagnostics.info("realtime_status", mapOf("status" to it.name)) }
         )
     }
@@ -494,7 +502,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showOperationalSla() {
-        val content = page("Mốc thời gian vận hành", SCREEN_CONFIG)
+        val content = page("Mốc thời gian vận hành", SCREEN_SLA)
         val ack = numberInput("Thời gian nhận xử lý (phút)")
         val reminder = numberInput("Chu kỳ nhắc xử lý (phút)")
         val replenish = numberInput("Thời gian châm hàng (phút)")
@@ -700,7 +708,7 @@ class MainActivity : AppCompatActivity() {
         text = label
         setOnClickListener { action() }
         isAllCaps = false
-        setTypeface(typeface, Typeface.BOLD)
+        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         setPadding(dp(10), 0, dp(10), 0)
         minHeight = dp(48)
         setBackgroundResource(
@@ -717,7 +725,7 @@ class MainActivity : AppCompatActivity() {
     private fun text(value: String, size: Int, bold: Boolean): TextView = TextView(this).apply {
         text = value
         textSize = size.toFloat()
-        if (bold) setTypeface(typeface, Typeface.BOLD)
+        typeface = Typeface.create(if (bold) "sans-serif-medium" else "sans-serif", Typeface.NORMAL)
         setTextColor(getColor(R.color.text_primary))
         setLineSpacing(0f, 1.08f)
     }
@@ -745,6 +753,7 @@ class MainActivity : AppCompatActivity() {
         private const val SCREEN_CATALOG = "catalog"
         private const val SCREEN_SERVICES = "services"
         private const val SCREEN_REPORTS = "reports"
+        private const val SCREEN_SLA = "sla"
         private const val SCREEN_CONFIG = "config"
         private const val SCREEN_USERS = "users"
     }
