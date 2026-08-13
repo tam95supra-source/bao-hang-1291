@@ -45,6 +45,9 @@ import vn.pickpack1291.baohang.data.UserRole
 import vn.pickpack1291.baohang.importer.XlsxImporter
 import vn.pickpack1291.baohang.realtime.RealtimeClient
 import vn.pickpack1291.baohang.update.AppUpdater
+import java.net.HttpURLConnection
+import java.net.URI
+import java.nio.charset.StandardCharsets
 
 class MainActivity : AppCompatActivity() {
     private val app by lazy { application as BaoHangApplication }
@@ -204,7 +207,7 @@ class MainActivity : AppCompatActivity() {
         val content = page("Quản trị hệ thống", SCREEN_MENU)
         content.addView(infoBox("Theo dõi vận hành, nhân sự, cấu hình và dung lượng của Báo hàng 1291."))
         content.addView(section("Vận hành"))
-        content.addView(button("Sự kiện & điều phối") { showInventBoard() })
+        content.addView(button("Xử lý báo hàng") { showInventBoard() })
         content.addView(button("Danh mục SKU & tên hàng") { showCatalog() })
         content.addView(button("Báo cáo vận hành") { showReports() })
         content.addView(section("Quản trị"))
@@ -223,9 +226,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun showAdminEvent() {
         val content = page("Điều phối sự kiện", SCREEN_MENU)
-        content.addView(infoBox("Ưu tiên xử lý sự kiện báo thiếu và điều phối nhân sự tại hiện trường."))
+        content.addView(infoBox("Ưu tiên xử lý báo thiếu và điều phối nhân sự tại hiện trường."))
         content.addView(section("Vận hành"))
-        content.addView(button("Sự kiện báo thiếu", ButtonTone.PRIMARY) { showInventBoard() })
+        content.addView(button("Xử lý báo hàng", ButtonTone.PRIMARY) { showInventBoard() })
         content.addView(button("Danh mục SKU & tên hàng") { showCatalog() })
         content.addView(button("Báo cáo vận hành") { showReports() })
         content.addView(section("Quản lý"))
@@ -242,9 +245,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showInventBoard() {
-        val content = page("Sự kiện báo thiếu", SCREEN_INVENT)
+        val content = page("Xử lý báo hàng", SCREEN_INVENT)
         val status = text("Đang tải dữ liệu…", 13, false).apply { setTextColor(getColor(R.color.text_secondary)) }
-        val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
+        val tabs = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val boardContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         content.addView(status)
         content.addView(tabs)
@@ -255,17 +258,18 @@ class MainActivity : AppCompatActivity() {
         var selected = 0
         val tabButtons = mutableListOf<Button>()
         fun updateTabs() {
-            tabButtons.forEachIndexed { index, button ->
+            tabButtons.forEachIndexed { index, tab ->
                 val active = index == selected
-                button.setBackgroundResource(if (active) R.drawable.bg_button_primary else R.drawable.bg_button_secondary)
-                button.setTextColor(getColor(if (active) R.color.white else R.color.navy_900))
+                tab.setBackgroundResource(if (active) R.drawable.bg_button_primary else R.drawable.bg_button_secondary)
+                tab.setTextColor(getColor(if (active) R.color.white else R.color.navy_900))
             }
         }
         fun draw() {
             val data = board ?: return
             val list = when (selected) {
                 1 -> data.claimed
-                2 -> data.recent
+                2 -> data.available
+                3 -> data.skipped
                 else -> data.open
             }
             boardContainer.removeAllViews()
@@ -273,16 +277,24 @@ class MainActivity : AppCompatActivity() {
             list.forEach { issue -> boardContainer.addView(issueCard(issue, selected) { loadInventBoard(status) { board = it; draw() } }) }
             status.text = when (selected) {
                 1 -> "${list.size} SKU đang xử lý${if (app.session.effectiveRole == UserRole.INVENT) " của tôi" else ""}"
-                2 -> "${list.size} SKU đã xử lý gần đây"
-                else -> "${list.size} SKU đang chờ nhận"
+                2 -> "${list.size} SKU đã có hàng"
+                3 -> "${list.size} SKU đã được cho phép bỏ qua"
+                else -> "${list.size} SKU đang chờ xử lý"
             }
             updateTabs()
         }
-        listOf("Chờ nhận", "Đang xử lý", "Đã xử lý").forEachIndexed { index, label ->
-            val tab = button(label) { selected = index; draw() }
-            tabButtons += tab
-            tabs.addView(tab, LinearLayout.LayoutParams(0, dp(48), 1f).apply { setMargins(dp(2), dp(5), dp(2), dp(9)) })
+        val labels = listOf("Chờ xử lý", "Đang xử lý", "Đã có hàng", "Đã bỏ qua")
+        labels.chunked(2).forEachIndexed { rowIndex, rowLabels ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
+            rowLabels.forEachIndexed { columnIndex, label ->
+                val index = rowIndex * 2 + columnIndex
+                val tab = button(label) { selected = index; draw() }
+                tabButtons += tab
+                row.addView(tab, LinearLayout.LayoutParams(0, dp(48), 1f).apply { setMargins(dp(2), dp(3), dp(2), dp(3)) })
+            }
+            tabs.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
+        tabs.setPadding(0, dp(3), 0, dp(7))
         updateTabs()
         loadInventBoard(status) { board = it; draw() }
     }
@@ -325,23 +337,26 @@ class MainActivity : AppCompatActivity() {
             }
         } else if (bucket == 1) {
             val actions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            actions.addView(button("Đã có hàng / châm bù", ButtonTone.SUCCESS) { confirmIssueUpdate(issue, "AVAILABLE", refresh) })
+            actions.addView(button("Đã có hàng / đã châm hàng", ButtonTone.SUCCESS) { confirmIssueUpdate(issue, "AVAILABLE", refresh) })
             actions.addView(button("Không tìm thấy • cho phép bỏ qua", ButtonTone.DANGER) { confirmIssueUpdate(issue, "NOT_FOUND", refresh) })
             card.addView(actions)
             if (elevated) card.addView(button("Điều phối lại") { reassignIssue(issue, refresh) })
+        } else if (bucket == 3) {
+            val canRestore = elevated || (app.session.effectiveRole == UserRole.INVENT && issue.assignedId == app.session.profile?.id)
+            if (canRestore) card.addView(button("Báo lại đã có hàng", ButtonTone.SUCCESS) { confirmRestoreSkipped(issue, refresh) })
         }
         return card
     }
 
     private fun confirmIssueUpdate(issue: StockIssue, action: String, refresh: () -> Unit) {
         val isSkip = action == "NOT_FOUND"
-        val firstMessage = if (isSkip) "Không tìm thấy SKU ${issue.sku}. Cho phép Picker bỏ qua SKU này?" else "Xác nhận SKU ${issue.sku} đã có hàng hoặc đã châm bù?"
+        val firstMessage = if (isSkip) "Không tìm thấy SKU ${issue.sku}. Cho phép Người lấy hàng bỏ qua SKU này?" else "Xác nhận SKU ${issue.sku} đã có hàng hoặc đã châm hàng?"
         AlertDialog.Builder(this).setTitle(if (isSkip) "Cho phép bỏ qua" else "Đã có hàng")
             .setMessage(firstMessage).setNegativeButton("Hủy", null)
             .setPositiveButton("Xác nhận") { _, _ ->
                 if (isSkip) {
                     AlertDialog.Builder(this).setTitle("Xác nhận lần cuối")
-                        .setMessage("Picker sẽ nhận cảnh báo bắt buộc xác nhận trước khi tiếp tục. Cho phép bỏ qua SKU ${issue.sku}?")
+                        .setMessage("Người lấy hàng sẽ nhận cảnh báo bắt buộc xác nhận trước khi tiếp tục. Cho phép bỏ qua SKU ${issue.sku}?")
                         .setNegativeButton("Hủy", null).setPositiveButton("Cho phép") { _, _ -> updateIssue(issue, action, refresh) }.show()
                 } else updateIssue(issue, action, refresh)
             }.show()
@@ -353,6 +368,45 @@ class MainActivity : AppCompatActivity() {
                 .onSuccess { toast("SKU ${issue.sku}: ${it.status.label}"); refresh() }
                 .onFailure { toast(it.message ?: "Không cập nhật được SKU") }
         }
+    }
+
+    private fun confirmRestoreSkipped(issue: StockIssue, refresh: () -> Unit) {
+        AlertDialog.Builder(this)
+            .setTitle("Báo lại đã có hàng")
+            .setMessage("SKU ${issue.sku} trước đó đã được cho phép bỏ qua. Xác nhận hiện đã tìm thấy hàng?\n\nQuyền bỏ qua cũ sẽ bị hủy và toàn bộ Người lấy hàng đã báo SKU này sẽ nhận cảnh báo ĐÃ CÓ HÀNG.")
+            .setNegativeButton("Hủy", null)
+            .setPositiveButton("Xác nhận đã có hàng") { _, _ ->
+                lifecycleScope.launch {
+                    runCatching { restoreSkippedIssue(issue.id) }
+                        .onSuccess { toast("SKU ${issue.sku} đã chuyển sang ĐÃ CÓ HÀNG"); refresh() }
+                        .onFailure { toast(it.message ?: "Không báo lại được trạng thái đã có hàng") }
+                }
+            }.show()
+    }
+
+    private suspend fun restoreSkippedIssue(issueId: String): StockIssue = withContext(Dispatchers.IO) {
+        app.api.refreshSessionIfNeeded()
+        val baseUrl = BuildConfig.SUPABASE_URL.trimEnd('/')
+        val connection = URI("$baseUrl/functions/v1/admin-ops/restore-skipped").toURL().openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = "POST"
+            connection.connectTimeout = 15_000
+            connection.readTimeout = 30_000
+            connection.doOutput = true
+            connection.setRequestProperty("Accept", "application/json")
+            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            connection.setRequestProperty("apikey", BuildConfig.SUPABASE_ANON_KEY)
+            connection.setRequestProperty("Authorization", "Bearer ${app.session.accessToken}")
+            app.session.adminTestRole?.let { connection.setRequestProperty("x-admin-test-role", it.wire) }
+            val payload = JSONObject().put("issue_id", issueId).put("reason", "Đã tìm thấy hàng sau khi cho phép bỏ qua")
+            connection.outputStream.use { it.write(payload.toString().toByteArray(StandardCharsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val raw = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            val json = runCatching { JSONObject(raw) }.getOrElse { JSONObject().put("error", raw) }
+            if (code !in 200..299) throw IllegalStateException(json.optString("error", "Lỗi máy chủ $code"))
+            StockIssue.fromJson(json.getJSONObject("issue"))
+        } finally { connection.disconnect() }
     }
 
     private fun reassignIssue(issue: StockIssue, refresh: () -> Unit) {
@@ -475,7 +529,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showReports() {
-        val content = page("Báo cáo vận hành", SCREEN_REPORTS)
+        val content = page("Báo cáo vận hành kho", SCREEN_REPORTS)
         val body = infoBox("Đang tổng hợp dữ liệu vận hành…")
         content.addView(body)
         lifecycleScope.launch {
@@ -485,18 +539,18 @@ class MainActivity : AppCompatActivity() {
                 val topLines = buildString {
                     for (i in 0 until minOf(10, top.length())) {
                         val item = top.getJSONObject(i)
-                        append("\n${i + 1}. ${item.optString("sku")} • ${item.optString("product_name")} • ${item.optInt("reports")} lượt")
+                        append("\n${i + 1}. ${item.optString("sku")} • ${item.optString("product_name")} • ${item.optInt("reports")} lượt báo")
                     }
                 }
                 body.text = "24 GIỜ GẦN NHẤT\n" +
-                    "Lượt báo: ${day.optInt("reports")} • Sự kiện: ${day.optInt("issues")} • Hoàn tất: ${day.optInt("resolved")}\n" +
-                    "Đã có hàng/châm bù: ${day.optInt("available")} • Cho phép bỏ qua: ${day.optInt("skipped")}\n\n" +
-                    "CHẤT LƯỢNG 30 NGÀY\n" +
-                    "Đang mở: ${report.optInt("active_now")} • Quá mốc phản hồi: ${report.optInt("overdue_now")}\n" +
-                    "Trung vị nhận xử lý: ${report.opt("median_claim_minutes") ?: "—"} phút • P95: ${report.opt("p95_claim_minutes") ?: "—"} phút\n" +
-                    "Trung vị hoàn tất: ${report.opt("median_resolution_minutes") ?: "—"} phút • P95: ${report.opt("p95_resolution_minutes") ?: "—"} phút\n" +
-                    "Tái phát: ${report.optInt("recurrent_episodes")} • Tự động cho phép bỏ qua: ${report.optInt("auto_skip_count_30d")}\n\n" +
-                    "SKU PHÁT SINH NHIỀU$topLines"
+                    "Lượt báo thiếu: ${day.optInt("reports")} • Đợt báo thiếu: ${day.optInt("issues")} • Đã xử lý xong: ${day.optInt("resolved")}\n" +
+                    "Đã có hàng / đã châm hàng: ${day.optInt("available")} • Đã cho phép bỏ qua: ${day.optInt("skipped")}\n\n" +
+                    "CHẤT LƯỢNG XỬ LÝ 30 NGÀY\n" +
+                    "Đang cần xử lý: ${report.optInt("active_now")} • Quá thời gian tiếp nhận: ${report.optInt("overdue_now")}\n" +
+                    "Thời gian nhận xử lý trung vị: ${report.opt("median_claim_minutes") ?: "—"} phút • 95% được nhận trong: ${report.opt("p95_claim_minutes") ?: "—"} phút\n" +
+                    "Thời gian xử lý xong trung vị: ${report.opt("median_resolution_minutes") ?: "—"} phút • 95% xử lý xong trong: ${report.opt("p95_resolution_minutes") ?: "—"} phút\n" +
+                    "Đợt tái phát: ${report.optInt("recurrent_episodes")} • Tự cho phép bỏ qua do quá thời gian: ${report.optInt("auto_skip_count_30d")}\n\n" +
+                    "SKU PHÁT SINH BÁO THIẾU NHIỀU$topLines"
             }.onFailure { body.text = "Không tải được báo cáo: ${it.message}" }
         }
     }
