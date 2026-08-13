@@ -34,3 +34,6 @@ jobs:
       - name: Deploy Web Admin API Edge Function
         if: ${{ hashFiles('supabase/functions/web-api/index.ts') != '' }}
         run: supabase functions deploy web-api --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
+      - name: Deploy focused Admin Ops Edge Function
+        if: ${{ hashFiles('supabase/functions/admin-ops/index.ts') != '' }}
+        run: supabase functions deploy admin-ops --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
