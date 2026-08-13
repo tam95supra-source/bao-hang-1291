@@ -1,0 +1,202 @@
+/* Warehouse operations UI v2: single visible owner for live operational pages. */
+.content[data-warehouse-view] {
+  min-height: 640px;
+}
+.content[data-warehouse-view] > :not(.warehouse-v2-root) {
+  display: none !important;
+}
+.warehouse-v2-root {
+  width: 100%;
+}
+.wv2-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 0 0 18px;
+}
+.wv2-heading h2 {
+  margin: 0;
+  color: #101828;
+  font-size: 28px;
+  line-height: 1.18;
+  letter-spacing: -.04em;
+  font-weight: 720;
+}
+.wv2-heading p {
+  margin: 6px 0 0;
+  color: #667085;
+  font-size: 13px;
+}
+.wv2-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border: 1px solid #abefc6;
+  border-radius: 999px;
+  color: #05603a;
+  background: #ecfdf3;
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.wv2-live::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #12b76a;
+}
+.wv2-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.wv2-tabs button {
+  min-height: 46px;
+  color: #475467;
+  background: #fff;
+  border: 1px solid #d0d5dd;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 3%);
+}
+.wv2-tabs button.active {
+  color: #fff;
+  background: #0b2942;
+  border-color: #0b2942;
+}
+.wv2-count {
+  display: inline-flex;
+  min-width: 24px;
+  justify-content: center;
+  margin-left: 6px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: inherit;
+  background: rgb(255 255 255 / 16%);
+  font-size: 10px;
+}
+.wv2-tabs button:not(.active) .wv2-count { background: #f2f4f7; }
+.wv2-empty {
+  display: grid;
+  place-items: center;
+  min-height: 160px;
+  padding: 28px;
+  border: 1px dashed #d0d5dd;
+  border-radius: 12px;
+  color: #667085;
+  background: #fff;
+  text-align: center;
+}
+.wv2-issue {
+  position: relative;
+  margin: 9px 0;
+  padding: 16px 17px 16px 20px;
+  border: 1px solid #e4e7ec;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 3%);
+}
+.wv2-issue::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 4px;
+  border-radius: 4px;
+  background: #84adff;
+}
+.wv2-issue[data-state="claimed"]::before { background: #f79009; }
+.wv2-issue[data-state="available"]::before { background: #12b76a; }
+.wv2-issue[data-state="skipped"]::before { background: #98a2b3; }
+.wv2-issue-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+.wv2-issue-head > div { display: grid; gap: 3px; }
+.wv2-issue-head strong { color: #101828; font-size: 18px; font-weight: 700; }
+.wv2-issue-head span, .wv2-issue-head time, .wv2-meta { color: #667085; font-size: 12px; }
+.wv2-product { margin: 9px 0 5px; color: #344054; font-size: 14px; }
+.wv2-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 13px; }
+.wv2-actions button { min-width: 150px; }
+.wv2-success { color: #fff; background: #067647; }
+.wv2-warning { color: #fff; background: #b54708; }
+.wv2-danger { color: #fff; background: #b42318; }
+.wv2-secondary { color: #344054; background: #fff; border: 1px solid #d0d5dd; }
+
+.wv2-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.wv2-metric {
+  display: grid;
+  gap: 5px;
+  padding: 16px;
+  border: 1px solid #e4e7ec;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 3%);
+}
+.wv2-metric span { color: #667085; font-size: 11px; font-weight: 560; }
+.wv2-metric strong { color: #101828; font-size: 27px; line-height: 1.15; letter-spacing: -.035em; font-weight: 720; }
+.wv2-metric small { color: #98a2b3; font-size: 10px; }
+.wv2-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  margin: 12px 0;
+}
+.wv2-panel {
+  padding: 17px;
+  border: 1px solid #e4e7ec;
+  border-radius: 12px;
+  background: #fff;
+}
+.wv2-panel h3 { margin: 0 0 12px; color: #101828; font-size: 16px; font-weight: 690; }
+.wv2-kv { display: grid; grid-template-columns: 1fr auto; gap: 8px 18px; padding: 8px 0; border-bottom: 1px solid #f2f4f7; }
+.wv2-kv:last-child { border-bottom: 0; }
+.wv2-kv span { color: #667085; }
+.wv2-kv b { color: #101828; font-weight: 680; text-align: right; }
+.wv2-report-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.wv2-report-actions button { min-height: 40px; }
+.wv2-detail-title { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin: 22px 0 9px; }
+.wv2-detail-title h3 { margin: 0; font-size: 17px; }
+.wv2-table-wrap { overflow: auto; max-height: 520px; border: 1px solid #e4e7ec; border-radius: 11px; background: #fff; }
+.wv2-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.wv2-table th, .wv2-table td { padding: 10px 11px; border-bottom: 1px solid #eef1f4; text-align: left; white-space: nowrap; }
+.wv2-table th { position: sticky; top: 0; z-index: 1; color: #475467; background: #f9fafb; font-size: 11px; }
+.wv2-table td:nth-child(3) { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.wv2-status { display: inline-flex; padding: 3px 7px; border-radius: 999px; background: #f2f4f7; color: #475467; font-size: 10px; font-weight: 650; }
+.wv2-status.available { color: #05603a; background: #ecfdf3; }
+.wv2-status.skipped { color: #7a2e0e; background: #fffaeb; }
+.wv2-status.active { color: #1849a9; background: #eff8ff; }
+.app-footer {
+  padding: 18px 20px 22px;
+  color: #98a2b3;
+  border-top: 1px solid #eaecf0;
+  background: #fff;
+  font-size: 11px;
+  text-align: center;
+}
+@media (min-width: 980px) {
+  .app-shell:has(.tabs button:nth-child(5)) .app-footer { grid-column: 1 / -1; grid-row: 5; }
+}
+@media (max-width: 900px) {
+  .wv2-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .wv2-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .wv2-grid { grid-template-columns: 1fr; }
+  .wv2-heading { align-items: flex-start; flex-direction: column; }
+}
+@media (max-width: 560px) {
+  .wv2-metrics { grid-template-columns: 1fr 1fr; gap: 7px; }
+  .wv2-metric { padding: 13px; }
+  .wv2-metric strong { font-size: 23px; }
+  .wv2-actions { display: grid; grid-template-columns: 1fr; }
+  .wv2-actions button { width: 100%; min-height: 50px; }
+}
