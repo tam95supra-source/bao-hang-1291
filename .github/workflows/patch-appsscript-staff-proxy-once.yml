@@ -1,0 +1,150 @@
+name: Consolidate private staff sync into Apps Script cutover once
+
+on:
+  push:
+    branches: ['ops/firebase-read-probe-20260815']
+    paths: ['.github/workflows/patch-appsscript-staff-proxy-once.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: target-final-20260814-impl
+          fetch-depth: 0
+      - name: Patch Apps Script cutover and staff proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # Apps Script: expose private staff source under existing integration secret
+          p=Path('google-apps-script/Code.gs')
+          s=p.read_text(encoding='utf-8')
+          const_marker="const DEFAULT_INDEX_SPREADSHEET_ID = '1i_KPYGsXpxCag-Oz5NkG4UmshZt2fbDFBcv1QH1-p8w';"
+          if 'const STAFF_SOURCE_SPREADSHEET_ID' not in s:
+              s=s.replace(const_marker, const_marker+"\nconst STAFF_SOURCE_SPREADSHEET_ID = '1HLBzpxHLd8qoTJopOA7M_q0dDvO56G0Tb4curKZV7EM';\nconst STAFF_SOURCE_SHEET_NAME = 'Trang tính1';", 1)
+          dispatch="    if (mode === 'recovery_state') return json_(handleRecoveryState_(body));"
+          if "mode === 'staff_source'" not in s:
+              if dispatch not in s: raise SystemExit('recovery_state dispatch marker missing')
+              s=s.replace(dispatch, dispatch+"\n    if (mode === 'staff_source') return json_(handleStaffSource_(body));", 1)
+          if 'function handleStaffSource_' not in s:
+              handler=r'''function handleStaffSource_(body) {
+  requireIntegrationSecret_(body);
+  const source = SpreadsheetApp.openById(STAFF_SOURCE_SPREADSHEET_ID);
+  const sheet = source.getSheetByName(STAFF_SOURCE_SHEET_NAME);
+  if (!sheet) throw new Error('STAFF_SOURCE_TAB_NOT_FOUND');
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) throw new Error('STAFF_SOURCE_EMPTY');
+  const values = sheet.getRange(2, 1, lastRow - 1, 9).getDisplayValues();
+  const byCode = new Map();
+  values.forEach((row) => {
+    if (String(row[0] || '').trim() !== 'Kho Yên Mỹ - Hưng Yên') return;
+    if (String(row[1] || '').trim() !== '1291') return;
+    if (String(row[8] || '').trim().toLowerCase() !== 'đang làm việc') return;
+    const employeeCode = String(row[3] || '').trim();
+    const fullName = String(row[4] || '').trim();
+    if (!employeeCode || !fullName) return;
+    byCode.set(employeeCode.toLowerCase(), {
+      employee_code: employeeCode,
+      full_name: fullName,
+      contractor: String(row[2] || '').trim(),
+      source_position: String(row[5] || '').trim(),
+    });
+  });
+  const staff = Array.from(byCode.values()).sort((a,b)=>String(a.employee_code).localeCompare(String(b.employee_code)));
+  if (!staff.length) throw new Error('STAFF_SOURCE_EMPTY_ACTIVE_1291');
+  return { ok:true, source_sheet_id:STAFF_SOURCE_SPREADSHEET_ID, source_sheet_name:STAFF_SOURCE_SHEET_NAME, count:staff.length, staff:staff };
+}
+
+'''
+              marker='function handleExport_(body) {'
+              if marker not in s: raise SystemExit('handleExport marker missing')
+              s=s.replace(marker, handler+marker, 1)
+          old="""function workbook_() {
+  const id = String(PropertiesService.getScriptProperties().getProperty('TARGET_SPREADSHEET_ID') || DEFAULT_TARGET_SPREADSHEET_ID).trim();
+  if (id) return SpreadsheetApp.openById(id);
+  throw new Error('TARGET_SPREADSHEET_ID_NOT_CONFIGURED');
+}"""
+          new="""function workbook_() {
+  const configured = String(PropertiesService.getScriptProperties().getProperty('TARGET_SPREADSHEET_ID') || '').trim();
+  if (configured) {
+    try {
+      const candidate = SpreadsheetApp.openById(configured);
+      if (candidate.getSheetByName('SYNC_CONTROL') && controlValue_(candidate,'schema_version','') === SCHEMA_VERSION) return candidate;
+    } catch (_) {}
+  }
+  return SpreadsheetApp.openById(DEFAULT_TARGET_SPREADSHEET_ID);
+}"""
+          if old in s: s=s.replace(old,new,1)
+          elif new not in s: raise SystemExit('workbook marker missing')
+          p.write_text(s,encoding='utf-8')
+
+          # staff-watch: first use Apps Script proxy, then retain direct Sheets API as optional fallback
+          p=Path('supabase/functions/staff-watch/index.ts')
+          s=p.read_text(encoding='utf-8')
+          const='const FIREBASE_SERVICE_ACCOUNT = Deno.env.get("FIREBASE_SERVICE_ACCOUNT") ?? "";'
+          if 'const STAFF_PROXY_URL' not in s:
+              s=s.replace(const, 'const STAFF_PROXY_URL = Deno.env.get("GOOGLE_SHEET_WEBHOOK_URL") ?? "";\nconst STAFF_PROXY_SECRET = Deno.env.get("GOOGLE_SHEET_WEBHOOK_SECRET") ?? "";\n'+const, 1)
+          marker='''async function fetchFilteredStaff(): Promise<{ staff: Staff[]; sourceHash: string; responseBytes: number }> {
+  if (!FIREBASE_SERVICE_ACCOUNT) throw new Error("SOURCE_SERVICE_ACCOUNT_NOT_CONFIGURED");'''
+          if 'mode: "staff_source"' not in s:
+              replacement='''async function fetchFilteredStaff(): Promise<{ staff: Staff[]; sourceHash: string; responseBytes: number }> {
+  if (STAFF_PROXY_URL && STAFF_PROXY_SECRET) {
+    try {
+      const response = await fetch(STAFF_PROXY_URL, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode: "staff_source", secret: STAFF_PROXY_SECRET }),
+        redirect: "follow",
+      });
+      const text = await response.text();
+      const responseBytes = new TextEncoder().encode(text).byteLength;
+      if (response.ok && responseBytes > 0 && responseBytes <= 1_000_000) {
+        const body = JSON.parse(text);
+        if (body?.ok && Array.isArray(body.staff)) {
+          const byCode = new Map<string, Staff>();
+          for (const raw of body.staff.slice(0, 2000)) {
+            const employeeCode = String(raw?.employee_code ?? "").trim();
+            const fullName = String(raw?.full_name ?? "").trim();
+            if (!employeeCode || !fullName || !/^[a-z0-9._-]+$/i.test(employeeCode)) continue;
+            const contractor = String(raw?.contractor ?? "").trim();
+            const sourcePosition = String(raw?.source_position ?? "").trim();
+            byCode.set(employeeCode.toLowerCase(), { employee_code: employeeCode, full_name: fullName, contractor, source_position: sourcePosition, role: staffRole(sourcePosition, employeeCode) });
+          }
+          if (byCode.size) {
+            const staff = [...byCode.values()].sort((a,b)=>a.employee_code.localeCompare(b.employee_code));
+            const canonical = staff.map((item)=>`${item.employee_code}|${item.full_name}|${item.contractor}|${item.source_position}|${item.role}`).join("\\n");
+            return { staff, sourceHash: await sha256(canonical), responseBytes };
+          }
+        }
+      }
+    } catch (_) {
+      // Fall through to private Sheets API. If both are unavailable, caller returns DEGRADED without deactivation.
+    }
+  }
+  if (!FIREBASE_SERVICE_ACCOUNT) throw new Error("SOURCE_SERVICE_ACCOUNT_NOT_CONFIGURED");'''
+              if marker not in s: raise SystemExit('staff fetch marker missing')
+              s=s.replace(marker,replacement,1)
+          p.write_text(s,encoding='utf-8')
+          PY
+          cp google-apps-script/Code.gs "$RUNNER_TEMP/Code.js"
+          node --check "$RUNNER_TEMP/Code.js"
+          git diff --check
+          git status --short
+      - name: Commit target source only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'tam95supra-source'
+          git config user.email 'tam95.supra@gmail.com'
+          git add google-apps-script/Code.gs supabase/functions/staff-watch/index.ts
+          git diff --cached --quiet && { echo NO_CHANGES; exit 0; }
+          git commit -m 'target: consolidate private staff sync into Sheet cutover'
+          git push origin HEAD:target-final-20260814-impl
