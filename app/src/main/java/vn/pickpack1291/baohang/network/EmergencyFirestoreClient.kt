@@ -103,7 +103,6 @@ class EmergencyFirestoreClient(private val session: SessionStore) {
             val projection = tx.get(projectionRef)
             val projectionNeedsWrite = !projection.exists() || projection.getString("issue_id") != issueId
             val writeCost = if (!active) 5 else if (projectionNeedsWrite) 4 else 3
-            val writeCost = 4 + if (eventType in setOf("AVAILABLE", "SKIP_ALLOWED")) projections.size else 0
             val sequence = (if (control.exists()) control.getLong("next_sequence") ?: 0L else 0L) + 1L
             val acked = if (control.exists()) control.getLong("sheet_acked_sequence") ?: 0L else 0L
             val now = FieldValue.serverTimestamp()
@@ -203,6 +202,7 @@ class EmergencyFirestoreClient(private val session: SessionStore) {
             if (newAssigneeId.isNotBlank()) payloadMap["new_assignee_account_id"] = newAssigneeId
             if (reason.isNotBlank()) payloadMap["reason"] = reason.trim()
             val payload = canonicalJson(payloadMap)
+            val writeCost = 4 + if (eventType in setOf("AVAILABLE", "SKIP_ALLOWED")) projections.size else 0
 
             val quota = quotaControl(control, writeCost, sequence, acked, requestId, now)
             tx.set(eventRef, eventMap(requestId, sequence, eventType, issueId, sku, version, payload))
