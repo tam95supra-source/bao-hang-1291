@@ -1,0 +1,36 @@
+name: Enable staff Google APIs once
+
+on:
+  push:
+    branches: ['ops/firebase-read-probe-20260815']
+    paths: ['.github/workflows/enable-staff-google-apis-once.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  enable:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      PROJECT_ID: bao-hang-1291
+    steps:
+      - name: Enable Sheets and Drive APIs only
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const crypto=require('crypto');
+          const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}'), project=process.env.PROJECT_ID;
+          const enc=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');
+          async function token(){const n=Math.floor(Date.now()/1000),h=enc({alg:'RS256',typ:'JWT'}),p=enc({iss:sa.client_email,scope:'https://www.googleapis.com/auth/cloud-platform',aud:'https://oauth2.googleapis.com/token',iat:n,exp:n+900}),u=`${h}.${p}`,sig=crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url');const r=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:`${u}.${sig}`})});if(!r.ok)throw new Error(`OAUTH_${r.status}`);return (await r.json()).access_token}
+          const safe=(name,r,b)=>console.log(`${name}=${r.status}_${String(b?.error?.status||'OK').replace(/[^A-Z0-9_.:-]/gi,'_').slice(0,80)}_${String(b?.error?.details?.[0]?.reason||b?.error?.errors?.[0]?.reason||'').replace(/[^A-Z0-9_.:-]/gi,'_').slice(0,80)}`);
+          (async()=>{
+            const t=await token();
+            const r=await fetch(`https://serviceusage.googleapis.com/v1/projects/${project}/services:batchEnable`,{method:'POST',headers:{authorization:`Bearer ${t}`,'content-type':'application/json'},body:JSON.stringify({serviceIds:['sheets.googleapis.com','drive.googleapis.com']})});
+            const b=await r.json().catch(()=>({})); safe('SERVICE_BATCH_ENABLE',r,b); if(!r.ok)process.exit(2);
+            const name=String(b.name||'');
+            if(name){for(let i=0;i<12;i++){await new Promise(x=>setTimeout(x,2000));const q=await fetch(`https://serviceusage.googleapis.com/v1/${name}`,{headers:{authorization:`Bearer ${t}`}});const qb=await q.json().catch(()=>({}));if(qb.done){console.log(`SERVICE_ENABLE_OPERATION=${q.status}_${qb.error?'FAILED':'DONE'}`);if(qb.error)process.exit(3);break;}if(i===11){console.log('SERVICE_ENABLE_OPERATION=TIMEOUT');process.exit(4);}}}
+          })().catch(e=>{console.error(String(e.message||e).replace(/[^A-Z0-9_.:-]/gi,'_').slice(0,120));process.exitCode=1});
+          NODE
