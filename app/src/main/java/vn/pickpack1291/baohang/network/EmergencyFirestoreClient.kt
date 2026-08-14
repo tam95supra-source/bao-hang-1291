@@ -22,6 +22,8 @@ import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.time.Instant
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -39,6 +41,9 @@ class EmergencyFirestoreClient(private val session: SessionStore) {
     private val http = OkHttpClient.Builder()
         .connectTimeout(8, TimeUnit.SECONDS).readTimeout(12, TimeUnit.SECONDS).writeTimeout(12, TimeUnit.SECONDS).build()
     private val controlRef get() = db.collection("emergency_control").document("sequence")
+
+    @Volatile var quotaLevel: String = "OK"
+        private set
 
     val isProvisioned: Boolean get() = auth.currentUser?.uid == session.profile?.id
 
@@ -96,14 +101,18 @@ class EmergencyFirestoreClient(private val session: SessionStore) {
             val version = if (active) state.getLong("issue_version") ?: 1L else 1L
             val projectionRef = db.collection("emergency_user_state").document(userProjectionId(actor.id, issueId))
             val projection = tx.get(projectionRef)
+            val projectionNeedsWrite = !projection.exists() || projection.getString("issue_id") != issueId
+            val writeCost = if (!active) 5 else if (projectionNeedsWrite) 4 else 3
+            val writeCost = 4 + if (eventType in setOf("AVAILABLE", "SKIP_ALLOWED")) projections.size else 0
             val sequence = (if (control.exists()) control.getLong("next_sequence") ?: 0L else 0L) + 1L
             val acked = if (control.exists()) control.getLong("sheet_acked_sequence") ?: 0L else 0L
             val now = FieldValue.serverTimestamp()
             val payload = canonicalJson(mapOf("sku" to sku, "product_name" to productName, "resulting_status" to status))
             val event = eventMap(requestId, sequence, "REPORT_SHORTAGE", issueId, sku, version, payload)
 
+            val quota = quotaControl(control, writeCost, sequence, acked, requestId, now)
             tx.set(eventRef, event)
-            tx.set(controlRef, mapOf("next_sequence" to sequence, "sheet_acked_sequence" to acked, "last_event_id" to requestId, "updated_at" to now))
+            tx.set(controlRef, quota.fields)
             if (!active) {
                 tx.set(stateRef, sharedState(sku, issueId, "OPEN", 1L, requestId, sequence, now))
                 tx.set(opsRef, opsState(sku, issueId, "OPEN", 1L, "", 1L, requestId, sequence, now))
@@ -113,12 +122,14 @@ class EmergencyFirestoreClient(private val session: SessionStore) {
                     "last_event_id" to requestId, "last_emergency_sequence" to sequence
                 ), SetOptions.merge())
             }
-            if (!projection.exists() || projection.getString("issue_id") != issueId) {
+            if (projectionNeedsWrite) {
                 tx.set(projectionRef, userState(actor.id, issueId, sku, status, version, requestId, sequence, now))
             }
-            EmergencyResult(issueId, sku, productName, status, version, "", 1)
+            EmergencyResult(issueId, sku, productName, status, version, "", 1, quota.level)
         }.await()
-        return ReportResult(result.toStockIssue(), false, "Đã ghi nhận báo thiếu qua Firebase Emergency")
+        quotaLevel = result.quotaLevel
+        val message = if (quotaLevel == "DEGRADE_85") "Đã ghi nhận qua Firebase Emergency. Quota đang ở mức 85%; hệ thống chỉ duy trì nghiệp vụ cốt lõi." else "Đã ghi nhận báo thiếu qua Firebase Emergency"
+        return ReportResult(result.toStockIssue(), false, message)
     }
 
     suspend fun claimIssue(issueId: String, requestId: String): StockIssue = mutateIssue(issueId, requestId, "CLAIM")
@@ -193,8 +204,9 @@ class EmergencyFirestoreClient(private val session: SessionStore) {
             if (reason.isNotBlank()) payloadMap["reason"] = reason.trim()
             val payload = canonicalJson(payloadMap)
 
+            val quota = quotaControl(control, writeCost, sequence, acked, requestId, now)
             tx.set(eventRef, eventMap(requestId, sequence, eventType, issueId, sku, version, payload))
-            tx.set(controlRef, mapOf("next_sequence" to sequence, "sheet_acked_sequence" to acked, "last_event_id" to requestId, "updated_at" to now))
+            tx.set(controlRef, quota.fields)
             tx.update(stateRef, sharedState(sku, issueId, newStatus, version, requestId, sequence, now))
             tx.update(opsRef, mapOf(
                 "status" to newStatus, "issue_version" to version, "claimed_by_account_id" to claimedBy,
@@ -208,8 +220,9 @@ class EmergencyFirestoreClient(private val session: SessionStore) {
                     ))
                 }
             }
-            EmergencyResult(issueId, sku, "", newStatus, version, claimedBy, (ops.getLong("report_count") ?: 1L).toInt())
+            EmergencyResult(issueId, sku, "", newStatus, version, claimedBy, (ops.getLong("report_count") ?: 1L).toInt(), quota.level)
         }.await()
+        quotaLevel = result.quotaLevel
         return result.toStockIssue()
     }
 
@@ -238,6 +251,43 @@ class EmergencyFirestoreClient(private val session: SessionStore) {
                 issueVersion = d.getLong("issue_version") ?: 1L
             )
         }
+    }
+
+    private data class QuotaControl(val fields: Map<String, Any>, val level: String)
+
+    private fun quotaControl(
+        control: com.google.firebase.firestore.DocumentSnapshot,
+        writeCost: Int,
+        sequence: Long,
+        acked: Long,
+        eventId: String,
+        now: Any
+    ): QuotaControl {
+        val bangkok = ZonedDateTime.now(ZoneId.of("Asia/Bangkok"))
+        val sameDay = control.exists()
+            && control.getLong("quota_year") == bangkok.year.toLong()
+            && control.getLong("quota_month") == bangkok.monthValue.toLong()
+            && control.getLong("quota_day") == bangkok.dayOfMonth.toLong()
+        val previous = if (sameDay) control.getLong("estimated_writes_today") ?: 0L else 0L
+        val next = previous + writeCost.toLong()
+        if (next > 19_500L) throw EmergencyException(
+            "FIRESTORE_QUOTA_GUARD",
+            "Firebase Emergency đã chạm ngưỡng an toàn 97,5% quota ghi/ngày. Thao tác chưa được gửi để tránh làm gián đoạn toàn bộ Emergency."
+        )
+        val level = when {
+            next >= 17_000L -> "DEGRADE_85"
+            next >= 14_000L -> "WARN_70"
+            next >= 10_000L -> "NOTICE_50"
+            else -> "OK"
+        }
+        return QuotaControl(
+            mapOf(
+                "next_sequence" to sequence, "sheet_acked_sequence" to acked, "last_event_id" to eventId, "updated_at" to now,
+                "quota_year" to bangkok.year, "quota_month" to bangkok.monthValue, "quota_day" to bangkok.dayOfMonth,
+                "estimated_writes_today" to next, "quota_level" to level
+            ),
+            level
+        )
     }
 
     private fun requireProvisioned() {
@@ -278,7 +328,7 @@ class EmergencyFirestoreClient(private val session: SessionStore) {
         )
     }
 
-    private data class EmergencyResult(val issueId:String, val sku:String, val productName:String, val status:String, val version:Long, val claimedBy:String, val reportCount:Int) {
+    private data class EmergencyResult(val issueId:String, val sku:String, val productName:String, val status:String, val version:Long, val claimedBy:String, val reportCount:Int, val quotaLevel:String = "OK") {
         fun toStockIssue() = StockIssue(
             id=issueId, sku=sku, productName=productName, status=IssueStatus.from(status), reportCount=reportCount,
             reportedAt=Instant.now().toString(), updatedAt=Instant.now().toString(), assignedId=claimedBy.ifBlank { null }, issueVersion=version
