@@ -13,17 +13,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 4
     steps:
-      - name: Probe filtered Google Sheet GViz without printing staff data
+      - name: Probe replacement filtered Google Sheet GViz without printing staff data
         shell: bash
         run: |
           set -euo pipefail
-          URL1="https://docs.google.com/spreadsheets/d/1FRROqCp1lmkuHc3lc4UBpVI5_ZrtiPI1thlEymv458E/gviz/tq?tqx=out%3Acsv&sheet=DANH+M%E1%BB%A4C+NH%C3%82N+S%E1%BB%B0&tq=select+A%2CB%2CD%2CE+where+G+%3D+1291+and+H+%3D+%27HY1%27"
-          URL2="https://docs.google.com/spreadsheets/d/1FRROqCp1lmkuHc3lc4UBpVI5_ZrtiPI1thlEymv458E/gviz/tq?tqx=out%3Acsv&sheet=DANH+M%E1%BB%A4C+NH%C3%82N+S%E1%BB%B0&tq=select+A%2CB%2CD%2CE+where+G+%3D+%271291%27+and+H+%3D+%27HY1%27"
-          for i in 1 2; do
-            if [ "$i" = 1 ]; then URL="$URL1"; else URL="$URL2"; fi
-            CODE="$(curl -L -sS --max-time 20 -o "$RUNNER_TEMP/staff-$i.csv" -w '%{http_code}' "$URL" || true)"
-            BYTES="$(wc -c < "$RUNNER_TEMP/staff-$i.csv" 2>/dev/null || echo 0)"
-            MIME="$(file -b --mime-type "$RUNNER_TEMP/staff-$i.csv" 2>/dev/null || echo unknown)"
-            echo "STAFF_GVIZ_VARIANT_${i}=HTTP_${CODE}_BYTES_${BYTES}_MIME_${MIME}"
-            rm -f "$RUNNER_TEMP/staff-$i.csv"
-          done
+          URL="https://docs.google.com/spreadsheets/d/1HLBzpxHLd8qoTJopOA7M_q0dDvO56G0Tb4curKZV7EM/gviz/tq?tqx=out%3Acsv&sheet=Trang+t%C3%ADnh1&tq=select+D%2CE%2CC%2CF+where+B+%3D+%271291%27+and+I+%3D+%27%C4%90ang+l%C3%A0m+vi%E1%BB%87c%27"
+          CODE="$(curl -L -sS --max-time 20 -o "$RUNNER_TEMP/staff.csv" -w '%{http_code}' "$URL" || true)"
+          BYTES="$(wc -c < "$RUNNER_TEMP/staff.csv" 2>/dev/null || echo 0)"
+          MIME="$(file -b --mime-type "$RUNNER_TEMP/staff.csv" 2>/dev/null || echo unknown)"
+          LINES="$(wc -l < "$RUNNER_TEMP/staff.csv" 2>/dev/null || echo 0)"
+          echo "STAFF_REPLACEMENT_GVIZ=HTTP_${CODE}_BYTES_${BYTES}_LINES_${LINES}_MIME_${MIME}"
+          rm -f "$RUNNER_TEMP/staff.csv"
