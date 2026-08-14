@@ -8,9 +8,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import vn.pickpack1291.baohang.BaoHangApplication
 import vn.pickpack1291.baohang.data.IssueStatus
-import vn.pickpack1291.baohang.data.UserRole
+import vn.pickpack1291.baohang.network.DirectRpcClient
+import java.time.Instant
 
 class StockMessagingService : FirebaseMessagingService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -26,69 +29,78 @@ class StockMessagingService : FirebaseMessagingService() {
         super.onMessageReceived(message)
         val app = application as BaoHangApplication
         val data = message.data
-        val eventId = data["event_id"].orEmpty().ifBlank { message.messageId.orEmpty() }
+        val eventId = data["notification_event_id"].orEmpty()
+            .ifBlank { data["event_id"].orEmpty() }
+            .ifBlank { message.messageId.orEmpty() }
         val issueId = data["issue_id"].orEmpty()
-        val incomingVersion = data["issue_version"]?.toLongOrNull() ?: 1L
+        val incomingVersion = data["issue_version"]?.toLongOrNull() ?: 0L
         val sku = data["sku"].orEmpty()
         val product = data["product_name"].orEmpty()
-        val status = data["status"].orEmpty()
-        if (status !in setOf("AVAILABLE", "SKIP_ALLOWED")) {
-            app.diagnostics.info("picker_notification_suppressed", mapOf("status" to status))
+        val status = data["status"].orEmpty().uppercase()
+        val targetUserId = data["target_user_id"].orEmpty()
+        val expiry = data["expiry"].orEmpty()
+
+        if (!app.session.isLoggedIn || issueId.isBlank() || incomingVersion < 1 || status !in setOf("AVAILABLE", "SKIP_ALLOWED")) {
+            app.diagnostics.info("picker_notification_suppressed", mapOf("status" to status, "reason" to "invalid_or_no_session"))
             return
         }
-        val body = data["message"].orEmpty().ifBlank { message.notification?.body.orEmpty() }
+        if (targetUserId.isNotBlank() && targetUserId != app.session.profile?.id) {
+            app.diagnostics.warn("picker_notification_wrong_target", mapOf("event_id" to eventId, "issue_id" to issueId))
+            return
+        }
+        if (expiry.isNotBlank() && runCatching { Instant.parse(expiry).isBefore(Instant.now()) }.getOrDefault(true)) {
+            app.diagnostics.info("picker_notification_expired", mapOf("event_id" to eventId, "issue_id" to issueId))
+            return
+        }
 
-        // Notification is a hint, never the source of truth. A locally cached newer issue
-        // version is enough to prove this FCM is stale and must not cover newer UI state.
-        val cached = issueId.takeIf { it.isNotBlank() }?.let(app.database::cachedIssue)
-        val stale = cached != null && (
-            cached.issueVersion > incomingVersion ||
-                (cached.issueVersion == incomingVersion && cached.status != IssueStatus.from(status))
-            )
-        if (stale) {
+        // FCM is only a delivery hint. Before any heads-up/overlay is shown, confirm the
+        // authoritative row still has exactly this state+version. If the service cannot be
+        // verified now, do not show a possibly stale alert; pending-alert catch-up will recover it.
+        val current = runBlocking(Dispatchers.IO) {
+            withTimeoutOrNull(7_000L) {
+                runCatching { DirectRpcClient(app.session).issueDetail(issueId) }.getOrNull()
+            }
+        }
+        if (current == null || current.issueVersion != incomingVersion || current.status != IssueStatus.from(status)) {
             app.diagnostics.info(
-                "fcm_stale_discarded",
+                "fcm_state_not_current",
                 mapOf(
                     "event_id" to eventId,
                     "issue_id" to issueId,
                     "incoming_version" to incomingVersion,
-                    "cached_version" to cached.issueVersion,
+                    "current_version" to (current?.issueVersion ?: 0L),
                     "incoming_status" to status,
-                    "cached_status" to cached.status.wire
+                    "current_status" to (current?.status?.wire ?: "UNVERIFIED")
                 )
             )
             return
         }
+        app.database.upsertIssues(listOf(current))
 
+        val body = data["message"].orEmpty().ifBlank { message.notification?.body.orEmpty() }
         app.diagnostics.info(
-            "fcm_received",
-            mapOf(
-                "event_id" to eventId,
-                "issue_id" to issueId,
-                "issue_version" to incomingVersion,
-                "sku" to sku,
-                "status" to status,
-                "critical" to data["critical"].orEmpty()
-            )
+            "fcm_received_verified",
+            mapOf("event_id" to eventId, "issue_id" to issueId, "issue_version" to incomingVersion, "sku" to sku, "status" to status)
         )
-        if (eventId.isNotBlank() && app.session.isLoggedIn) {
+        if (eventId.isNotBlank()) {
             scope.launch {
                 runCatching { app.repository.markAlertReceived(eventId) }
                     .onFailure { app.diagnostics.warn("fcm_received_metric_deferred", mapOf("event_id" to eventId)) }
             }
         }
 
-        NotificationHelper.alert(this, sku, status, body, eventId)
-        if (Settings.canDrawOverlays(this)) {
-            val canClaim = false
+        if (app.isAppForeground && Settings.canDrawOverlays(this)) {
             val overlay = OverlayAlertService.intent(
                 this, eventId, issueId, sku, product, status, body,
-                data["critical"] == "true", canClaim
+                true, false
             )
             runCatching { ContextCompat.startForegroundService(this, overlay) }
-                .onFailure { app.diagnostics.error("overlay_start_failed", it, mapOf("event_id" to eventId)) }
+                .onFailure {
+                    app.diagnostics.error("overlay_start_failed", it, mapOf("event_id" to eventId))
+                    NotificationHelper.alert(this, sku, status, body, eventId)
+                }
         } else {
-            app.diagnostics.warn("overlay_permission_missing", mapOf("event_id" to eventId))
+            NotificationHelper.alert(this, sku, status, body, eventId)
         }
     }
 }
