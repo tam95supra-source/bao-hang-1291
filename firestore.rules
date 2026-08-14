@@ -19,7 +19,6 @@ service cloud.firestore {
         || (request.auth.token.account_kind != 'BACKUP' && request.auth.token.device_id is string && request.auth.token.device_id == data.device_id)
       );
     }
-    function validStatus(status) { return status in ['OPEN','CLAIMED','AVAILABLE','SKIP_ALLOWED']; }
     function eventAfter(eventId) { return getAfter(/databases/$(database)/documents/emergency_events/$(eventId)); }
     function linked(data) {
       return data.last_event_id is string
@@ -29,22 +28,72 @@ service cloud.firestore {
         && eventAfter(data.last_event_id).data.issue_id == data.issue_id
         && eventAfter(data.last_event_id).data.sku == data.sku;
     }
+    function bangkokNow() { return request.time + duration.value(7, 'h'); }
+    function quotaDateOk(data) {
+      return data.quota_year == bangkokNow().year()
+        && data.quota_month == bangkokNow().month()
+        && data.quota_day == bangkokNow().day();
+    }
+    function quotaLevel(value) {
+      return value >= 17000 ? 'DEGRADE_85'
+        : value >= 14000 ? 'WARN_70'
+        : value >= 10000 ? 'NOTICE_50'
+        : 'OK';
+    }
+    function oldQuotaPresent() {
+      return resource.data.keys().hasAll(['quota_year','quota_month','quota_day','estimated_writes_today','quota_level']);
+    }
+    function quotaCounterOk(data) {
+      return data.estimated_writes_today is int
+        && data.estimated_writes_today >= 3
+        && data.estimated_writes_today <= 19500
+        && data.quota_level == quotaLevel(data.estimated_writes_today)
+        && (
+          !oldQuotaPresent()
+          || (
+            resource.data.quota_year == bangkokNow().year()
+            && resource.data.quota_month == bangkokNow().month()
+            && resource.data.quota_day == bangkokNow().day()
+            && data.estimated_writes_today >= resource.data.estimated_writes_today + 3
+            && data.estimated_writes_today <= resource.data.estimated_writes_today + 100
+          )
+          || (
+            (resource.data.quota_year != bangkokNow().year()
+              || resource.data.quota_month != bangkokNow().month()
+              || resource.data.quota_day != bangkokNow().day())
+            && data.estimated_writes_today <= 100
+          )
+        );
+    }
 
     match /emergency_control/sequence {
       allow get: if businessUser() || isDrain();
       allow list: if false;
       allow create: if businessUser()
-        && request.resource.data.keys().hasOnly(['next_sequence','sheet_acked_sequence','last_event_id','updated_at'])
+        && request.resource.data.keys().hasOnly([
+          'next_sequence','sheet_acked_sequence','last_event_id','updated_at',
+          'quota_year','quota_month','quota_day','estimated_writes_today','quota_level'
+        ])
         && request.resource.data.next_sequence == 1
         && request.resource.data.sheet_acked_sequence == 0
         && request.resource.data.last_event_id is string
+        && quotaDateOk(request.resource.data)
+        && request.resource.data.estimated_writes_today >= 3
+        && request.resource.data.estimated_writes_today <= 100
+        && request.resource.data.quota_level == quotaLevel(request.resource.data.estimated_writes_today)
         && existsAfter(/databases/$(database)/documents/emergency_events/$(request.resource.data.last_event_id))
         && eventAfter(request.resource.data.last_event_id).data.emergency_sequence == 1;
       allow update: if (
         businessUser()
+        && request.resource.data.keys().hasOnly([
+          'next_sequence','sheet_acked_sequence','last_event_id','updated_at',
+          'quota_year','quota_month','quota_day','estimated_writes_today','quota_level'
+        ])
         && request.resource.data.next_sequence == resource.data.next_sequence + 1
         && request.resource.data.sheet_acked_sequence == resource.data.sheet_acked_sequence
         && request.resource.data.last_event_id is string
+        && quotaDateOk(request.resource.data)
+        && quotaCounterOk(request.resource.data)
         && existsAfter(/databases/$(database)/documents/emergency_events/$(request.resource.data.last_event_id))
         && eventAfter(request.resource.data.last_event_id).data.emergency_sequence == request.resource.data.next_sequence
       ) || (
@@ -142,7 +191,10 @@ service cloud.firestore {
         && request.resource.data.reconciliation_status == 'SHEET_ACKED'
         && request.resource.data.sheet_ack_at is timestamp
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['sheet_ack_at','reconciliation_status']);
-      allow delete: if false;
+      allow delete: if isDrain()
+        && resource.data.reconciliation_status == 'SHEET_ACKED'
+        && resource.data.sheet_ack_at is timestamp
+        && resource.data.sheet_ack_at < request.time - duration.value(7, 'd');
     }
 
     match /emergency_user_state/{projectionId} {
