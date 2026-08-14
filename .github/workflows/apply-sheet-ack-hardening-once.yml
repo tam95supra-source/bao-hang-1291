@@ -1,0 +1,41 @@
+name: Apply strict Sheet ACK contract once
+
+on:
+  push:
+    branches: [target-final-20260814-impl]
+    paths:
+      - 'scripts/harden_sheet_ack_contract.py'
+      - '.github/workflows/apply-sheet-ack-hardening-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: target-final-20260814-impl
+          fetch-depth: 0
+      - run: python3 scripts/harden_sheet_ack_contract.py
+      - name: Validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          grep -q 'queue retained' supabase/functions/sheet-worker/index.ts
+          grep -q 'queue được giữ nguyên' supabase/functions/api/index.ts
+      - name: Keep workflow connector-owned
+        run: git checkout HEAD -- .github/workflows/apply-sheet-ack-hardening-once.yml
+      - name: Commit source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'bao-hang-1291-automation'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m 'target: require exact Sheet ACK event ids'
+          git push origin HEAD:target-final-20260814-impl
