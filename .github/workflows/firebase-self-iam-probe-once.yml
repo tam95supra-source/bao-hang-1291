@@ -1,0 +1,33 @@
+name: Firebase least-privilege IAM self-probe once
+
+on:
+  push:
+    branches: [target-final-20260814-impl]
+    paths: ['.github/workflows/firebase-self-iam-probe-once.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      PROJECT_ID: bao-hang-1291
+    steps:
+      - name: Probe project IAM and self-grant only if already authorized
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const crypto=require('crypto');
+          const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');
+          const project=process.env.PROJECT_ID;
+          if(!sa.client_email||!sa.private_key) throw new Error('SERVICE_ACCOUNT_SECRET_INVALID');
+          console.log(`FIREBASE_AUTOMATION_PRINCIPAL=${sa.client_email}`);
+          const enc=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');
+          async function token(){const n=Math.floor(Date.now()/1000),h=enc({alg:'RS256',typ:'JWT'}),p=enc({iss:sa.client_email,scope:'https://www.googleapis.com/auth/cloud-platform',aud:'https://oauth2.googleapis.com/token',iat:n,exp:n+900}),u=`${h}.${p}`,sig=crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url');const r=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:`${u}.${sig}`})});if(!r.ok)throw new Error(`OAUTH_${r.status}`);return (await r.json()).access_token}
+          async function call(url,t,init={}){const r=await fetch(url,{...init,headers:{authorization:`Bearer ${t}`,'content-type':'application/json',...(init.headers||{})}});const x=await r.text();let b={};try{b=x?JSON.parse(x):{}}catch{}return{status:r.status,body:b}}
+          (async()=>{const t=await token();const get=await call(`https://cloudresourcemanager.googleapis.com/v1/projects/${project}:getIamPolicy`,t,{method:'POST',body:JSON.stringify({options:{requestedPolicyVersion:3}})});if(get.status!==200){console.log(`PROJECT_IAM_GET=BLOCKED_${get.status}_${get.body?.error?.status||'UNKNOWN'}`);return;}console.log('PROJECT_IAM_GET=PASS');const member=`serviceAccount:${sa.client_email}`,roles=['roles/firebaserules.admin','roles/firebaseappcheck.admin','roles/datastore.viewer','roles/firebaseauth.admin'];const policy=get.body;policy.version=Math.max(3,Number(policy.version||0));policy.bindings=Array.isArray(policy.bindings)?policy.bindings:[];for(const role of roles){let b=policy.bindings.find(x=>x.role===role&&!x.condition);if(!b){b={role,members:[]};policy.bindings.push(b)}b.members=Array.isArray(b.members)?b.members:[];if(!b.members.includes(member))b.members.push(member)}const set=await call(`https://cloudresourcemanager.googleapis.com/v1/projects/${project}:setIamPolicy`,t,{method:'POST',body:JSON.stringify({policy,updateMask:'bindings,etag,version'})});if(set.status!==200){console.log(`PROJECT_IAM_SET=BLOCKED_${set.status}_${set.body?.error?.status||'UNKNOWN'}`);return;}console.log('PROJECT_IAM_SELF_GRANT=PASS roles='+roles.join(','));})().catch(e=>{console.error(e.message);process.exitCode=1});
+          NODE
