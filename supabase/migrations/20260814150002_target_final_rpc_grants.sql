@@ -1,0 +1,10 @@
+begin;
+revoke execute on function public.report_shortage_rpc(text,text) from public,anon;
+revoke execute on function public.claim_issue_rpc(uuid) from public,anon;
+revoke execute on function public.update_issue_rpc(uuid,text) from public,anon;
+revoke execute on function public.reassign_issue_rpc(uuid,uuid,text) from public,anon;
+grant execute on function public.report_shortage_rpc(text,text) to authenticated;
+grant execute on function public.claim_issue_rpc(uuid) to authenticated;
+grant execute on function public.update_issue_rpc(uuid,text) to authenticated;
+grant execute on function public.reassign_issue_rpc(uuid,uuid,text) to authenticated;
+commit;
