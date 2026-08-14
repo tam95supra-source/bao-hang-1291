@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit
 
 class SheetFallbackClient(private val session: SessionStore) {
     class FallbackException(val code: String, message: String) : IOException(message)
+    data class Health(val ok: Boolean, val sheetMode: String, val schema: String)
 
     private val jsonType = "application/json; charset=utf-8".toMediaType()
     private val client = OkHttpClient.Builder()
@@ -49,6 +50,19 @@ class SheetFallbackClient(private val session: SessionStore) {
             throw FallbackException("INVALID_CREDENTIAL", "Fallback credential không hợp lệ")
         }
         session.saveFallbackCredential(fallbackToken, fallbackUrl, expiresAt)
+    }
+
+    suspend fun health(): Health {
+        if (!session.hasValidFallbackCredential) throw FallbackException("FALLBACK_TOKEN_EXPIRED", "Token fallback chưa sẵn sàng")
+        val separator = if (session.fallbackUrl.contains("?")) "&" else "?"
+        val request = Request.Builder().url(session.fallbackUrl + separator + "mode=health")
+            .get().header("Accept", "application/json").build()
+        val result = executeObject(request)
+        return Health(
+            ok = result.optBoolean("ok", false),
+            sheetMode = result.optString("sheet_mode", "UNKNOWN").uppercase(),
+            schema = result.optString("schema", "")
+        )
     }
 
     suspend fun reportShortage(sku: String, eventId: String): ReportResult {

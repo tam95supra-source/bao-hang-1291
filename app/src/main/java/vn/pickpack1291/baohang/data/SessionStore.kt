@@ -35,6 +35,10 @@ class SessionStore(context: Context) {
     val hasValidFallbackCredential: Boolean
         get() = fallbackToken.isNotBlank() && fallbackUrl.startsWith("https://") && fallbackExpiresAtMillis > System.currentTimeMillis() + 60_000L
 
+    val preferredAuthority: String
+        get() = prefs.getString(KEY_AUTHORITY_PREFERENCE, "SERVICE").orEmpty().uppercase()
+            .takeIf { it in setOf("SERVICE", "SHEET", "EMERGENCY") } ?: "SERVICE"
+
     val profile: UserProfile?
         get() {
             val id = prefs.getString(KEY_USER_ID, null) ?: return null
@@ -70,6 +74,7 @@ class SessionStore(context: Context) {
             .putString(KEY_ROLE, session.profile.role.wire)
             .putBoolean(KEY_ACTIVE, session.profile.active)
             .putBoolean(KEY_DEVICE_REGISTERED, false)
+            .putString(KEY_AUTHORITY_PREFERENCE, "SERVICE")
             .remove(KEY_ADMIN_TEST_ROLE)
             .apply()
     }
@@ -96,6 +101,12 @@ class SessionStore(context: Context) {
 
     fun clearFallbackCredential() {
         prefs.edit().remove(KEY_FALLBACK_TOKEN).remove(KEY_FALLBACK_URL).remove(KEY_FALLBACK_EXPIRES).apply()
+    }
+
+    fun setPreferredAuthority(mode: String) {
+        val normalized = mode.uppercase()
+        require(normalized in setOf("SERVICE", "SHEET", "EMERGENCY")) { "Invalid authority mode" }
+        prefs.edit().putString(KEY_AUTHORITY_PREFERENCE, normalized).apply()
     }
 
     fun setAdminTestRole(role: UserRole?) {
@@ -134,5 +145,6 @@ class SessionStore(context: Context) {
         const val KEY_FALLBACK_TOKEN = "fallback_token_v1"
         const val KEY_FALLBACK_URL = "fallback_url_v1"
         const val KEY_FALLBACK_EXPIRES = "fallback_expires_v1"
+        const val KEY_AUTHORITY_PREFERENCE = "authority_preference_v1"
     }
 }

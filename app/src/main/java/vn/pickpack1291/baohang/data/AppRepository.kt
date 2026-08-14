@@ -38,17 +38,27 @@ class AppRepository(
     private val direct = DirectRpcClient(session)
     private val sheet = SheetFallbackClient(session)
     private val emergency = EmergencyFirestoreClient(session)
-    @Volatile var authorityMode: AuthorityMode = AuthorityMode.BLOCKED
+    @Volatile var authorityMode: AuthorityMode = runCatching { AuthorityMode.valueOf(session.preferredAuthority) }.getOrDefault(AuthorityMode.SERVICE)
         private set
+
+    private val preferredAuthority: AuthorityMode
+        get() = runCatching { AuthorityMode.valueOf(session.preferredAuthority) }.getOrDefault(AuthorityMode.SERVICE)
+
+    private fun commitAuthority(mode: AuthorityMode) {
+        require(mode != AuthorityMode.BLOCKED)
+        authorityMode = mode
+        session.setPreferredAuthority(mode.name)
+    }
 
     suspend fun login(employeeCode: String, password: String): UserProfile {
         val auth = api.signIn(employeeCode.trim(), password)
         session.save(auth)
-        authorityMode = AuthorityMode.SERVICE
+        commitAuthority(AuthorityMode.SERVICE)
         diagnostics.info("session_saved", mapOf("employee_code" to auth.profile.employeeCode, "role" to auth.profile.role.wire))
         registerCurrentDevice()
         refreshFallbackCredentialIfPossible(force = true)
         provisionEmergencyIfPossible()
+        resolveAuthorityFromRecoveryState()
         if (database.outboxCount() > 0) SyncScheduler.enqueueOutbox(context)
         if (catalogNeedsRefresh()) SyncScheduler.enqueueCatalog(context)
         return auth.profile
@@ -64,9 +74,9 @@ class AppRepository(
     suspend fun refreshProfile(): UserProfile {
         val profile = api.sessionProfile()
         session.updateProfile(profile)
-        authorityMode = AuthorityMode.SERVICE
         refreshFallbackCredentialIfPossible()
         provisionEmergencyIfPossible()
+        resolveAuthorityFromRecoveryState()
         diagnostics.info("profile_refreshed", mapOf("role" to profile.role.wire))
         return profile
     }
@@ -101,39 +111,81 @@ class AppRepository(
     }
 
     suspend fun loadMyIssues(): List<StockIssue> {
-        return try {
-            direct.myIssues().also { authorityMode = AuthorityMode.SERVICE; database.upsertIssues(it) }
-        } catch (error: Exception) {
-            if (!isServiceUnavailable(error)) return runCatching { api.myIssues().also(database::upsertIssues) }.getOrElse { database.cachedIssues(100) }
-            if (session.hasValidFallbackCredential) {
-                try { return sheet.myIssues().also { authorityMode = AuthorityMode.SHEET; database.upsertIssues(it) } }
-                catch (sheetError: Exception) { if (!isSheetUnavailable(sheetError)) return database.cachedIssues(100) }
+        return when (preferredAuthority) {
+            AuthorityMode.SERVICE -> try {
+                direct.myIssues().also { commitAuthority(AuthorityMode.SERVICE); database.upsertIssues(it) }
+            } catch (error: Exception) {
+                if (!isServiceUnavailable(error)) return runCatching { api.myIssues().also(database::upsertIssues) }.getOrElse { database.cachedIssues(100) }
+                readMyIssuesFromFallbacks()
             }
-            if (emergency.isProvisioned) {
-                runCatching { emergency.myIssues() }.onSuccess { authorityMode = AuthorityMode.EMERGENCY; database.upsertIssues(it) }.getOrElse { authorityMode = AuthorityMode.BLOCKED; database.cachedIssues(100) }
-            } else { authorityMode = AuthorityMode.BLOCKED; database.cachedIssues(100) }
+            AuthorityMode.SHEET -> readMyIssuesFromSheetThenEmergency()
+            AuthorityMode.EMERGENCY -> readMyIssuesFromEmergency()
+            AuthorityMode.BLOCKED -> database.cachedIssues(100)
         }
+    }
+
+    private suspend fun readMyIssuesFromFallbacks(): List<StockIssue> = readMyIssuesFromSheetThenEmergency()
+
+    private suspend fun readMyIssuesFromSheetThenEmergency(): List<StockIssue> {
+        if (session.hasValidFallbackCredential) {
+            try {
+                return sheet.myIssues().also { commitAuthority(AuthorityMode.SHEET); database.upsertIssues(it) }
+            } catch (sheetError: Exception) {
+                if (!isSheetUnavailable(sheetError)) return database.cachedIssues(100)
+            }
+        }
+        return readMyIssuesFromEmergency()
+    }
+
+    private suspend fun readMyIssuesFromEmergency(): List<StockIssue> {
+        if (!emergency.isProvisioned) { authorityMode = AuthorityMode.BLOCKED; return database.cachedIssues(100) }
+        return runCatching { emergency.myIssues() }
+            .onSuccess { commitAuthority(AuthorityMode.EMERGENCY); database.upsertIssues(it) }
+            .getOrElse { authorityMode = AuthorityMode.BLOCKED; database.cachedIssues(100) }
     }
 
     suspend fun loadActiveIssues(): List<StockIssue> = loadIssueBoard().let { it.open + it.claimed }
 
     suspend fun loadIssueBoard(): IssueBoard {
-        return try {
-            direct.issueBoard().also { authorityMode = AuthorityMode.SERVICE; database.upsertIssues(it.open + it.claimed + it.recent) }
-        } catch (error: Exception) {
-            if (!isServiceUnavailable(error)) throw error
-            if (session.hasValidFallbackCredential) {
-                try { return sheet.issueBoard().also { authorityMode = AuthorityMode.SHEET; database.upsertIssues(it.open + it.claimed + it.recent) } }
-                catch (sheetError: Exception) { if (!isSheetUnavailable(sheetError)) throw sheetError }
+        return when (preferredAuthority) {
+            AuthorityMode.SERVICE -> try {
+                direct.issueBoard().also { commitAuthority(AuthorityMode.SERVICE); database.upsertIssues(it.open + it.claimed + it.recent) }
+            } catch (error: Exception) {
+                if (!isServiceUnavailable(error)) throw error
+                readBoardFromSheetThenEmergency()
             }
-            if (emergency.isProvisioned) {
-                try { return emergency.issueBoard().also { authorityMode = AuthorityMode.EMERGENCY; database.upsertIssues(it.open + it.claimed + it.recent) } }
-                catch (fireError: Exception) { diagnostics.warn("emergency_board_unavailable", mapOf("error" to fireError.message.orEmpty().take(200))) }
-            }
-            authorityMode = AuthorityMode.BLOCKED
-            val cached = database.cachedIssues(200)
-            IssueBoard(cached.filter { it.status == IssueStatus.OPEN }, cached.filter { it.status.isClaimedBucket }, cached.filter { !it.status.isOpenBucket })
+            AuthorityMode.SHEET -> readBoardFromSheetThenEmergency()
+            AuthorityMode.EMERGENCY -> readBoardFromEmergency()
+            AuthorityMode.BLOCKED -> cachedBoard()
         }
+    }
+
+    private suspend fun readBoardFromSheetThenEmergency(): IssueBoard {
+        if (session.hasValidFallbackCredential) {
+            try {
+                return sheet.issueBoard().also { commitAuthority(AuthorityMode.SHEET); database.upsertIssues(it.open + it.claimed + it.recent) }
+            } catch (sheetError: Exception) {
+                if (!isSheetUnavailable(sheetError)) throw sheetError
+            }
+        }
+        return readBoardFromEmergency()
+    }
+
+    private suspend fun readBoardFromEmergency(): IssueBoard {
+        if (emergency.isProvisioned) {
+            try {
+                return emergency.issueBoard().also { commitAuthority(AuthorityMode.EMERGENCY); database.upsertIssues(it.open + it.claimed + it.recent) }
+            } catch (fireError: Exception) {
+                diagnostics.warn("emergency_board_unavailable", mapOf("error" to fireError.message.orEmpty().take(200)))
+            }
+        }
+        authorityMode = AuthorityMode.BLOCKED
+        return cachedBoard()
+    }
+
+    private fun cachedBoard(): IssueBoard {
+        val cached = database.cachedIssues(200)
+        return IssueBoard(cached.filter { it.status == IssueStatus.OPEN }, cached.filter { it.status.isClaimedBucket }, cached.filter { !it.status.isOpenBucket })
     }
 
     suspend fun claimIssue(issueId: String): StockIssue {
@@ -173,24 +225,30 @@ class AppRepository(
     ): T {
         var lastError: Exception? = null
         val retryMs = longArrayOf(0L, 500L, 1_500L)
-        for (index in retryMs.indices) {
-            if (retryMs[index] > 0) delay(retryMs[index])
-            try {
-                return service().also { authorityMode = AuthorityMode.SERVICE }
-            } catch (error: Exception) {
-                if (!isServiceUnavailable(error)) {
-                    diagnostics.warn("service_business_rejected", mapOf("operation" to operation, "request_id" to requestId, "error" to error.message.orEmpty().take(200)))
-                    throw error
-                }
-                lastError = error
-            }
-        }
 
-        if (session.hasValidFallbackCredential) {
+        if (preferredAuthority == AuthorityMode.SERVICE) {
             for (index in retryMs.indices) {
                 if (retryMs[index] > 0) delay(retryMs[index])
                 try {
-                    return fallback().also { authorityMode = AuthorityMode.SHEET; diagnostics.warn("sheet_fallback_committed", mapOf("operation" to operation, "request_id" to requestId)) }
+                    return service().also { commitAuthority(AuthorityMode.SERVICE) }
+                } catch (error: Exception) {
+                    if (!isServiceUnavailable(error)) {
+                        diagnostics.warn("service_business_rejected", mapOf("operation" to operation, "request_id" to requestId, "error" to error.message.orEmpty().take(200)))
+                        throw error
+                    }
+                    lastError = error
+                }
+            }
+        }
+
+        if (preferredAuthority in setOf(AuthorityMode.SERVICE, AuthorityMode.SHEET) && session.hasValidFallbackCredential) {
+            for (index in retryMs.indices) {
+                if (retryMs[index] > 0) delay(retryMs[index])
+                try {
+                    return fallback().also {
+                        commitAuthority(AuthorityMode.SHEET)
+                        diagnostics.warn("sheet_fallback_committed", mapOf("operation" to operation, "request_id" to requestId))
+                    }
                 } catch (error: Exception) {
                     if (!isSheetUnavailable(error)) {
                         diagnostics.warn("sheet_business_rejected", mapOf("operation" to operation, "request_id" to requestId, "error" to error.message.orEmpty().take(200)))
@@ -203,7 +261,10 @@ class AppRepository(
 
         if (emergency.isProvisioned) {
             try {
-                return emergencyCall().also { authorityMode = AuthorityMode.EMERGENCY; diagnostics.warn("firebase_emergency_committed", mapOf("operation" to operation, "request_id" to requestId)) }
+                return emergencyCall().also {
+                    commitAuthority(AuthorityMode.EMERGENCY)
+                    diagnostics.warn("firebase_emergency_committed", mapOf("operation" to operation, "request_id" to requestId))
+                }
             } catch (error: EmergencyFirestoreClient.EmergencyException) {
                 if (!isEmergencyUnavailable(error)) throw error
                 lastError = error
@@ -212,8 +273,10 @@ class AppRepository(
             }
         }
 
+        // BLOCKED is an observed availability state only. Do not erase the sticky
+        // preferred authority; retry must resume the same hierarchy, never jump ahead.
         authorityMode = AuthorityMode.BLOCKED
-        diagnostics.warn("mutation_blocked_no_authority", mapOf("operation" to operation, "request_id" to requestId))
+        diagnostics.warn("mutation_blocked_no_authority", mapOf("operation" to operation, "request_id" to requestId, "preferred_authority" to preferredAuthority.name))
         throw MutationUnavailableException("Không có cloud nào xác nhận thao tác. Dữ liệu chưa được gửi và sẽ không tự động gửi lại.", lastError)
     }
 
@@ -248,6 +311,20 @@ class AppRepository(
         runCatching { emergency.provision() }
             .onSuccess { diagnostics.info("emergency_identity_provisioned", mapOf("device_id_suffix" to session.deviceId.takeLast(6))) }
             .onFailure { diagnostics.warn("emergency_identity_provision_deferred", mapOf("error" to it.message.orEmpty().take(160))) }
+    }
+
+    private suspend fun resolveAuthorityFromRecoveryState() {
+        if (!session.hasValidFallbackCredential) return
+        runCatching { sheet.health() }.onSuccess { health ->
+            when (health.sheetMode) {
+                "ACTIVE_FALLBACK", "RECOVERY_IMPORTING", "RECOVERY_BLOCKED", "EMERGENCY_DRAIN" -> {
+                    // EMERGENCY stays sticky until Firestore events are durably ACKed into Sheet.
+                    if (preferredAuthority != AuthorityMode.EMERGENCY) commitAuthority(AuthorityMode.SHEET)
+                }
+                "SERVICE_CAUGHT_UP", "STANDBY", "ACTIVE_SERVICE" -> commitAuthority(AuthorityMode.SERVICE)
+                // STANDBY_PRE_CUTOVER intentionally leaves the current preference untouched.
+            }
+        }.onFailure { diagnostics.warn("authority_recovery_probe_deferred", mapOf("error" to it.message.orEmpty().take(160))) }
     }
 
     suspend fun pendingAlerts(): List<PendingAlert> = runCatching { direct.pendingAlerts() }.getOrElse { api.pendingAlerts() }
