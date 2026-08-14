@@ -71,6 +71,11 @@ Deno.serve(async (req) => {
     let sent = 0;
     const invalid = new Set<string>();
     for (const event of events) {
+      const attemptAt = new Date().toISOString();
+      const { error: attemptError } = await admin.from("notification_events")
+        .update({ last_attempt_at: attemptAt }).eq("id", event.id);
+      if (attemptError) throw attemptError;
+
       let accepted = false;
       const payload = {
         event_id: event.id,
@@ -101,7 +106,7 @@ Deno.serve(async (req) => {
       if (accepted) {
         const now = new Date().toISOString();
         const { error: updateError } = await admin.from("notification_events")
-          .update({ sent_at: now, fcm_accepted_at: now, send_count: Number(event.send_count ?? 0) + 1 })
+          .update({ sent_at: now, fcm_accepted_at: now, last_attempt_at: now, send_count: Number(event.send_count ?? 0) + 1 })
           .eq("id", event.id);
         if (updateError) throw updateError;
         sent++;
