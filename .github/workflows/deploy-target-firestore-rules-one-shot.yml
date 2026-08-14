@@ -1,0 +1,34 @@
+name: Deploy target Firestore bootstrap one-shot
+
+on:
+  push:
+    branches: [target-final-20260814-impl]
+    paths:
+      - '.github/workflows/deploy-target-firestore-rules-one-shot.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: target-firestore-bootstrap-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_ID: oedasgcdjppjwidhlqdr
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: target-final-20260814-impl
+      - name: Validate Supabase deployment credential
+        shell: bash
+        run: test -n "${SUPABASE_ACCESS_TOKEN:-}"
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Deploy guarded Firebase bootstrap
+        run: supabase functions deploy firebase-bootstrap --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
