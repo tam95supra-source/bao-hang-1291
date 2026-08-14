@@ -40,3 +40,6 @@ jobs:
       - name: Deploy lightweight Staff Watch Edge Function
         if: ${{ hashFiles('supabase/functions/staff-watch/index.ts') != '' }}
         run: supabase functions deploy staff-watch --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
+      - name: Deploy event-driven Picker notification worker
+        if: ${{ hashFiles('supabase/functions/notification-worker/index.ts') != '' }}
+        run: supabase functions deploy notification-worker --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
