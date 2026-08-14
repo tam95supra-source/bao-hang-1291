@@ -1,17 +1,20 @@
 /**
  * BÁO HÀNG 1291 — Apps Script authority/fallback contract (Target Final 2026-08-14).
  *
- * Required Script Properties (values MUST NOT be committed):
- * - WEBHOOK_SECRET                 server-to-server exporter/importer secret
- * - FALLBACK_TOKEN_SIGNING_SECRET  HMAC-SHA256 key used to verify 7-day fallback tokens
- * - TARGET_SPREADSHEET_ID          current private monthly workbook
- * - CURRENT_FOLDER_ID              BAO_HANG_1291/CURRENT
- * - ARCHIVE_FOLDER_ID              BAO_HANG_1291/ARCHIVE
- * - INDEX_SPREADSHEET_ID           private monthly index workbook (optional until cutover)
+ * Required Script Property:
+ * - WEBHOOK_SECRET                 existing server-to-server exporter/importer secret
+ *
+ * Target Drive/Sheet IDs below are public resource identifiers, not secrets. Script Properties
+ * may override them after monthly rotation, but cutover does not require manual property entry.
  *
  * The deployed Web App URL stays stable. Monthly rotation only changes TARGET_SPREADSHEET_ID.
  * No password, bearer token, service_role key or Firebase private key is stored in cells.
  */
+
+const DEFAULT_TARGET_SPREADSHEET_ID = '1f3kIUbx34zu_noi0cRGkwdWkjAihQY0Nm_Eyhc6KxBo';
+const DEFAULT_CURRENT_FOLDER_ID = '122jX6MkcD1PeY-YcFBBWjz49nVZWK5nR';
+const DEFAULT_ARCHIVE_FOLDER_ID = '19VRSzS5u9wXA0-Bnsv9j3O2d_fCkUDIf';
+const DEFAULT_INDEX_SPREADSHEET_ID = '1i_KPYGsXpxCag-Oz5NkG4UmshZt2fbDFBcv1QH1-p8w';
 
 const SCHEMA_VERSION = 'target-final-v1';
 const MAX_EXPORT_BATCH = 500;
@@ -521,11 +524,9 @@ function seedInfo_(book) {
 }
 
 function workbook_() {
-  const id = String(PropertiesService.getScriptProperties().getProperty('TARGET_SPREADSHEET_ID') || '').trim();
+  const id = String(PropertiesService.getScriptProperties().getProperty('TARGET_SPREADSHEET_ID') || DEFAULT_TARGET_SPREADSHEET_ID).trim();
   if (id) return SpreadsheetApp.openById(id);
-  const active = SpreadsheetApp.getActiveSpreadsheet();
-  if (!active) throw new Error('TARGET_SPREADSHEET_ID_NOT_CONFIGURED');
-  return active;
+  throw new Error('TARGET_SPREADSHEET_ID_NOT_CONFIGURED');
 }
 
 function rotateMonthlyIfNeeded_(book) {
@@ -534,7 +535,7 @@ function rotateMonthlyIfNeeded_(book) {
   if(!configured||configured===month){if(!configured)upsertControl_(book,'active_month',month,'Current monthly file');return false;}
   const pending=tableObjects_(book.getSheetByName('FALLBACK_EVENTS')).filter((row)=>String(row.reconciliation_status||'')!=='SERVICE_ACKED');
   if(pending.length){upsertControl_(book,'archive_status','ROTATION_BLOCKED_UNACKED',`Pending recovery events: ${pending.length}`);return false;}
-  const props=PropertiesService.getScriptProperties(); const currentFolderId=String(props.getProperty('CURRENT_FOLDER_ID')||''),archiveFolderId=String(props.getProperty('ARCHIVE_FOLDER_ID')||'');
+  const props=PropertiesService.getScriptProperties(); const currentFolderId=String(props.getProperty('CURRENT_FOLDER_ID')||DEFAULT_CURRENT_FOLDER_ID),archiveFolderId=String(props.getProperty('ARCHIVE_FOLDER_ID')||DEFAULT_ARCHIVE_FOLDER_ID);
   if(!currentFolderId||!archiveFolderId)throw new Error('ROTATION_FOLDERS_NOT_CONFIGURED');
   const newBook=SpreadsheetApp.create(`Báo hàng 1291 - CURRENT ${month}`); setupWorkbook_(newBook); seedInfo_(newBook);
   ['NHAN_SU','SKU_CATALOG','BACKUP_ACCOUNTS_PRIVATE'].forEach((name)=>writeTable_(newBook.getSheetByName(name),tableObjects_(book.getSheetByName(name))));
@@ -547,7 +548,7 @@ function rotateMonthlyIfNeeded_(book) {
 }
 
 function updateIndex_(book, month, status) {
-  const id = String(PropertiesService.getScriptProperties().getProperty('INDEX_SPREADSHEET_ID') || '');
+  const id = String(PropertiesService.getScriptProperties().getProperty('INDEX_SPREADSHEET_ID') || DEFAULT_INDEX_SPREADSHEET_ID);
   if (!id) return;
   const indexBook = SpreadsheetApp.openById(id);
   const headers = ['file_id','month','min_event_sequence','max_event_sequence','row_count','checksum','status','updated_at'];
