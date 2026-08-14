@@ -3,6 +3,8 @@ package vn.pickpack1291.baohang
 import android.app.Activity
 import android.app.Application
 import android.os.Bundle
+import com.google.firebase.appcheck.FirebaseAppCheck
+import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory
 import com.google.firebase.messaging.FirebaseMessaging
 import vn.pickpack1291.baohang.data.AppDatabase
 import vn.pickpack1291.baohang.data.AppRepository
@@ -32,6 +34,14 @@ class BaoHangApplication : Application(), Application.ActivityLifecycleCallbacks
         registerActivityLifecycleCallbacks(this)
         diagnostics = DiagnosticsLogger(this)
         diagnostics.info("app_start", mapOf("version" to BuildConfig.VERSION_NAME, "build_type" to BuildConfig.BUILD_TYPE, "ota_channel" to BuildConfig.OTA_CHANNEL))
+
+        // App Check is initialized now, but backend enforcement remains off until Beta/PDA
+        // field telemetry confirms valid Play Integrity attestations for legitimate devices.
+        FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+            PlayIntegrityAppCheckProviderFactory.getInstance()
+        )
+        diagnostics.info("firebase_app_check_initialized", mapOf("provider" to "PLAY_INTEGRITY", "enforcement" to "FIELD_GATE"))
+
         database = AppDatabase(this)
         session = SessionStore(this)
         api = ApiClient(session, diagnostics)
