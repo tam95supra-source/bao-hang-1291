@@ -352,8 +352,7 @@ function verifyFallbackRequest_(body) {
 
   const parts = token.split('.');
   if (parts.length !== 2) throw new Error('INVALID_TOKEN');
-  const signingSecret = String(PropertiesService.getScriptProperties().getProperty('FALLBACK_TOKEN_SIGNING_SECRET') || '');
-  if (signingSecret.length < 32) throw new Error('FALLBACK_AUTH_NOT_CONFIGURED');
+  const signingSecret = fallbackSigningSecret_();
   const expected = base64UrlBytes_(Utilities.computeHmacSha256Signature(parts[0], signingSecret));
   if (!constantEqual_(expected, parts[1])) throw new Error('INVALID_TOKEN');
   const payload = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(parts[0])).getDataAsString('UTF-8'));
