@@ -3,6 +3,7 @@ package vn.pickpack1291.baohang.data
 import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import java.util.UUID
 
 class SessionStore(context: Context) {
     private val masterKey = MasterKey.Builder(context)
@@ -21,6 +22,18 @@ class SessionStore(context: Context) {
     val refreshToken: String get() = prefs.getString(KEY_REFRESH, "").orEmpty()
     val expiresAt: Long get() = prefs.getLong(KEY_EXPIRES, 0)
     val deviceRegistered: Boolean get() = prefs.getBoolean(KEY_DEVICE_REGISTERED, false)
+    val deviceId: String
+        get() {
+            val existing = prefs.getString(KEY_DEVICE_ID, "").orEmpty()
+            if (existing.isNotBlank()) return existing
+            return UUID.randomUUID().toString().also { prefs.edit().putString(KEY_DEVICE_ID, it).commit() }
+        }
+
+    val fallbackToken: String get() = prefs.getString(KEY_FALLBACK_TOKEN, "").orEmpty()
+    val fallbackUrl: String get() = prefs.getString(KEY_FALLBACK_URL, "").orEmpty()
+    val fallbackExpiresAtMillis: Long get() = prefs.getLong(KEY_FALLBACK_EXPIRES, 0L)
+    val hasValidFallbackCredential: Boolean
+        get() = fallbackToken.isNotBlank() && fallbackUrl.startsWith("https://") && fallbackExpiresAtMillis > System.currentTimeMillis() + 60_000L
 
     val profile: UserProfile?
         get() {
@@ -73,6 +86,18 @@ class SessionStore(context: Context) {
         if (profile.role != UserRole.ADMIN) prefs.edit().remove(KEY_ADMIN_TEST_ROLE).apply()
     }
 
+    fun saveFallbackCredential(token: String, url: String, expiresAtMillis: Long) {
+        prefs.edit()
+            .putString(KEY_FALLBACK_TOKEN, token)
+            .putString(KEY_FALLBACK_URL, url)
+            .putLong(KEY_FALLBACK_EXPIRES, expiresAtMillis)
+            .apply()
+    }
+
+    fun clearFallbackCredential() {
+        prefs.edit().remove(KEY_FALLBACK_TOKEN).remove(KEY_FALLBACK_URL).remove(KEY_FALLBACK_EXPIRES).apply()
+    }
+
     fun setAdminTestRole(role: UserRole?) {
         require(profile?.role == UserRole.ADMIN) { "Chỉ ADMIN được kiểm thử quyền" }
         require(role == null || role != UserRole.ADMIN) { "Không cần giả lập ADMIN" }
@@ -87,7 +112,11 @@ class SessionStore(context: Context) {
     }
 
     fun markDeviceRegistered() = prefs.edit().putBoolean(KEY_DEVICE_REGISTERED, true).apply()
-    fun clear() = prefs.edit().clear().apply()
+
+    fun clear() {
+        val stableDeviceId = deviceId
+        prefs.edit().clear().putString(KEY_DEVICE_ID, stableDeviceId).apply()
+    }
 
     private companion object {
         const val KEY_ACCESS = "access"
@@ -101,5 +130,9 @@ class SessionStore(context: Context) {
         const val KEY_ACTIVE = "active"
         const val KEY_DEVICE_REGISTERED = "device_registered"
         const val KEY_ADMIN_TEST_ROLE = "admin_test_role"
+        const val KEY_DEVICE_ID = "device_id_v1"
+        const val KEY_FALLBACK_TOKEN = "fallback_token_v1"
+        const val KEY_FALLBACK_URL = "fallback_url_v1"
+        const val KEY_FALLBACK_EXPIRES = "fallback_expires_v1"
     }
 }
