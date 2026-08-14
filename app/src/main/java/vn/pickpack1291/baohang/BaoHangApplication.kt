@@ -1,6 +1,8 @@
 package vn.pickpack1291.baohang
 
+import android.app.Activity
 import android.app.Application
+import android.os.Bundle
 import com.google.firebase.messaging.FirebaseMessaging
 import vn.pickpack1291.baohang.data.AppDatabase
 import vn.pickpack1291.baohang.data.AppRepository
@@ -10,7 +12,7 @@ import vn.pickpack1291.baohang.network.ApiClient
 import vn.pickpack1291.baohang.notifications.NotificationHelper
 import vn.pickpack1291.baohang.sync.SyncScheduler
 
-class BaoHangApplication : Application() {
+class BaoHangApplication : Application(), Application.ActivityLifecycleCallbacks {
     lateinit var database: AppDatabase
         private set
     lateinit var session: SessionStore
@@ -22,8 +24,12 @@ class BaoHangApplication : Application() {
     lateinit var repository: AppRepository
         private set
 
+    @Volatile private var startedActivities = 0
+    val isAppForeground: Boolean get() = startedActivities > 0
+
     override fun onCreate() {
         super.onCreate()
+        registerActivityLifecycleCallbacks(this)
         diagnostics = DiagnosticsLogger(this)
         diagnostics.info("app_start", mapOf("version" to BuildConfig.VERSION_NAME, "build_type" to BuildConfig.BUILD_TYPE, "ota_channel" to BuildConfig.OTA_CHANNEL))
         database = AppDatabase(this)
@@ -32,16 +38,24 @@ class BaoHangApplication : Application() {
         repository = AppRepository(this, database, session, api, diagnostics)
         NotificationHelper.createChannels(this)
 
-        // Target: no fixed 15-minute heartbeat. Remove legacy periodic work once and only
-        // schedule network work when a durable outbox item actually exists.
+        // No fixed background heartbeat. Network work is event-driven; only legacy durable
+        // outbox rows created by older APKs may be drained with their original request IDs.
         SyncScheduler.removeLegacyPeriodic(this)
         if (session.isLoggedIn && database.outboxCount() > 0) {
             SyncScheduler.enqueueOutbox(this)
-            diagnostics.info("outbox_sync_scheduled_on_start", mapOf("pending" to database.outboxCount()))
+            diagnostics.info("legacy_outbox_sync_scheduled_on_start", mapOf("pending" to database.outboxCount()))
         }
 
         FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
             if (session.isLoggedIn) repository.registerDeviceAsync(token)
         }.addOnFailureListener { diagnostics.error("fcm_token_read_failed", it) }
     }
+
+    override fun onActivityStarted(activity: Activity) { startedActivities++ }
+    override fun onActivityStopped(activity: Activity) { startedActivities = (startedActivities - 1).coerceAtLeast(0) }
+    override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+    override fun onActivityResumed(activity: Activity) = Unit
+    override fun onActivityPaused(activity: Activity) = Unit
+    override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+    override fun onActivityDestroyed(activity: Activity) = Unit
 }
