@@ -13,6 +13,7 @@ import org.json.JSONObject
 import vn.pickpack1291.baohang.BuildConfig
 import vn.pickpack1291.baohang.diagnostics.DiagnosticsLogger
 import vn.pickpack1291.baohang.network.ApiClient
+import vn.pickpack1291.baohang.network.DirectRpcClient
 import vn.pickpack1291.baohang.sync.SyncScheduler
 import java.time.Duration
 import java.time.Instant
@@ -25,13 +26,18 @@ class AppRepository(
     private val api: ApiClient,
     private val diagnostics: DiagnosticsLogger
 ) {
+    class MutationUnavailableException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val direct = DirectRpcClient(session)
 
     suspend fun login(employeeCode: String, password: String): UserProfile {
         val auth = api.signIn(employeeCode.trim(), password)
         session.save(auth)
         diagnostics.info("session_saved", mapOf("employee_code" to auth.profile.employeeCode, "role" to auth.profile.role.wire))
         registerCurrentDevice()
+        // Legacy queues created by older APKs are drained with their original request IDs.
+        // This version never creates a new business mutation while no authority can confirm it.
         if (database.outboxCount() > 0) SyncScheduler.enqueueOutbox(context)
         if (catalogNeedsRefresh()) SyncScheduler.enqueueCatalog(context)
         return auth.profile
@@ -55,77 +61,90 @@ class AppRepository(
     }
 
     fun searchSkus(query: String) = database.searchSkus(query)
-    suspend fun searchSkusOnline(query: String) = api.searchSkus(query)
-
+    suspend fun searchSkusOnline(query: String) = runCatching { direct.searchSkus(query) }.getOrElse { api.searchSkus(query) }
 
     suspend fun reportShortage(sku: String): ReportResult {
         val requestId = UUID.randomUUID().toString()
         diagnostics.info("shortage_submit", mapOf("sku" to sku, "request_id" to requestId))
         return try {
-            val result = api.reportShortage(sku, requestId)
+            val result = direct.reportShortage(sku, requestId)
             database.upsertIssues(listOf(result.issue))
-            diagnostics.info("shortage_submit_success", mapOf("sku" to sku, "issue_id" to result.issue.id, "report_count" to result.issue.reportCount, "aggregated" to result.wasAlreadyReported))
+            diagnostics.info("shortage_submit_success", mapOf("sku" to sku, "issue_id" to result.issue.id, "aggregated" to result.wasAlreadyReported, "authority" to "POSTGRES_RPC"))
             result
         } catch (error: Exception) {
-            diagnostics.error("shortage_submit_offline", error, mapOf("sku" to sku))
-            val localId = "offline-${UUID.randomUUID()}"
-            val now = Instant.now().toString()
-            val item = database.searchSkus(sku, 1).firstOrNull()
-            val issue = StockIssue(
-                localId, sku, item?.productName.orEmpty(), IssueStatus.OPEN, 1, now, now,
-                latestReporterName = session.profile?.fullName.orEmpty(), latestMessage = "Đang chờ đồng bộ"
+            diagnostics.warn("shortage_authority_unavailable", mapOf("sku" to sku, "error" to error.message.orEmpty().take(240)))
+            throw MutationUnavailableException(
+                "Không thể xác nhận báo thiếu với hệ thống. Dữ liệu chưa được gửi; vui lòng kiểm tra kết nối và thử lại.",
+                error
             )
-            database.upsertIssues(listOf(issue))
-            database.enqueue("report-shortage", JSONObject().put("sku", sku).put("client_request_id", requestId))
-            SyncScheduler.enqueueOutbox(context)
-            diagnostics.info("outbox_sync_scheduled", mapOf("action" to "report-shortage", "pending" to database.outboxCount()))
-            ReportResult(issue, false, "ĐÃ LƯU TRÊN MÁY • CHỜ ĐỒNG BỘ")
         }
     }
 
     suspend fun loadMyIssues(): List<StockIssue> = try {
-        api.myIssues().also(database::upsertIssues)
-    } catch (_: Exception) { database.cachedIssues(100) }
+        direct.myIssues().also(database::upsertIssues)
+    } catch (_: Exception) {
+        try { api.myIssues().also(database::upsertIssues) } catch (_: Exception) { database.cachedIssues(100) }
+    }
 
     suspend fun loadActiveIssues(): List<StockIssue> = try {
-        api.activeIssues().also(database::upsertIssues)
-    } catch (_: Exception) { database.cachedIssues(200).filter { it.status.isOpenBucket } }
-
-    suspend fun loadIssueBoard(): IssueBoard = api.issueBoard().also {
-        database.upsertIssues(it.open + it.claimed + it.recent)
+        direct.issueBoard().let { (it.open + it.claimed).also(database::upsertIssues) }
+    } catch (_: Exception) {
+        try { api.activeIssues().also(database::upsertIssues) } catch (_: Exception) { database.cachedIssues(200).filter { it.status.isOpenBucket } }
     }
 
-    suspend fun claimIssue(issueId: String): StockIssue = api.claimIssue(issueId).also {
-        database.upsertIssues(listOf(it))
-        diagnostics.info("issue_claim", mapOf("issue_id" to issueId, "sku" to it.sku, "version" to it.issueVersion))
+    suspend fun loadIssueBoard(): IssueBoard = try {
+        direct.issueBoard().also { database.upsertIssues(it.open + it.claimed + it.recent) }
+    } catch (directError: Exception) {
+        diagnostics.warn("board_rpc_fallback_edge", mapOf("error" to directError.message.orEmpty().take(200)))
+        api.issueBoard().also { database.upsertIssues(it.open + it.claimed + it.recent) }
     }
 
-    suspend fun reassignIssue(issueId: String, newAssigneeId: String, reason: String): StockIssue =
-        api.reassignIssue(issueId, newAssigneeId, reason).also {
+    suspend fun claimIssue(issueId: String): StockIssue = try {
+        direct.claimIssue(issueId).also {
             database.upsertIssues(listOf(it))
-            diagnostics.info("issue_reassign", mapOf("issue_id" to issueId, "new_assignee" to newAssigneeId, "version" to it.issueVersion))
+            diagnostics.info("issue_claim", mapOf("issue_id" to issueId, "sku" to it.sku, "version" to it.issueVersion, "authority" to "POSTGRES_RPC"))
         }
+    } catch (error: Exception) {
+        throw MutationUnavailableException("Không thể xác nhận nhận xử lý. Chưa có thay đổi nào được xác nhận cho thao tác này.", error)
+    }
+
+    suspend fun reassignIssue(issueId: String, newAssigneeId: String, reason: String): StockIssue = try {
+        direct.reassignIssue(issueId, newAssigneeId, reason).also {
+            database.upsertIssues(listOf(it))
+            diagnostics.info("issue_reassign", mapOf("issue_id" to issueId, "new_assignee" to newAssigneeId, "version" to it.issueVersion, "authority" to "POSTGRES_RPC"))
+        }
+    } catch (error: Exception) {
+        throw MutationUnavailableException("Không thể xác nhận điều phối lại. Dữ liệu chưa được ghi nhận.", error)
+    }
 
     suspend fun updateIssue(issueId: String, action: String): StockIssue {
         diagnostics.info("issue_update_start", mapOf("issue_id" to issueId, "action" to action))
-        return api.updateIssue(issueId, action).also {
-            database.upsertIssues(listOf(it))
-            diagnostics.info("issue_update_success", mapOf("issue_id" to issueId, "sku" to it.sku, "status" to it.status.wire, "version" to it.issueVersion))
+        return try {
+            direct.updateIssue(issueId, action).also {
+                database.upsertIssues(listOf(it))
+                diagnostics.info("issue_update_success", mapOf("issue_id" to issueId, "sku" to it.sku, "status" to it.status.wire, "version" to it.issueVersion, "authority" to "POSTGRES_RPC"))
+            }
+        } catch (error: Exception) {
+            throw MutationUnavailableException("Không thể xác nhận trạng thái SKU. Dữ liệu chưa được ghi nhận.", error)
         }
     }
 
-    suspend fun pendingAlerts(): List<PendingAlert> = api.pendingAlerts()
-    suspend fun markAlertReceived(eventId: String) = api.markAlertReceived(eventId)
-    suspend fun markAlertDisplayed(eventId: String) = api.markAlertDisplayed(eventId)
+    suspend fun pendingAlerts(): List<PendingAlert> = runCatching { direct.pendingAlerts() }.getOrElse { api.pendingAlerts() }
+    suspend fun markAlertReceived(eventId: String) = runCatching { direct.markAlertReceived(eventId) }.getOrElse { api.markAlertReceived(eventId) }
+    suspend fun markAlertDisplayed(eventId: String) = runCatching { direct.markAlertDisplayed(eventId) }.getOrElse { api.markAlertDisplayed(eventId) }
 
     suspend fun acknowledgeAlert(eventId: String) {
         try {
-            api.acknowledgeAlert(eventId)
-            diagnostics.info("alert_ack", mapOf("event_id" to eventId))
-        } catch (error: Exception) {
-            diagnostics.warn("alert_ack_deferred", mapOf("event_id" to eventId, "error" to error.message.orEmpty()))
-            database.enqueue("ack-alert", JSONObject().put("event_id", eventId))
-            SyncScheduler.enqueueOutbox(context)
+            direct.acknowledgeAlert(eventId)
+            diagnostics.info("alert_ack", mapOf("event_id" to eventId, "authority" to "POSTGRES_RPC"))
+        } catch (directError: Exception) {
+            try {
+                api.acknowledgeAlert(eventId)
+                diagnostics.info("alert_ack", mapOf("event_id" to eventId, "authority" to "EDGE"))
+            } catch (edgeError: Exception) {
+                diagnostics.warn("alert_ack_unconfirmed", mapOf("event_id" to eventId, "error" to edgeError.message.orEmpty().take(200)))
+                throw MutationUnavailableException("Không thể xác nhận cảnh báo khi chưa kết nối được hệ thống.", edgeError)
+            }
         }
     }
 
@@ -162,20 +181,29 @@ class AppRepository(
         revision?.let { database.setMetadata("catalog_revision", it.toString()) }
         diagnostics.info("catalog_sync_success", mapOf("received" to count, "local_count" to database.skuCount(), "revision" to (revision ?: 0L)))
         return count
-    }    suspend fun flushOutbox(): Int {
+    }
+
+    suspend fun flushOutbox(): Int {
         var sent = 0
         database.outbox().forEach { item ->
             try {
-                api.invoke(item.action, item.payload)
+                when (item.action) {
+                    "report-shortage" -> direct.reportShortage(
+                        item.payload.optString("sku"),
+                        item.payload.optString("client_request_id")
+                    )
+                    "ack-alert" -> direct.acknowledgeAlert(item.payload.optString("event_id"))
+                    else -> api.invoke(item.action, item.payload)
+                }
                 database.removeOutbox(item.id)
                 sent++
             } catch (error: Exception) {
                 database.failOutbox(item.id, error.message.orEmpty())
-                diagnostics.warn("outbox_flush_paused", mapOf("action" to item.action, "sent" to sent, "error" to error.message.orEmpty(), "pending" to database.outboxCount()))
+                diagnostics.warn("legacy_outbox_flush_paused", mapOf("action" to item.action, "sent" to sent, "error" to error.message.orEmpty().take(200), "pending" to database.outboxCount()))
                 return sent
             }
         }
-        if (sent > 0) diagnostics.info("outbox_flush_success", mapOf("sent" to sent, "remaining" to database.outboxCount()))
+        if (sent > 0) diagnostics.info("legacy_outbox_flush_success", mapOf("sent" to sent, "remaining" to database.outboxCount()))
         return sent
     }
 
@@ -183,15 +211,19 @@ class AppRepository(
 
     suspend fun registerCurrentDevice() {
         val token = FirebaseMessaging.getInstance().token.await()
-        api.registerDevice(token, "${Build.MANUFACTURER} ${Build.MODEL}", "${BuildConfig.VERSION_NAME} [${BuildConfig.OTA_CHANNEL.uppercase()}]")
+        val device = "${Build.MANUFACTURER} ${Build.MODEL}"
+        val version = "${BuildConfig.VERSION_NAME} [${BuildConfig.OTA_CHANNEL.uppercase()}]"
+        runCatching { direct.registerDevice(token, device, version) }.getOrElse { api.registerDevice(token, device, version) }
         session.markDeviceRegistered()
-        diagnostics.info("device_registered", mapOf("device" to "${Build.MANUFACTURER} ${Build.MODEL}", "version" to BuildConfig.VERSION_NAME))
+        diagnostics.info("device_registered", mapOf("device" to device, "version" to BuildConfig.VERSION_NAME))
     }
 
     fun registerDeviceAsync(token: String) {
         scope.launch {
+            val device = "${Build.MANUFACTURER} ${Build.MODEL}"
+            val version = "${BuildConfig.VERSION_NAME} [${BuildConfig.OTA_CHANNEL.uppercase()}]"
             runCatching {
-                api.registerDevice(token, "${Build.MANUFACTURER} ${Build.MODEL}", "${BuildConfig.VERSION_NAME} [${BuildConfig.OTA_CHANNEL.uppercase()}]")
+                runCatching { direct.registerDevice(token, device, version) }.getOrElse { api.registerDevice(token, device, version) }
                 session.markDeviceRegistered()
                 diagnostics.info("fcm_token_registered", mapOf("version" to BuildConfig.VERSION_NAME))
             }.onFailure { diagnostics.error("fcm_token_register_failed", it) }
