@@ -1,0 +1,43 @@
+name: Apply emergency quota and cleanup patch
+
+on:
+  push:
+    branches: [target-final-20260814-impl]
+    paths:
+      - 'scripts/apply_emergency_quota_cleanup.py'
+      - '.github/workflows/apply-emergency-quota-cleanup.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: target-final-20260814-impl
+          fetch-depth: 0
+      - run: python3 scripts/apply_emergency_quota_cleanup.py
+      - name: Validate source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          cp google-apps-script/Code.gs "$RUNNER_TEMP/Code.js"
+          node --check "$RUNNER_TEMP/Code.js"
+          grep -q "FIRESTORE_QUOTA_GUARD" app/src/main/java/vn/pickpack1291/baohang/network/EmergencyFirestoreClient.kt
+          grep -q "cleanupEmergencyAcked_" google-apps-script/Code.gs
+      - name: Keep workflow connector-owned
+        run: git checkout HEAD -- .github/workflows/apply-emergency-quota-cleanup.yml
+      - name: Commit source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'bao-hang-1291-automation'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m 'target: enforce Emergency quota and ACK retention'
+          git push origin HEAD:target-final-20260814-impl
