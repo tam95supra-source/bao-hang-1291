@@ -1,0 +1,131 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function validAuth() {
+      return request.auth != null
+        && request.auth.token.site == '1291'
+        && request.auth.token.emergency_enabled == true
+        && request.auth.token.role in ['PICKER','INVENT','ADMIN_INVENT','ADMIN']
+        && request.auth.token.device_id is string;
+    }
+    function role() { return request.auth.token.role; }
+    function ops() { return validAuth() && role() in ['INVENT','ADMIN_INVENT','ADMIN']; }
+    function adminOps() { return validAuth() && role() in ['ADMIN_INVENT','ADMIN']; }
+    function sameDevice(data) { return data.device_id == request.auth.token.device_id; }
+    function validStatus(status) { return status in ['OPEN','CLAIMED','AVAILABLE','SKIP_ALLOWED']; }
+    function stateKeys(data) {
+      return data.keys().hasOnly(['sku','issue_id','status','issue_version','claimed_by_account_id','updated_at','authority_mode']);
+    }
+    function stateShape(data) {
+      return stateKeys(data)
+        && data.sku is string && data.sku.size() > 0 && data.sku.size() <= 120
+        && data.issue_id is string && data.issue_id.size() > 0 && data.issue_id.size() <= 100
+        && validStatus(data.status)
+        && data.issue_version is int && data.issue_version >= 1
+        && data.claimed_by_account_id is string
+        && data.authority_mode == 'FIREBASE_EMERGENCY';
+    }
+
+    match /emergency_state/{skuKey} {
+      allow read: if validAuth();
+      allow create: if validAuth() && stateShape(request.resource.data)
+        && request.resource.data.status == 'OPEN'
+        && request.resource.data.issue_version == 1
+        && request.resource.data.claimed_by_account_id == '';
+      allow update: if validAuth() && stateShape(request.resource.data) && request.resource.data.sku == resource.data.sku && (
+        (role() in ['PICKER','ADMIN']
+          && resource.data.status in ['AVAILABLE','SKIP_ALLOWED']
+          && request.resource.data.status == 'OPEN'
+          && request.resource.data.issue_id != resource.data.issue_id
+          && request.resource.data.issue_version == 1
+          && request.resource.data.claimed_by_account_id == '')
+        || (ops()
+          && request.resource.data.issue_id == resource.data.issue_id
+          && request.resource.data.issue_version == resource.data.issue_version + 1
+          && (
+            (request.resource.data.status == 'CLAIMED'
+              && resource.data.status in ['OPEN','CLAIMED']
+              && request.resource.data.claimed_by_account_id != '')
+            || (request.resource.data.status in ['AVAILABLE','SKIP_ALLOWED']
+              && resource.data.status in ['OPEN','CLAIMED'])
+          ))
+      );
+      allow delete: if false;
+    }
+
+    match /emergency_ops_state/{skuKey} {
+      allow read: if ops();
+      allow create: if validAuth()
+        && request.resource.data.keys().hasOnly(['sku','issue_id','status','report_count','issue_version','claimed_by_account_id','updated_at','authority_mode'])
+        && request.resource.data.report_count == 1
+        && request.resource.data.issue_version == 1
+        && request.resource.data.status == 'OPEN'
+        && request.resource.data.authority_mode == 'FIREBASE_EMERGENCY'
+        && existsAfter(/databases/$(database)/documents/emergency_state/$(skuKey))
+        && getAfter(/databases/$(database)/documents/emergency_state/$(skuKey)).data.issue_id == request.resource.data.issue_id;
+      allow update: if validAuth()
+        && request.resource.data.authority_mode == 'FIREBASE_EMERGENCY'
+        && existsAfter(/databases/$(database)/documents/emergency_state/$(skuKey))
+        && request.resource.data.issue_id == getAfter(/databases/$(database)/documents/emergency_state/$(skuKey)).data.issue_id
+        && request.resource.data.status == getAfter(/databases/$(database)/documents/emergency_state/$(skuKey)).data.status
+        && request.resource.data.issue_version == getAfter(/databases/$(database)/documents/emergency_state/$(skuKey)).data.issue_version
+        && request.resource.data.claimed_by_account_id == getAfter(/databases/$(database)/documents/emergency_state/$(skuKey)).data.claimed_by_account_id
+        && (
+          (request.resource.data.issue_id == resource.data.issue_id
+            && request.resource.data.report_count == resource.data.report_count + 1
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['report_count','updated_at']))
+          || (request.resource.data.issue_id != resource.data.issue_id
+            && request.resource.data.report_count == 1
+            && getAfter(/databases/$(database)/documents/emergency_state/$(skuKey)).data.status == 'OPEN')
+          || (ops()
+            && request.resource.data.issue_id == resource.data.issue_id
+            && request.resource.data.report_count == resource.data.report_count)
+        );
+      allow delete: if false;
+    }
+
+    match /emergency_events/{eventId} {
+      allow create: if validAuth()
+        && request.resource.data.keys().hasOnly([
+          'event_id','source_mode','event_type','occurred_at_device','accepted_at_authority',
+          'actor_account_id','actor_role','device_id','issue_id','sku','issue_version',
+          'payload_json','payload_sha256','sheet_ack_at','reconciliation_status'
+        ])
+        && request.resource.data.event_id == eventId
+        && request.resource.data.source_mode == 'FIREBASE_EMERGENCY'
+        && request.resource.data.actor_account_id == request.auth.uid
+        && request.resource.data.actor_role == role()
+        && sameDevice(request.resource.data)
+        && request.resource.data.event_type in ['REPORT_SHORTAGE','CLAIM','AVAILABLE','SKIP_ALLOWED','REASSIGN']
+        && request.resource.data.reconciliation_status == 'PENDING_SHEET'
+        && request.resource.data.sheet_ack_at == null
+        && request.resource.data.issue_id is string
+        && request.resource.data.sku is string
+        && request.resource.data.issue_version is int;
+      allow get, list: if validAuth() && (resource.data.actor_account_id == request.auth.uid || ops());
+      allow update, delete: if false;
+    }
+
+    match /emergency_user_state/{projectionId} {
+      allow read: if validAuth() && (resource.data.target_user_id == request.auth.uid || ops());
+      allow create: if validAuth()
+        && request.resource.data.keys().hasOnly(['target_user_id','issue_id','sku','status','issue_version','updated_at','authority_mode'])
+        && request.resource.data.target_user_id == request.auth.uid
+        && request.resource.data.status == 'OPEN'
+        && request.resource.data.issue_version >= 1
+        && request.resource.data.authority_mode == 'FIREBASE_EMERGENCY';
+      allow update: if ops()
+        && request.resource.data.target_user_id == resource.data.target_user_id
+        && request.resource.data.issue_id == resource.data.issue_id
+        && request.resource.data.sku == resource.data.sku
+        && request.resource.data.status in ['AVAILABLE','SKIP_ALLOWED']
+        && request.resource.data.issue_version > resource.data.issue_version
+        && request.resource.data.authority_mode == 'FIREBASE_EMERGENCY';
+      allow delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
