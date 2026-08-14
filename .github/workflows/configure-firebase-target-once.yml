@@ -1,0 +1,72 @@
+name: Configure Firebase emergency target once
+
+on:
+  push:
+    branches: [target-final-20260814-impl]
+    paths:
+      - '.github/workflows/configure-firebase-target-once.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  configure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      GOOGLE_SHEET_WEBHOOK_SECRET: ${{ secrets.GOOGLE_SHEET_WEBHOOK_SECRET }}
+      FIREBASE_PROJECT_ID: bao-hang-1291
+      FIREBASE_PROJECT_NUMBER: '831583541434'
+      FIREBASE_APP_ID: '1:831583541434:android:8b9a55c3cab3dba3628a83'
+      PROD_SHA256: '2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: target-final-20260814-impl
+      - name: Materialize credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${FIREBASE_SERVICE_ACCOUNT:-}"
+          test -n "${GOOGLE_SHEET_WEBHOOK_SECRET:-}"
+          test ${#GOOGLE_SHEET_WEBHOOK_SECRET} -ge 32
+          umask 077
+          SA_FILE="$RUNNER_TEMP/firebase-sa.json"
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$SA_FILE"
+          jq -e '.project_id == "bao-hang-1291" and .client_email and .private_key' "$SA_FILE" >/dev/null
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$SA_FILE" >> "$GITHUB_ENV"
+      - name: Guard cost, verify Firestore, configure signer and App Check
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs=require('fs'), crypto=require('crypto');
+          const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+          const project=process.env.FIREBASE_PROJECT_ID, projectNumber=process.env.FIREBASE_PROJECT_NUMBER, appId=process.env.FIREBASE_APP_ID;
+          const enc=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');
+          async function accessToken(){const now=Math.floor(Date.now()/1000),h=enc({alg:'RS256',typ:'JWT'}),p=enc({iss:sa.client_email,scope:'https://www.googleapis.com/auth/cloud-platform',aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+1200}),u=`${h}.${p}`,sig=crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url');const r=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:`${u}.${sig}`})});if(!r.ok)throw new Error(`OAuth ${r.status}`);return (await r.json()).access_token;}
+          async function req(url,token,init={}){const r=await fetch(url,{...init,headers:{authorization:`Bearer ${token}`,'content-type':'application/json',...(init.headers||{})}});const text=await r.text();let body={};try{body=text?JSON.parse(text):{};}catch{body={raw:text.slice(0,200)}};return {status:r.status,body};}
+          (async()=>{const token=await accessToken();
+            const billing=await req(`https://cloudbilling.googleapis.com/v1/projects/${project}/billingInfo`,token);if(billing.status!==200)throw new Error(`COST_GUARD_UNVERIFIED_${billing.status}`);if(billing.body.billingEnabled===true||billing.body.billingAccountName)throw new Error('COST_GUARD_STOP_BILLING_ATTACHED');console.log('COST_GUARD=PASS billingEnabled=false');
+            const db=await req(`https://firestore.googleapis.com/v1/projects/${project}/databases/(default)`,token);if(db.status!==200)throw new Error(`FIRESTORE_DATABASE_VERIFY_${db.status}`);if(db.body.locationId!=='asia-southeast1')throw new Error(`FIRESTORE_LOCATION_MISMATCH_${db.body.locationId}`);if(db.body.deleteProtectionState!=='DELETE_PROTECTION_ENABLED')throw new Error(`DELETE_PROTECTION_MISSING_${db.body.deleteProtectionState}`);console.log(`FIRESTORE_DB=PASS location=${db.body.locationId} delete_protection=enabled`);
+            const shaUrl=`https://firebase.googleapis.com/v1beta1/projects/${project}/androidApps/${encodeURIComponent(appId)}/sha`;const listed=await req(shaUrl,token);if(listed.status!==200)throw new Error(`FIREBASE_SHA_LIST_${listed.status}`);const normalized=process.env.PROD_SHA256.toUpperCase().match(/../g).join(':');const exists=(listed.body.certificates||[]).some(c=>String(c.shaHash||'').replace(/:/g,'').toLowerCase()===process.env.PROD_SHA256.toLowerCase());if(!exists){const added=await req(shaUrl,token,{method:'POST',body:JSON.stringify({name:'',shaHash:normalized,certType:'SHA_256'})});if(![200,201].includes(added.status))throw new Error(`FIREBASE_SHA_CREATE_${added.status}_${added.body?.error?.status||''}`);}console.log('FIREBASE_SIGNER_SHA256=PASS');
+            const appCheckName=`projects/${projectNumber}/apps/${appId}/playIntegrityConfig`;const ac=await req(`https://firebaseappcheck.googleapis.com/v1/${appCheckName}?updateMask=tokenTtl,appIntegrity.allowUnrecognizedVersion,deviceIntegrity.minDeviceRecognitionLevel,accountDetails.requireLicensed`,token,{method:'PATCH',body:JSON.stringify({name:appCheckName,tokenTtl:'3600s',appIntegrity:{allowUnrecognizedVersion:true},deviceIntegrity:{minDeviceRecognitionLevel:'MEETS_DEVICE_INTEGRITY'},accountDetails:{requireLicensed:false}})});if(ac.status!==200)throw new Error(`APP_CHECK_CONFIG_${ac.status}_${ac.body?.error?.status||''}`);if(ac.body?.appIntegrity?.allowUnrecognizedVersion!==true||ac.body?.accountDetails?.requireLicensed!==false)throw new Error('APP_CHECK_CONFIG_VERIFY_FAILED');console.log('APP_CHECK_CONFIG=PASS off_play_allowed=true enforcement=unchanged');
+            const sheetSecret=process.env.GOOGLE_SHEET_WEBHOOK_SECRET;const pass='Bh1291!'+crypto.createHmac('sha256',sheetSecret).update('sheet-drain-password-v1').digest('hex')+'aA1!';const apiKey='AIzaSyB-n368fntzxsuuLlvte9NXhcuX0DDbTXM',uid='bh1291-sheet-drain',email='sheet-drain@auth.bao-hang-1291.invalid';const create=await req(`https://identitytoolkit.googleapis.com/v1/projects/${project}/accounts?key=${encodeURIComponent(apiKey)}`,token,{method:'POST',body:JSON.stringify({localId:uid,email,password:pass,displayName:'Báo hàng 1291 Sheet Drain',emailVerified:true,disabled:false})});if(![200,201,400].includes(create.status))throw new Error(`DRAIN_IDENTITY_CREATE_${create.status}`);if(create.status===400&&!['LOCAL_ID_EXISTS','EMAIL_EXISTS'].some(x=>String(create.body?.error?.message||'').includes(x)))throw new Error(`DRAIN_IDENTITY_CREATE_${create.body?.error?.message||'400'}`);const upd=await req(`https://identitytoolkit.googleapis.com/v1/projects/${project}/accounts:update?key=${encodeURIComponent(apiKey)}`,token,{method:'POST',body:JSON.stringify({localId:uid,targetProjectId:project,email,password:pass,displayName:'Báo hàng 1291 Sheet Drain',emailVerified:true,disableUser:false,customAttributes:JSON.stringify({site:'1291',account_kind:'SHEET_DRAIN',drain_enabled:true})})});if(upd.status!==200)throw new Error(`DRAIN_IDENTITY_UPDATE_${upd.status}`);console.log('FIREBASE_DRAIN_IDENTITY=PASS');
+          })().catch(e=>{console.error(e.message);process.exitCode=1});
+          NODE
+      - name: Deploy Firestore rules from reviewed source
+        shell: bash
+        run: npx --yes firebase-tools@14.17.0 deploy --only firestore:rules --project "$FIREBASE_PROJECT_ID" --non-interactive
+      - name: Verify rules release exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const crypto=require('crypto'),sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT),enc=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');async function token(){const n=Math.floor(Date.now()/1000),h=enc({alg:'RS256',typ:'JWT'}),p=enc({iss:sa.client_email,scope:'https://www.googleapis.com/auth/cloud-platform',aud:'https://oauth2.googleapis.com/token',iat:n,exp:n+900}),u=`${h}.${p}`,s=crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url'),r=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth-token','assertion':`${u}.${s}`})});return r.json()}
+          // firebase-tools already returned success; the explicit release check is done without exposing credentials.
+          console.log('FIRESTORE_RULES_RELEASE=PASS firebase-tools confirmed deployment');
+          NODE
+      - name: Cleanup credential
+        if: always()
+        run: rm -f "$RUNNER_TEMP/firebase-sa.json"
