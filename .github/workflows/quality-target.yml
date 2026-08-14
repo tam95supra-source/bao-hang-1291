@@ -77,7 +77,11 @@ jobs:
             supabase/functions/notification-worker/index.ts \
             supabase/functions/sheet-worker/index.ts \
             supabase/functions/fallback-token/index.ts \
-            supabase/functions/emergency-auth/index.ts
+            supabase/functions/emergency-auth/index.ts \
+            supabase/functions/emergency-drain/index.ts \
+            supabase/functions/fallback-importer/index.ts \
+            supabase/functions/firebase-bootstrap/index.ts \
+            supabase/functions/backup-account-admin/index.ts
       - name: Syntax-check Apps Script source
         shell: bash
         run: |
