@@ -1,0 +1,42 @@
+name: Apply Apps Script default target IDs once
+
+on:
+  push:
+    branches: [target-final-20260814-impl]
+    paths:
+      - 'scripts/apply_apps_script_default_ids.py'
+      - '.github/workflows/apply-apps-script-default-ids-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: target-final-20260814-impl
+          fetch-depth: 0
+      - run: python3 scripts/apply_apps_script_default_ids.py
+      - name: Validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp google-apps-script/Code.gs "$RUNNER_TEMP/Code.js"
+          node --check "$RUNNER_TEMP/Code.js"
+          git diff --check
+          grep -q "DEFAULT_TARGET_SPREADSHEET_ID" google-apps-script/Code.gs
+      - name: Keep workflow connector-owned
+        run: git checkout HEAD -- .github/workflows/apply-apps-script-default-ids-once.yml
+      - name: Commit source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'bao-hang-1291-automation'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m 'target: default Apps Script to private authority files'
+          git push origin HEAD:target-final-20260814-impl
