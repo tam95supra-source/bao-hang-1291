@@ -4,7 +4,7 @@ import org.json.JSONObject
 
 enum class UserRole(val wire: String, val label: String) {
     ADMIN("ADMIN", "Admin hệ thống"),
-    ADMIN_INVENT("ADMIN_INVENT", "Admin Event"),
+    ADMIN_INVENT("ADMIN_INVENT", "Admin Invent"),
     INVENT("INVENT", "Người báo hàng"),
     PICKER("PICKER", "Picker / Người lấy hàng");
 
@@ -158,7 +158,7 @@ data class OperationalConfig(
         .put("reminder_minutes", reminderMinutes)
         .put("replenish_minutes", replenishMinutes)
         .put("picker_ack_reminder_minutes", pickerAckReminderMinutes)
-        .put("auto_skip_enabled", autoSkipEnabled)
+        .put("auto_skip_enabled", false)
         .put("auto_skip_after_minutes", autoSkipAfterMinutes)
     companion object {
         fun fromJson(json: JSONObject) = OperationalConfig(
@@ -166,7 +166,7 @@ data class OperationalConfig(
             reminderMinutes = json.optInt("reminder_minutes", 5),
             replenishMinutes = json.optInt("replenish_minutes", 15),
             pickerAckReminderMinutes = json.optInt("picker_ack_reminder_minutes", 3),
-            autoSkipEnabled = json.optBoolean("auto_skip_enabled", false),
+            autoSkipEnabled = false,
             autoSkipAfterMinutes = json.optInt("auto_skip_after_minutes", 120)
         )
     }
@@ -178,7 +178,7 @@ data class AppConfig(
     val replenishMinutes: Int = 15,
     val pickerAckReminderMinutes: Int = 3,
     val diagnosticLogRetentionDays: Int = 14,
-    val retentionDays: Int = 60,
+    val retentionDays: Int = 45,
     val autoSkipEnabled: Boolean = false,
     val autoSkipAfterMinutes: Int = 120,
     val staffAutoSyncEnabled: Boolean = true,
@@ -190,8 +190,8 @@ data class AppConfig(
         .put("replenish_minutes", replenishMinutes)
         .put("picker_ack_reminder_minutes", pickerAckReminderMinutes)
         .put("diagnostic_log_retention_days", diagnosticLogRetentionDays)
-        .put("retention_days", retentionDays)
-        .put("auto_skip_enabled", autoSkipEnabled)
+        .put("retention_days", 45)
+        .put("auto_skip_enabled", false)
         .put("auto_skip_after_minutes", autoSkipAfterMinutes)
         .put("staff_auto_sync_enabled", staffAutoSyncEnabled)
         .put("staff_sync_interval_minutes", staffSyncIntervalMinutes)
@@ -202,8 +202,8 @@ data class AppConfig(
             replenishMinutes = json.optInt("replenish_minutes", 15),
             pickerAckReminderMinutes = json.optInt("picker_ack_reminder_minutes", 3),
             diagnosticLogRetentionDays = json.optInt("diagnostic_log_retention_days", 14),
-            retentionDays = json.optInt("retention_days", 60),
-            autoSkipEnabled = json.optBoolean("auto_skip_enabled", false),
+            retentionDays = 45,
+            autoSkipEnabled = false,
             autoSkipAfterMinutes = json.optInt("auto_skip_after_minutes", 120),
             staffAutoSyncEnabled = json.optBoolean("staff_auto_sync_enabled", true),
             staffSyncIntervalMinutes = json.optInt("staff_sync_interval_minutes", 60)
