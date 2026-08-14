@@ -1,0 +1,43 @@
+name: Staff source reachability probe once
+
+on:
+  push:
+    branches: ['ops/firebase-read-probe-20260815']
+    paths: ['.github/workflows/staff-source-probe-once.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - name: Probe filtered Google Sheet GViz without printing staff data
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import urllib.parse
+          sid='1FRROqCp1lmkuHc3lc4UBpVI5_ZrtiPI1thlEymv458E'
+          sheet='DANH MỤC NHÂN SỰ'
+          qs=["select A,B,D,E where G = 1291 and H = 'HY1'", "select A,B,D,E where G = '1291' and H = 'HY1'"]
+          for i,q in enumerate(qs,1):
+              params=urllib.parse.urlencode({'tqx':'out:csv','sheet':sheet,'tq':q})
+              print(f'URL_{i}=https://docs.google.com/spreadsheets/d/{sid}/gviz/tq?{params}')
+          PY
+          for i in 1 2; do
+            URL="$(python3 - <<PY
+          import urllib.parse
+          sid='1FRROqCp1lmkuHc3lc4UBpVI5_ZrtiPI1thlEymv458E'; sheet='DANH MỤC NHÂN SỰ'
+          qs=[\"select A,B,D,E where G = 1291 and H = 'HY1'\", \"select A,B,D,E where G = '1291' and H = 'HY1'\"]
+          q=qs[$i-1]
+          print('https://docs.google.com/spreadsheets/d/'+sid+'/gviz/tq?'+urllib.parse.urlencode({'tqx':'out:csv','sheet':sheet,'tq':q}))
+          PY
+            )"
+            CODE="$(curl -L -sS --max-time 20 -o "$RUNNER_TEMP/staff-$i.csv" -w '%{http_code}' "$URL" || true)"
+            BYTES="$(wc -c < "$RUNNER_TEMP/staff-$i.csv" 2>/dev/null || echo 0)"
+            FIRST="$(head -c 80 "$RUNNER_TEMP/staff-$i.csv" 2>/dev/null | tr '\r\n' ' ' | sed -E 's/[[:alnum:][:space:]À-ỹ._-]/x/g' | head -c 80 || true)"
+            echo "STAFF_GVIZ_VARIANT_${i}=HTTP_${CODE}_BYTES_${BYTES}_BODY_SHAPE_${FIRST}"
+            rm -f "$RUNNER_TEMP/staff-$i.csv"
+          done
