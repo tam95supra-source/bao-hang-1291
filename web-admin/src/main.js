@@ -14,7 +14,7 @@ const SESSION_KEY = 'bao-hang-1291-web-session';
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const ROLES = {
   ADMIN: 'Admin hệ thống',
-  ADMIN_INVENT: 'Admin Event',
+  ADMIN_INVENT: 'Admin Invent',
   INVENT: 'Người báo hàng',
   PICKER: 'Picker / Người lấy hàng',
 };
@@ -181,7 +181,7 @@ async function handleLogin(event) {
 }
 
 function tabsForRole(currentRole) {
-  if(currentRole==='ADMIN')return [['overview','Tổng quan'],['events','Sự kiện'],['sku','Danh mục SKU'],['reports','Báo cáo'],['users','Nhân sự & quyền'],['devices','Thiết bị'],['services','Hệ thống & dung lượng'],['logs','Log & audit'],['config','Cấu hình'],['versions','Phiên bản']];
+  if(currentRole==='ADMIN')return [['overview','Tổng quan'],['events','Sự kiện'],['sku','Danh mục SKU'],['reports','Báo cáo'],['users','Nhân sự & quyền'],['backup','Tài khoản dự phòng'],['devices','Thiết bị'],['services','Hệ thống & dung lượng'],['logs','Log & audit'],['config','Cấu hình'],['versions','Phiên bản']];
   if(currentRole==='ADMIN_INVENT')return [['overview','Tổng quan'],['events','Sự kiện'],['sku','Danh mục SKU'],['reports','Báo cáo'],['users','Nhân sự'],['logs','Log'],['sla','Mốc thời gian']];
   if(currentRole==='INVENT')return [['events','Sự kiện'],['sku','Danh mục SKU']];return [['picker','Picker']];
 }
@@ -204,7 +204,7 @@ function renderApp() {
       ${healthChip('SERVICE','ONLINE','good')}${healthChip('REALTIME','ĐANG NỐI')}${healthChip('SHEET','—')}${healthChip('FREE TIER','GIÁM SÁT')}
     </div></div><div class="user"><strong>${escapeHtml(profile.full_name)}</strong><span>${escapeHtml(profile.employee_code)} · ${escapeHtml(ROLES[currentRole] || currentRole)}</span><button id="logout" class="ghost">Đăng xuất</button></div></header>
     ${state.testRole ? `<div class="test-banner">ĐANG KIỂM THỬ QUYỀN: <strong>${escapeHtml(ROLES[state.testRole])}</strong> · API cũng bị hạ quyền tương ứng. <button id="exitTest">Thoát kiểm thử</button></div>` : ''}
-    ${actualRole() === 'ADMIN' && !state.testRole ? `<div class="test-tools"><span>Kiểm thử giao diện + quyền server:</span><button data-test="ADMIN_INVENT">Admin Event</button><button data-test="INVENT">Người báo hàng</button><button data-test="PICKER">Picker</button></div>` : ''}
+    ${actualRole() === 'ADMIN' && !state.testRole ? `<div class="test-tools"><span>Kiểm thử giao diện + quyền server:</span><button data-test="ADMIN_INVENT">Admin Invent</button><button data-test="INVENT">Người báo hàng</button><button data-test="PICKER">Picker</button></div>` : ''}
     <nav class="tabs">${tabs.map(([id,label]) => `<button data-tab="${id}" class="${id === state.activeTab ? 'active' : ''}">${label}</button>`).join('')}</nav>
     <main id="content" class="content"></main></div>
     <div id="busy" class="busy" hidden><div><span class="spinner"></span><strong id="busyText">Đang xử lý…</strong></div></div>`;
@@ -219,7 +219,7 @@ function renderTab() {
   $$('[data-tab]').forEach((button) => button.classList.toggle('active', button.dataset.tab === state.activeTab));
   const handlers = {
     overview: renderOverview, events: renderEvents, picker: renderPicker, reports: renderReports,
-    sku: renderSku, users: renderUsers, devices: renderDevices, services: renderIntegrations, logs: renderLogs,
+    sku: renderSku, users: renderUsers, backup: renderBackupAccounts, devices: renderDevices, services: renderIntegrations, logs: renderLogs,
     sla: renderSla, config: renderConfig, versions: renderVersions,
   };
   handlers[state.activeTab]?.();
@@ -231,7 +231,7 @@ function scheduleLiveRefresh(kind) {
     if (kind === 'catalog' && ['sku','overview','picker'].includes(state.activeTab)) renderTab();
     if (kind === 'staff' && ['users','overview'].includes(state.activeTab)) renderTab();
     if (kind === 'issue' && ['events','overview','picker'].includes(state.activeTab)) renderTab();
-  }, 180);
+  }, 1200);
 }
 function setRealtimeHealth(value, kind = '') {
   state.realtimeStatus = value;
@@ -254,13 +254,21 @@ async function startRealtime() {
       ensureFallbackPolling();
     }
   };
-  state.issueChannel = realtimeClient.channel('site:1291:issues', { config: { private: true } })
-    .on('broadcast', { event: 'issue_changed' }, () => scheduleLiveRefresh('issue'))
-    .subscribe(subscribeStatus);
+  if (role() === 'PICKER') {
+    state.issueChannel = realtimeClient.channel(`user:1291:${state.session.profile.id}`, { config: { private: true } })
+      .on('broadcast', { event: 'picker_alert' }, () => scheduleLiveRefresh('issue'))
+      .subscribe(subscribeStatus);
+  } else {
+    state.issueChannel = realtimeClient.channel('site:1291:issues', { config: { private: true } })
+      .on('broadcast', { event: 'issue_changed' }, () => scheduleLiveRefresh('issue'))
+      .subscribe(subscribeStatus);
+    if (['ADMIN','ADMIN_INVENT'].includes(role())) {
+      state.staffChannel = realtimeClient.channel('site:1291:staff', { config: { private: true } })
+        .on('broadcast', { event: 'staff_changed' }, () => scheduleLiveRefresh('staff')).subscribe(subscribeStatus);
+    }
+  }
   state.catalogChannel = realtimeClient.channel('site:1291:catalog', { config: { private: true } })
     .on('broadcast', { event: 'catalog_changed' }, () => scheduleLiveRefresh('catalog')).subscribe(subscribeStatus);
-  state.staffChannel = realtimeClient.channel('site:1291:staff', { config: { private: true } })
-    .on('broadcast', { event: 'staff_changed' }, () => scheduleLiveRefresh('staff')).subscribe(subscribeStatus);
   setTimeout(() => { if (state.realtimeStatus !== 'ONLINE') ensureFallbackPolling(); }, 6000);
 }
 function ensureFallbackPolling() {
@@ -390,7 +398,7 @@ async function reportShortage() {
   button.disabled = true;
   try {
     const result = await api('report-shortage',{ sku:item.sku, client_request_id:uuid() });
-    message('#pickerMsg', result.already_reported ? `SKU đã có báo trước. Đã ghi thêm lượt của bạn; tổng ${result.issue.report_count} lượt.` : 'Đã được server xác nhận báo thiếu.', 'good');
+    message('#pickerMsg', result.already_reported ? 'SKU này đã có báo trước. Hệ thống đã ghi nhận báo của bạn.' : 'Đã được server xác nhận báo thiếu.', 'good');
     state.selectedSku = null;
     $('#skuSearch').value = '';
     $('#selectedSku').textContent = 'Chưa chọn SKU';
@@ -404,7 +412,7 @@ async function loadMyIssues() {
   const target = $('#myIssues'); if (!target) return;
   try {
     const data = await api('my-issues');
-    target.innerHTML = data.issues.length ? data.issues.slice(0,50).map((issue) => `<article class="card"><strong>${escapeHtml(statusLabel(issue.status))} · SKU ${escapeHtml(issue.sku)}</strong><p>${escapeHtml(issue.product_name)}</p><small>${Number(issue.report_count || 1)} lượt · ${formatTime(issue.reported_at)}</small></article>`).join('') : '<div class="card muted">Chưa có báo thiếu.</div>';
+    target.innerHTML = data.issues.length ? data.issues.slice(0,50).map((issue) => `<article class="card"><strong>${escapeHtml(statusLabel(issue.status))} · SKU ${escapeHtml(issue.sku)}</strong><p>${escapeHtml(issue.product_name)}</p><small>${formatTime(issue.reported_at)}</small></article>`).join('') : '<div class="card muted">Chưa có báo thiếu.</div>';
   } catch (error) { target.innerHTML = `<div class="message" data-type="error">${escapeHtml(safeMessage(error))}</div>`; }
 }
 async function loadPendingAlerts() {
@@ -432,7 +440,7 @@ async function renderSku(){
 }
 async function renderUsers(){
  $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">STAFF</p><h2>Nhân sự & quyền</h2></div><button id="staffSync" class="secondary">ĐỒNG BỘ NGUỒN NGAY</button></div><div id="staffStatus"></div><div id="usersBody"></div>`;
- const load=async()=>{try{const [d,st]=await Promise.all([api('list-users'),api('staff-sync-status')]);state.managedUsers=d.users||[];const last=st.runs?.[0];$('#staffStatus').innerHTML=`<article class="card"><b>Nguồn DANH MỤC NHÂN SỰ</b><p>${last?`${escapeHtml(last.status)} · ${formatTime(last.finished_at)} · ${Number(last.eligible_rows||0)} nhân sự hợp lệ`:'Chưa đồng bộ.'}</p><p class="muted">Site 1291 / Kho HY1. Chuyên viên, Trưởng nhóm, Trưởng kho → Admin Event; còn lại → Picker. 6281280 được bảo vệ tuyệt đối. Nhân sự mất khỏi nguồn chỉ ngừng hoạt động, lịch sử vẫn giữ.</p></article>`;$('#usersBody').innerHTML=`<div class="table-wrap"><table><thead><tr><th>User</th><th>Họ tên</th><th>Vị trí</th><th>Quyền</th><th>Nguồn</th><th>Trạng thái</th></tr></thead><tbody>${state.managedUsers.map(u=>`<tr><td><b>${escapeHtml(u.employee_code)}</b>${u.protected_account?' 🔒':''}</td><td>${escapeHtml(u.full_name)}</td><td>${escapeHtml(u.source_position||'—')}</td><td>${escapeHtml(ROLES[u.role]||u.role)}</td><td>${u.source_kind==='GSHEET'?'Google Sheet':'Tạo thêm'}</td><td>${u.active?'Hoạt động':'Ngừng'}</td></tr>`).join('')}</tbody></table></div><article class="card"><h3>Tạo thêm tài khoản ngoài danh sách nguồn</h3><p class="muted">${role()==='ADMIN_INVENT'?'Admin Event chỉ được tạo thêm Picker.':'Admin hệ thống được tạo Admin Event, Người báo hàng hoặc Picker.'} Nếu bỏ trống mật khẩu, server dùng mật khẩu mặc định lưu an toàn.</p><div class="form-grid"><label>Mã nhân viên<input id="newCode"></label><label>Họ tên<input id="newName"></label><label>Nhà thầu<input id="newContractor"></label><label>Quyền<select id="newRole">${(role()==='ADMIN'?['ADMIN_INVENT','INVENT','PICKER']:['PICKER']).map(r=>`<option value="${r}">${ROLES[r]}</option>`).join('')}</select></label><label>Mật khẩu riêng (không bắt buộc)<input id="newPassword" type="password" autocomplete="new-password"></label></div><button id="createExtraUser" class="primary">TẠO TÀI KHOẢN</button><div id="userMsg" class="message" hidden></div></article>`;$('#createExtraUser').onclick=async()=>{try{const item={employee_code:$('#newCode').value.trim(),full_name:$('#newName').value.trim(),contractor:$('#newContractor').value.trim(),role:$('#newRole').value,active:true,initial_password:$('#newPassword').value},r=await api('import-users',{items:[item]});if(r.failed)throw new Error(r.errors?.[0]||'Không tạo được tài khoản');message('#userMsg','Đã tạo tài khoản.','good');await load();}catch(e){message('#userMsg',safeMessage(e),'error');}};}catch(e){$('#usersBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}};
+ const load=async()=>{try{const [d,st]=await Promise.all([api('list-users'),api('staff-sync-status')]);state.managedUsers=d.users||[];const last=st.runs?.[0];$('#staffStatus').innerHTML=`<article class="card"><b>Nguồn DANH MỤC NHÂN SỰ</b><p>${last?`${escapeHtml(last.status)} · ${formatTime(last.finished_at)} · ${Number(last.eligible_rows||0)} nhân sự hợp lệ`:'Chưa đồng bộ.'}</p><p class="muted">Site 1291 / Kho HY1. Chuyên viên, Trưởng nhóm, Trưởng kho → Admin Invent; còn lại → Picker. 6281280 được bảo vệ tuyệt đối. Nhân sự mất khỏi nguồn chỉ ngừng hoạt động, lịch sử vẫn giữ.</p></article>`;$('#usersBody').innerHTML=`<div class="table-wrap"><table><thead><tr><th>User</th><th>Họ tên</th><th>Vị trí</th><th>Quyền</th><th>Nguồn</th><th>Trạng thái</th></tr></thead><tbody>${state.managedUsers.map(u=>`<tr><td><b>${escapeHtml(u.employee_code)}</b>${u.protected_account?' 🔒':''}</td><td>${escapeHtml(u.full_name)}</td><td>${escapeHtml(u.source_position||'—')}</td><td>${escapeHtml(ROLES[u.role]||u.role)}</td><td>${u.source_kind==='GSHEET'?'Google Sheet':'Tạo thêm'}</td><td>${u.active?'Hoạt động':'Ngừng'}</td></tr>`).join('')}</tbody></table></div><article class="card"><h3>Tạo thêm tài khoản ngoài danh sách nguồn</h3><p class="muted">${role()==='ADMIN_INVENT'?'Admin Invent chỉ được tạo thêm Picker.':'Admin hệ thống được tạo Admin Invent, Người báo hàng hoặc Picker.'} Nếu bỏ trống mật khẩu, server dùng mật khẩu mặc định lưu an toàn.</p><div class="form-grid"><label>Mã nhân viên<input id="newCode"></label><label>Họ tên<input id="newName"></label><label>Nhà thầu<input id="newContractor"></label><label>Quyền<select id="newRole">${(role()==='ADMIN'?['ADMIN_INVENT','INVENT','PICKER']:['PICKER']).map(r=>`<option value="${r}">${ROLES[r]}</option>`).join('')}</select></label><label>Mật khẩu riêng (không bắt buộc)<input id="newPassword" type="password" autocomplete="new-password"></label></div><button id="createExtraUser" class="primary">TẠO TÀI KHOẢN</button><div id="userMsg" class="message" hidden></div></article>`;$('#createExtraUser').onclick=async()=>{try{const item={employee_code:$('#newCode').value.trim(),full_name:$('#newName').value.trim(),contractor:$('#newContractor').value.trim(),role:$('#newRole').value,active:true,initial_password:$('#newPassword').value},r=await api('import-users',{items:[item]});if(r.failed)throw new Error(r.errors?.[0]||'Không tạo được tài khoản');message('#userMsg','Đã tạo tài khoản.','good');await load();}catch(e){message('#userMsg',safeMessage(e),'error');}};}catch(e){$('#usersBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}};
  $('#staffSync').onclick=async()=>{try{setBusy(true,'Đang đồng bộ DANH MỤC NHÂN SỰ…');const r=await api('staff-sync-now');alert(`Đồng bộ ${r.status}: tạo ${r.created||0}, cập nhật ${r.updated||0}, ngừng ${r.deactivated||0}, lỗi ${r.failed||0}.`);await load();}catch(e){alert(safeMessage(e));}finally{setBusy(false);}};load();
 }
 async function editUser(id) {
@@ -445,6 +453,14 @@ async function editUser(id) {
   const password=prompt('Mật khẩu mới (để trống nếu giữ nguyên):','');if(password===null)return;
   try{setBusy(true,'Đang cập nhật nhân sự…');await api('update-user',{id:user.id,employee_code:user.employee_code,full_name:fullName.trim(),contractor:contractor.trim(),role:selectedRole,active,new_password:password});await renderUsers();}catch(error){alert(safeMessage(error));}finally{setBusy(false);}
 }
+
+async function renderBackupAccounts(){
+  $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">RECOVERY IDENTITY</p><h2>Tài khoản dự phòng</h2></div><button id="newBackup" class="primary">TẠO TÀI KHOẢN</button></div><article class="card"><p>Tài khoản kỹ thuật dùng khi Service lỗi, tách hoàn toàn khỏi nhân sự và báo cáo năng suất. Mật khẩu không được lưu trên Web/Sheet.</p></article><div id="backupBody"></div>`;
+  const load=async()=>{try{const d=await api('backup-account-list');const rows=d.accounts||[];$('#backupBody').innerHTML=rows.length?rows.map(a=>`<article class="card"><strong>${escapeHtml(a.username)} · ${escapeHtml(a.display_name)}</strong><p>${escapeHtml(ROLES[a.role]||a.role)} · ${escapeHtml(a.status)} · thiết bị: ${escapeHtml(a.device_scope||'*')}</p><small>Hết hạn: ${a.expires_at?formatTime(a.expires_at):'Không đặt'}</small><div class="actions">${a.status==='ACTIVE'?`<button class="secondary" data-reset-backup="${a.id}">ĐẶT LẠI MẬT KHẨU</button><button class="danger" data-lock-backup="${a.id}">KHÓA</button>`:`<button class="primary" data-unlock-backup="${a.id}">MỞ KHÓA + ĐẶT MẬT KHẨU</button>`}</div></article>`).join(''):'<div class="card muted">Chưa có tài khoản dự phòng.</div>';$$('[data-lock-backup]').forEach(b=>b.onclick=async()=>{if(!confirm('Khóa tài khoản dự phòng này?'))return;try{await api('backup-account-lock',{id:b.dataset.lockBackup});await load();}catch(e){alert(safeMessage(e));}});$$('[data-reset-backup]').forEach(b=>b.onclick=()=>backupPasswordAction('reset',b.dataset.resetBackup,load));$$('[data-unlock-backup]').forEach(b=>b.onclick=()=>backupPasswordAction('unlock',b.dataset.unlockBackup,load));}catch(e){$('#backupBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}};
+  $('#newBackup').onclick=async()=>{const username=prompt('Username dự phòng (chữ thường, số, . _ -):')?.trim().toLowerCase();if(!username)return;const display_name=prompt('Tên hiển thị:')?.trim();if(!display_name)return;const roleValue=prompt('Vai trò: ADMIN / ADMIN_INVENT / INVENT / PICKER','INVENT')?.trim().toUpperCase();if(!roleValue)return;const device_scope=prompt('Device scope (* hoặc device ID cụ thể):','*')?.trim()||'*';const days=Number(prompt('Thời hạn tài khoản (ngày):','30')||30);const password=prompt('Mật khẩu dự phòng (ít nhất 14 ký tự):')||'';if(password.length<14)return alert('Mật khẩu cần ít nhất 14 ký tự.');try{await api('backup-account-create',{username,display_name,role:roleValue,device_scope,password,expires_at:new Date(Date.now()+Math.max(1,days)*86400000).toISOString()});await load();}catch(e){alert(safeMessage(e));}};
+  load();
+}
+async function backupPasswordAction(action,id,done){const password=prompt('Mật khẩu mới (ít nhất 14 ký tự):')||'';if(password.length<14)return alert('Mật khẩu cần ít nhất 14 ký tự.');try{await api(`backup-account-${action}`,{id,password});await done();}catch(e){alert(safeMessage(e));}}
 
 async function renderDevices() {
   $('#content').innerHTML = `<div class="heading"><div><p class="eyebrow">DEVICE</p><h2>Thiết bị & thông báo</h2></div></div><div id="deviceBody" class="card muted">Đang tải…</div>`;
@@ -466,11 +482,13 @@ async function renderLogs() {
 async function downloadLog(id){try{setBusy(true,'Đang tạo link tải log…');const r=await api('download-log',{id});location.href=r.url;}catch(error){alert(safeMessage(error));}finally{setBusy(false);}}
 
 async function renderSla(){
- $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">SLA</p><h2>Mốc thời gian vận hành</h2></div></div><div id="slaBody"></div>`;try{const c=await api('get-operational-config');$('#slaBody').innerHTML=`<article class="card"><div class="form-grid"><label>Thời gian nhận xử lý (phút)<input id="ackMin" type="number" min="1" max="480" value="${c.acknowledge_minutes}"><small>Từ lúc Picker báo đến khi Người báo hàng nhận xử lý.</small></label><label>Chu kỳ nhắc xử lý (phút)<input id="reminderMin" type="number" min="1" max="480" value="${c.reminder_minutes}"><small>Khoảng cách giữa các lần nhắc khi ticket còn mở.</small></label><label>Thời gian châm hàng (phút)<input id="replenishMin" type="number" min="1" max="480" value="${c.replenish_minutes}"><small>Mốc theo dõi sau khi đã nhận ticket.</small></label><label>Nhắc Picker xác nhận (phút)<input id="pickerAckMin" type="number" min="1" max="60" value="${c.picker_ack_reminder_minutes}"><small>Chỉ cho cảnh báo ĐÃ CÓ HÀNG hoặc CHO PHÉP SKIP.</small></label><label class="check"><input id="autoSkipEnabled" type="checkbox" ${c.auto_skip_enabled?'checked':''}> Tự động cho phép SKIP khi quá thời gian</label><label>Mốc tự động SKIP (phút)<input id="autoSkipAfter" type="number" min="15" max="4320" value="${c.auto_skip_after_minutes||120}"><small>120 phút = 2 giờ. Có thể tắt hoàn toàn.</small></label></div><button id="saveSla" class="primary">LƯU MỐC THỜI GIAN</button><div id="slaMsg" class="message" hidden></div></article>`;$('#saveSla').onclick=async()=>{try{await api('save-operational-config',{acknowledge_minutes:Number($('#ackMin').value),reminder_minutes:Number($('#reminderMin').value),replenish_minutes:Number($('#replenishMin').value),picker_ack_reminder_minutes:Number($('#pickerAckMin').value),auto_skip_enabled:$('#autoSkipEnabled').checked,auto_skip_after_minutes:Number($('#autoSkipAfter').value)});message('#slaMsg','Đã lưu cấu hình vận hành.','good');}catch(e){message('#slaMsg',safeMessage(e),'error');}};}catch(e){$('#slaBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}
+ $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">SLA</p><h2>Mốc thời gian vận hành</h2></div></div><div id="slaBody"></div>`;
+ try{const c=await api('get-operational-config');$('#slaBody').innerHTML=`<article class="card"><div class="form-grid"><label>Thời gian nhận xử lý (phút)<input id="ackMin" type="number" min="1" max="480" value="${c.acknowledge_minutes}"></label><label>Chu kỳ nhắc xử lý (phút)<input id="reminderMin" type="number" min="1" max="480" value="${c.reminder_minutes}"></label><label>Thời gian châm hàng (phút)<input id="replenishMin" type="number" min="1" max="480" value="${c.replenish_minutes}"></label><label>Nhắc Picker xác nhận (phút)<input id="pickerAckMin" type="number" min="1" max="60" value="${c.picker_ack_reminder_minutes}"></label></div><p class="muted">Hết mốc chỉ nhắc/escalate. Hệ thống không tự cho phép SKIP.</p><button id="saveSla" class="primary">LƯU MỐC THỜI GIAN</button><div id="slaMsg" class="message" hidden></div></article>`;$('#saveSla').onclick=async()=>{try{await api('save-operational-config',{acknowledge_minutes:Number($('#ackMin').value),reminder_minutes:Number($('#reminderMin').value),replenish_minutes:Number($('#replenishMin').value),picker_ack_reminder_minutes:Number($('#pickerAckMin').value),auto_skip_enabled:false,auto_skip_after_minutes:0});message('#slaMsg','Đã lưu mốc thời gian.','good');}catch(e){message('#slaMsg',safeMessage(e),'error');}};}catch(e){$('#slaBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}
 }
 
 async function renderConfig(){
- $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">CONFIG</p><h2>Cấu hình hệ thống</h2></div></div><div id="configBody"></div>`;try{const c=await api('get-config');$('#configBody').innerHTML=`<article class="card"><div class="form-grid"><label>Lưu lịch sử nghiệp vụ (ngày)<input id="retentionDays" type="number" min="7" max="365" value="${c.retention_days}"><small>Giữ ticket/audit theo chu kỳ, không phụ thuộc trạng thái nhân sự.</small></label><label>Lưu log chẩn đoán (ngày)<input id="logDays" type="number" min="1" max="60" value="${c.diagnostic_log_retention_days}"><small>Log cũ tự xóa để kiểm soát dung lượng.</small></label><label class="check"><input id="staffAuto" type="checkbox" ${c.staff_auto_sync_enabled?'checked':''}> Tự động đồng bộ DANH MỤC NHÂN SỰ</label><label>Chu kỳ đồng bộ nhân sự (phút)<input id="staffInterval" type="number" min="15" max="1440" value="${c.staff_sync_interval_minutes||60}"><small>Khuyến nghị 60 phút để giảm network/quota.</small></label><label class="check"><input id="cfgAutoSkip" type="checkbox" ${c.auto_skip_enabled?'checked':''}> Bật tự động cho phép SKIP</label><label>Mốc tự động SKIP (phút)<input id="cfgAutoSkipAfter" type="number" min="15" max="4320" value="${c.auto_skip_after_minutes||120}"></label></div><button id="saveConfig" class="primary">LƯU CẤU HÌNH</button><div id="configMsg" class="message" hidden></div></article>`;$('#saveConfig').onclick=async()=>{try{await api('save-config',{...c,retention_days:Number($('#retentionDays').value),diagnostic_log_retention_days:Number($('#logDays').value),staff_auto_sync_enabled:$('#staffAuto').checked,staff_sync_interval_minutes:Number($('#staffInterval').value),auto_skip_enabled:$('#cfgAutoSkip').checked,auto_skip_after_minutes:Number($('#cfgAutoSkipAfter').value)});message('#configMsg','Đã lưu cấu hình hệ thống.','good');}catch(e){message('#configMsg',safeMessage(e),'error');}};}catch(e){$('#configBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}
+ $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">CONFIG</p><h2>Cấu hình hệ thống</h2></div></div><div id="configBody"></div>`;
+ try{const c=await api('get-config');$('#configBody').innerHTML=`<article class="card"><p><b>Retention nghiệp vụ: 45 ngày</b></p><p class="muted">OPEN/CLAIMED, event chưa ACK và conflict không bị xóa theo tuổi.</p><div class="form-grid"><label>Lưu log chẩn đoán (ngày)<input id="logDays" type="number" min="1" max="30" value="${c.diagnostic_log_retention_days}"></label><label class="check"><input id="staffAuto" type="checkbox" ${c.staff_auto_sync_enabled?'checked':''}>Tự động đồng bộ nhân sự</label><label>Chu kỳ đồng bộ nhân sự (phút)<input id="staffInterval" type="number" min="30" max="1440" value="${c.staff_sync_interval_minutes}"></label></div><button id="saveConfig" class="primary">LƯU CẤU HÌNH</button><div id="cfgMsg" class="message" hidden></div></article>`;$('#saveConfig').onclick=async()=>{try{await api('save-config',{retention_days:45,diagnostic_log_retention_days:Number($('#logDays').value),staff_auto_sync_enabled:$('#staffAuto').checked,staff_sync_interval_minutes:Number($('#staffInterval').value),auto_skip_enabled:false,auto_skip_after_minutes:0});message('#cfgMsg','Đã lưu cấu hình.','good');}catch(e){message('#cfgMsg',safeMessage(e),'error');}};}catch(e){$('#configBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}
 }
 
 async function renderVersions(){

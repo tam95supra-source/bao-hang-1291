@@ -14,6 +14,7 @@ import vn.pickpack1291.baohang.data.IssueStatus
 import vn.pickpack1291.baohang.data.ReportResult
 import vn.pickpack1291.baohang.data.SessionStore
 import vn.pickpack1291.baohang.data.StockIssue
+import vn.pickpack1291.baohang.data.UserProfile
 import java.io.IOException
 import java.time.Instant
 import java.util.UUID
@@ -22,6 +23,7 @@ import java.util.concurrent.TimeUnit
 class SheetFallbackClient(private val session: SessionStore) {
     class FallbackException(val code: String, message: String) : IOException(message)
     data class Health(val ok: Boolean, val sheetMode: String, val schema: String)
+    data class BackupLoginResult(val profile: UserProfile, val fallbackToken: String, val fallbackUrl: String, val expiresAtMillis: Long, val firebaseEmail: String)
 
     private val jsonType = "application/json; charset=utf-8".toMediaType()
     private val client = OkHttpClient.Builder()
@@ -53,16 +55,21 @@ class SheetFallbackClient(private val session: SessionStore) {
     }
 
     suspend fun health(): Health {
-        if (!session.hasValidFallbackCredential) throw FallbackException("FALLBACK_TOKEN_EXPIRED", "Token fallback chưa sẵn sàng")
-        val separator = if (session.fallbackUrl.contains("?")) "&" else "?"
-        val request = Request.Builder().url(session.fallbackUrl + separator + "mode=health")
-            .get().header("Accept", "application/json").build()
+        val result = signedPost(JSONObject().put("mode", "health"))
+        return Health(ok = result.optBoolean("ok", false), sheetMode = result.optString("sheet_mode", "UNKNOWN").uppercase(), schema = result.optString("schema", ""))
+    }
+
+    suspend fun backupLogin(username: String, password: String): BackupLoginResult {
+        val url = session.fallbackUrl
+        if (!url.startsWith("https://")) throw FallbackException("FALLBACK_URL_MISSING", "Thiết bị chưa được provision đường dự phòng trước sự cố")
+        val body = JSONObject().put("mode", "backup_login").put("username", username.trim().lowercase()).put("password", password)
+            .put("timestamp_ms", System.currentTimeMillis()).put("nonce", UUID.randomUUID().toString() + UUID.randomUUID().toString()).put("device_id", session.deviceId)
+        val request = Request.Builder().url(url).post(body.toString().toRequestBody(jsonType)).header("Content-Type", "application/json").header("Accept", "application/json").build()
         val result = executeObject(request)
-        return Health(
-            ok = result.optBoolean("ok", false),
-            sheetMode = result.optString("sheet_mode", "UNKNOWN").uppercase(),
-            schema = result.optString("schema", "")
-        )
+        val token = result.optString("fallback_token"); val expires = runCatching { Instant.parse(result.optString("expires_at")).toEpochMilli() }.getOrDefault(0L)
+        val profile = UserProfile.fromJson(result.getJSONObject("profile"))
+        if (token.isBlank() || expires <= System.currentTimeMillis()) throw FallbackException("INVALID_CREDENTIAL", "Phiên dự phòng không hợp lệ")
+        return BackupLoginResult(profile, token, url, expires, result.optString("firebase_email"))
     }
 
     suspend fun reportShortage(sku: String, eventId: String): ReportResult {

@@ -17,7 +17,8 @@ class SessionStore(context: Context) {
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
     )
 
-    val isLoggedIn: Boolean get() = accessToken.isNotBlank() && profile != null
+    val sessionKind: String get() = prefs.getString(KEY_SESSION_KIND, "SERVICE").orEmpty()
+    val isLoggedIn: Boolean get() = profile != null && (accessToken.isNotBlank() || (sessionKind == "BACKUP" && hasValidFallbackCredential))
     val accessToken: String get() = prefs.getString(KEY_ACCESS, "").orEmpty()
     val refreshToken: String get() = prefs.getString(KEY_REFRESH, "").orEmpty()
     val expiresAt: Long get() = prefs.getLong(KEY_EXPIRES, 0)
@@ -79,6 +80,21 @@ class SessionStore(context: Context) {
             .apply()
     }
 
+    fun saveBackupProfile(profile: UserProfile) {
+        prefs.edit()
+            .remove(KEY_ACCESS).remove(KEY_REFRESH).putLong(KEY_EXPIRES, 0L)
+            .putString(KEY_USER_ID, profile.id)
+            .putString(KEY_EMPLOYEE_CODE, profile.employeeCode)
+            .putString(KEY_FULL_NAME, profile.fullName)
+            .putString(KEY_CONTRACTOR, profile.contractor)
+            .putString(KEY_ROLE, profile.role.wire)
+            .putBoolean(KEY_ACTIVE, profile.active)
+            .putBoolean(KEY_DEVICE_REGISTERED, false)
+            .putString(KEY_SESSION_KIND, "BACKUP")
+            .remove(KEY_ADMIN_TEST_ROLE)
+            .apply()
+    }
+
     fun updateProfile(profile: UserProfile) {
         prefs.edit()
             .putString(KEY_USER_ID, profile.id)
@@ -126,7 +142,9 @@ class SessionStore(context: Context) {
 
     fun clear() {
         val stableDeviceId = deviceId
+        val publicFallbackUrl = fallbackUrl
         prefs.edit().clear().putString(KEY_DEVICE_ID, stableDeviceId).apply()
+        if (publicFallbackUrl.startsWith("https://")) prefs.edit().putString(KEY_FALLBACK_URL, publicFallbackUrl).apply()
     }
 
     private companion object {
@@ -145,6 +163,7 @@ class SessionStore(context: Context) {
         const val KEY_FALLBACK_TOKEN = "fallback_token_v1"
         const val KEY_FALLBACK_URL = "fallback_url_v1"
         const val KEY_FALLBACK_EXPIRES = "fallback_expires_v1"
+        const val KEY_SESSION_KIND = "session_kind_v1"
         const val KEY_AUTHORITY_PREFERENCE = "authority_preference_v1"
     }
 }

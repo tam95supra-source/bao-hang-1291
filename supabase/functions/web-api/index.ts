@@ -67,6 +67,21 @@ async function adminUserIndex(req: Request) {
   if ((count ?? 0) > 5000) throw new HttpError(409, "Số nhân sự vượt ngưỡng preview 5000 tài khoản");
   return { users: data ?? [], employee_codes: (data ?? []).map((row) => row.employee_code), count: count ?? 0 };
 }
+async function forwardToBackupAdmin(req: Request, action: string): Promise<Response> {
+  const ctx = await requireWebUser(req);
+  if (ctx.effectiveRole !== "ADMIN") throw new HttpError(403, "Chỉ Admin hệ thống được quản lý tài khoản dự phòng");
+  const authorization = req.headers.get("authorization") ?? "";
+  const body = await req.text();
+  const command = action.replace(/^backup-account-/, "");
+  const response = await fetch(`${SUPABASE_URL}/functions/v1/backup-account-admin/${command}`, {
+    method: "POST", headers: { "content-type": "application/json", authorization, apikey: ANON_KEY }, body: body || "{}",
+  });
+  return new Response(await response.text(), {
+    status: response.status,
+    headers: { ...corsHeaders(req), "content-type": response.headers.get("content-type") ?? "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" },
+  });
+}
+
 async function forwardToApi(req: Request, action: string): Promise<Response> {
   await requireWebUser(req);
   const authorization = req.headers.get("authorization") ?? "";
@@ -88,6 +103,7 @@ Deno.serve(async (req) => {
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(req) });
     if (req.method !== "POST") throw new HttpError(405, "Chỉ hỗ trợ POST");
     const action = new URL(req.url).pathname.split("/").filter(Boolean).at(-1) ?? "";
+    if (action.startsWith("backup-account-")) return await forwardToBackupAdmin(req, action);
     if (forwardedActions.has(action)) return await forwardToApi(req, action);
     if (action === "admin-summary") return json(req, await adminSummary(req));
     if (action === "admin-user-index") return json(req, await adminUserIndex(req));

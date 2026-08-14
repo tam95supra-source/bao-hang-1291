@@ -14,6 +14,7 @@ import org.json.JSONObject
 import vn.pickpack1291.baohang.BuildConfig
 import vn.pickpack1291.baohang.diagnostics.DiagnosticsLogger
 import vn.pickpack1291.baohang.network.ApiClient
+import vn.pickpack1291.baohang.network.ApiException
 import vn.pickpack1291.baohang.network.DirectRpcClient
 import vn.pickpack1291.baohang.network.EmergencyFirestoreClient
 import vn.pickpack1291.baohang.network.SheetFallbackClient
@@ -51,17 +52,42 @@ class AppRepository(
     }
 
     suspend fun login(employeeCode: String, password: String): UserProfile {
-        val auth = api.signIn(employeeCode.trim(), password)
-        session.save(auth)
-        commitAuthority(AuthorityMode.SERVICE)
-        diagnostics.info("session_saved", mapOf("employee_code" to auth.profile.employeeCode, "role" to auth.profile.role.wire))
-        registerCurrentDevice()
-        refreshFallbackCredentialIfPossible(force = true)
-        provisionEmergencyIfPossible()
-        resolveAuthorityFromRecoveryState()
-        if (database.outboxCount() > 0) SyncScheduler.enqueueOutbox(context)
-        if (catalogNeedsRefresh()) SyncScheduler.enqueueCatalog(context)
-        return auth.profile
+        var lastServiceError: Exception? = null
+        for ((index, waitMs) in longArrayOf(0L, 500L, 1_500L).withIndex()) {
+            if (waitMs > 0) delay(waitMs)
+            try {
+                val auth = api.signIn(employeeCode.trim(), password)
+                session.save(auth)
+                commitAuthority(AuthorityMode.SERVICE)
+                diagnostics.info("session_saved", mapOf("employee_code" to auth.profile.employeeCode, "role" to auth.profile.role.wire, "attempt" to index + 1))
+                registerCurrentDevice()
+                refreshFallbackCredentialIfPossible(force = true)
+                provisionEmergencyIfPossible()
+                resolveAuthorityFromRecoveryState()
+                if (database.outboxCount() > 0) SyncScheduler.enqueueOutbox(context)
+                if (catalogNeedsRefresh()) SyncScheduler.enqueueCatalog(context)
+                return auth.profile
+            } catch (error: Exception) {
+                if (!isLoginServiceUnavailable(error)) throw error
+                lastServiceError = error
+            }
+        }
+        val backup = try { sheet.backupLogin(employeeCode, password) } catch (error: Exception) {
+            throw MutationUnavailableException("Service không khả dụng và đăng nhập dự phòng không được xác nhận.", error)
+        }
+        session.saveBackupProfile(backup.profile)
+        session.saveFallbackCredential(backup.fallbackToken, backup.fallbackUrl, backup.expiresAtMillis)
+        commitAuthority(AuthorityMode.SHEET)
+        runCatching { emergency.provisionBackup(backup.firebaseEmail, password, backup.profile.id) }
+            .onFailure { diagnostics.warn("backup_emergency_provision_deferred", mapOf("error" to it.message.orEmpty().take(160))) }
+        diagnostics.info("backup_session_saved", mapOf("account_id" to backup.profile.id, "role" to backup.profile.role.wire))
+        return backup.profile
+    }
+
+    private fun isLoginServiceUnavailable(error: Exception): Boolean = when (error) {
+        is ApiException -> error.statusCode == 408 || error.statusCode == 429 || error.statusCode >= 500
+        is IOException -> true
+        else -> false
     }
 
     fun logout() {
@@ -72,6 +98,7 @@ class AppRepository(
     }
 
     suspend fun refreshProfile(): UserProfile {
+        if (session.sessionKind == "BACKUP") { resolveAuthorityFromRecoveryState(); return session.profile ?: throw MutationUnavailableException("Phiên dự phòng không hợp lệ") }
         val profile = api.sessionProfile()
         session.updateProfile(profile)
         refreshFallbackCredentialIfPossible()
@@ -318,9 +345,9 @@ class AppRepository(
         runCatching { sheet.health() }.onSuccess { health ->
             when (health.sheetMode) {
                 "ACTIVE_FALLBACK", "RECOVERY_IMPORTING", "RECOVERY_BLOCKED", "EMERGENCY_DRAIN" -> {
-                    // EMERGENCY stays sticky until Firestore events are durably ACKed into Sheet.
                     if (preferredAuthority != AuthorityMode.EMERGENCY) commitAuthority(AuthorityMode.SHEET)
                 }
+                "EMERGENCY_CAUGHT_UP" -> commitAuthority(AuthorityMode.SHEET)
                 "SERVICE_CAUGHT_UP", "STANDBY", "ACTIVE_SERVICE" -> commitAuthority(AuthorityMode.SERVICE)
                 // STANDBY_PRE_CUTOVER intentionally leaves the current preference untouched.
             }
@@ -385,6 +412,12 @@ class AppRepository(
     fun skuCount()=database.skuCount()
     suspend fun getOperationalConfig()=api.getOperationalConfig(); suspend fun saveOperationalConfig(config:OperationalConfig)=api.saveOperationalConfig(config); suspend fun getConfig()=api.getConfig(); suspend fun saveConfig(config:AppConfig)=api.saveConfig(config); suspend fun importSkus(items:List<SkuItem>)=api.importSkus(items)
     suspend fun replaceCatalog(items:List<SkuItem>,sourceName:String):JSONObject { val result=api.replaceCatalog(items,sourceName);database.clearSkus();database.setMetadata("catalog_revision","0");syncCatalog();return result }
+    suspend fun listBackupAccounts(): JSONArray = api.invokeEdge("backup-account-admin", "list", JSONObject()).optJSONArray("accounts") ?: JSONArray()
+    suspend fun createBackupAccount(username:String,displayName:String,role:UserRole,deviceScope:String,password:String,expiresAt:String): JSONObject = api.invokeEdge("backup-account-admin","create",JSONObject().put("username",username).put("display_name",displayName).put("role",role.wire).put("device_scope",deviceScope).put("password",password).put("expires_at",expiresAt))
+    suspend fun lockBackupAccount(id:String): JSONObject = api.invokeEdge("backup-account-admin","lock",JSONObject().put("id",id))
+    suspend fun resetBackupAccount(id:String,password:String): JSONObject = api.invokeEdge("backup-account-admin","reset",JSONObject().put("id",id).put("password",password))
+    suspend fun unlockBackupAccount(id:String,password:String): JSONObject = api.invokeEdge("backup-account-admin","unlock",JSONObject().put("id",id).put("password",password))
+
     suspend fun listUsers()=api.listUsers()
     suspend fun updateUser(user:UserProfile,employeeCode:String,fullName:String,contractor:String,role:UserRole,active:Boolean,newPassword:String)=api.updateUser(user.id,employeeCode,fullName,contractor,role,active,newPassword).also{diagnostics.info("user_updated",mapOf("target_employee_code" to it.employeeCode,"target_role" to it.role.wire,"active" to it.active))}
     suspend fun importUsers(items:List<ImportUserRow>)=api.importUsers(items); suspend fun syncGoogleSheet()=api.syncGoogleSheet(); suspend fun reportsSummary()=api.reportsSummary(); suspend fun issueHistory(limit:Int=200):JSONArray=api.issueHistory(limit)

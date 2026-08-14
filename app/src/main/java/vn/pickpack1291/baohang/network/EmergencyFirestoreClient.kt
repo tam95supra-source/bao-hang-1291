@@ -63,6 +63,13 @@ class EmergencyFirestoreClient(private val session: SessionStore) {
         return true
     }
 
+    suspend fun provisionBackup(firebaseEmail: String, password: String, expectedUid: String): Boolean {
+        if (firebaseEmail.isBlank() || password.isBlank() || expectedUid.isBlank()) return false
+        val signed = auth.signInWithEmailAndPassword(firebaseEmail, password).await().user ?: throw EmergencyException("AUTH_FAILED", "Không thể provision Emergency backup account")
+        if (signed.uid != expectedUid) { auth.signOut(); throw EmergencyException("UID_MISMATCH", "Emergency backup identity không khớp") }
+        return true
+    }
+
     fun signOut() = auth.signOut()
 
     suspend fun reportShortage(skuRaw: String, productName: String, requestId: String): ReportResult {

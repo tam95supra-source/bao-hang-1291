@@ -48,6 +48,7 @@ import vn.pickpack1291.baohang.update.AppUpdater
 import java.net.HttpURLConnection
 import java.net.URI
 import java.nio.charset.StandardCharsets
+import java.time.Instant
 
 class MainActivity : AppCompatActivity() {
     private val app by lazy { application as BaoHangApplication }
@@ -212,6 +213,7 @@ class MainActivity : AppCompatActivity() {
         content.addView(button("Báo cáo vận hành") { showReports() })
         content.addView(section("Quản trị"))
         content.addView(button("Nhân sự & quyền") { showUsers() })
+        content.addView(button("Tài khoản dự phòng") { showBackupAccounts() })
         content.addView(button("Mốc thời gian vận hành") { showOperationalSla() })
         content.addView(button("Cấu hình hệ thống") { showConfig() })
         content.addView(section("Hệ thống"))
@@ -219,7 +221,7 @@ class MainActivity : AppCompatActivity() {
         content.addView(button("Đồng bộ Google Sheet báo cáo", ButtonTone.SECONDARY) { syncSheet() })
         addMaintenanceActions(content)
         content.addView(section("Kiểm thử phân quyền"))
-        content.addView(button("Admin Event") { enterTestRole(UserRole.ADMIN_INVENT) })
+        content.addView(button("Admin Invent") { enterTestRole(UserRole.ADMIN_INVENT) })
         content.addView(button("Người báo hàng") { enterTestRole(UserRole.INVENT) })
         content.addView(button("Picker") { enterTestRole(UserRole.PICKER) })
     }
@@ -497,7 +499,7 @@ class MainActivity : AppCompatActivity() {
                     target.removeAllViews()
                     if (issues.isEmpty()) target.addView(infoBox("Chưa có báo thiếu."))
                     issues.take(50).forEach { issue ->
-                        target.addView(infoBox("${issue.status.label} • SKU ${issue.sku}\n${issue.productName}\n${issue.reportCount} lượt • ${shortTime(issue.reportedAt)}"))
+                        target.addView(infoBox("${issue.status.label} • SKU ${issue.sku}\n${issue.productName}\n${shortTime(issue.reportedAt)}"))
                     }
                 }.onFailure { target.removeAllViews(); target.addView(infoBox("Không tải được lịch sử: ${it.message}")) }
         }
@@ -561,44 +563,27 @@ class MainActivity : AppCompatActivity() {
         val reminder = numberInput("Chu kỳ nhắc xử lý (phút)")
         val replenish = numberInput("Thời gian châm hàng (phút)")
         val pickerAck = numberInput("Nhắc Picker xác nhận (phút)")
-        val autoAfter = numberInput("Mốc tự động cho phép bỏ qua (phút)")
-        val auto = CheckBox(this).apply { text = "Tự động cho phép bỏ qua khi quá mốc" }
         listOf(ack.first, reminder.first, replenish.first, pickerAck.first).forEach(content::addView)
-        content.addView(infoBox("Thời gian nhận tính từ lúc Picker báo đến khi có người nhận. Chu kỳ nhắc áp dụng khi sự kiện còn mở. Nhắc Picker chỉ áp dụng cho cảnh báo đã có hàng hoặc được phép bỏ qua."))
-        content.addView(auto); content.addView(autoAfter.first)
+        content.addView(infoBox("Hết mốc chỉ nhắc/escalate. Hệ thống không tự cho phép SKIP."))
         content.addView(button("Lưu mốc thời gian", ButtonTone.PRIMARY) {
-            lifecycleScope.launch {
-                runCatching { app.repository.saveOperationalConfig(OperationalConfig(ack.second.int(), reminder.second.int(), replenish.second.int(), pickerAck.second.int(), auto.isChecked, autoAfter.second.int())) }
-                    .onSuccess { toast("Đã lưu mốc thời gian vận hành") }.onFailure { toast(it.message ?: "Không lưu được") }
-            }
+            lifecycleScope.launch { runCatching { app.repository.saveOperationalConfig(OperationalConfig(ack.second.int(), reminder.second.int(), replenish.second.int(), pickerAck.second.int(), false, 0)) }.onSuccess { toast("Đã lưu mốc thời gian vận hành") }.onFailure { toast(it.message ?: "Không lưu được") } }
         })
         lifecycleScope.launch { runCatching { app.repository.getOperationalConfig() }.onSuccess { cfg ->
-            ack.second.setText(cfg.acknowledgeMinutes.toString()); reminder.second.setText(cfg.reminderMinutes.toString()); replenish.second.setText(cfg.replenishMinutes.toString()); pickerAck.second.setText(cfg.pickerAckReminderMinutes.toString()); auto.isChecked = cfg.autoSkipEnabled; autoAfter.second.setText(cfg.autoSkipAfterMinutes.toString())
+            ack.second.setText(cfg.acknowledgeMinutes.toString()); reminder.second.setText(cfg.reminderMinutes.toString()); replenish.second.setText(cfg.replenishMinutes.toString()); pickerAck.second.setText(cfg.pickerAckReminderMinutes.toString())
         }.onFailure { toast(it.message ?: "Không tải được cấu hình") } }
     }
 
     private fun showConfig() {
         val content = page("Cấu hình hệ thống", SCREEN_CONFIG)
-        val retention = numberInput("Lưu lịch sử nghiệp vụ (ngày)")
         val logRetention = numberInput("Lưu log chẩn đoán (ngày)")
         val staffInterval = numberInput("Chu kỳ đồng bộ nhân sự (phút)")
-        val autoAfter = numberInput("Mốc tự động cho phép bỏ qua (phút)")
         val staffAuto = CheckBox(this).apply { text = "Tự động đồng bộ danh mục nhân sự" }
-        val autoSkip = CheckBox(this).apply { text = "Tự động cho phép bỏ qua" }
-        content.addView(retention.first); content.addView(infoBox("Sự kiện và lịch sử kiểm tra được giữ theo chu kỳ kể cả khi nhân sự đã ngừng hoạt động."))
-        content.addView(logRetention.first); content.addView(staffAuto); content.addView(staffInterval.first); content.addView(infoBox("Nguồn nhân sự: Site 1291 / Kho HY1. Chu kỳ 60 phút giúp giảm lưu lượng và quota."))
-        content.addView(autoSkip); content.addView(autoAfter.first)
+        content.addView(infoBox("Lịch sử nghiệp vụ giữ 45 ngày. OPEN/CLAIMED, event chưa ACK và conflict không bị xóa theo tuổi."))
+        content.addView(logRetention.first); content.addView(staffAuto); content.addView(staffInterval.first)
         content.addView(button("Lưu cấu hình", ButtonTone.PRIMARY) {
-            lifecycleScope.launch {
-                runCatching {
-                    val old = app.repository.getConfig()
-                    app.repository.saveConfig(old.copy(retentionDays = retention.second.int(), diagnosticLogRetentionDays = logRetention.second.int(), staffAutoSyncEnabled = staffAuto.isChecked, staffSyncIntervalMinutes = staffInterval.second.int(), autoSkipEnabled = autoSkip.isChecked, autoSkipAfterMinutes = autoAfter.second.int()))
-                }.onSuccess { toast("Đã lưu cấu hình hệ thống") }.onFailure { toast(it.message ?: "Không lưu được") }
-            }
+            lifecycleScope.launch { runCatching { val old=app.repository.getConfig(); app.repository.saveConfig(old.copy(retentionDays=45,diagnosticLogRetentionDays=logRetention.second.int(),staffAutoSyncEnabled=staffAuto.isChecked,staffSyncIntervalMinutes=staffInterval.second.int(),autoSkipEnabled=false,autoSkipAfterMinutes=0)) }.onSuccess { toast("Đã lưu cấu hình hệ thống") }.onFailure { toast(it.message ?: "Không lưu được") } }
         })
-        lifecycleScope.launch { runCatching { app.repository.getConfig() }.onSuccess { cfg ->
-            retention.second.setText(cfg.retentionDays.toString()); logRetention.second.setText(cfg.diagnosticLogRetentionDays.toString()); staffAuto.isChecked = cfg.staffAutoSyncEnabled; staffInterval.second.setText(cfg.staffSyncIntervalMinutes.toString()); autoSkip.isChecked = cfg.autoSkipEnabled; autoAfter.second.setText(cfg.autoSkipAfterMinutes.toString())
-        }.onFailure { toast(it.message ?: "Không tải được cấu hình") } }
+        lifecycleScope.launch { runCatching { app.repository.getConfig() }.onSuccess { cfg -> logRetention.second.setText(cfg.diagnosticLogRetentionDays.toString()); staffAuto.isChecked=cfg.staffAutoSyncEnabled; staffInterval.second.setText(cfg.staffSyncIntervalMinutes.toString()) }.onFailure { toast(it.message ?: "Không tải được cấu hình") } }
     }
 
     private fun showUsers() {
@@ -674,6 +659,31 @@ class MainActivity : AppCompatActivity() {
             }
         }.show()
     }
+
+    private fun showBackupAccounts() {
+        if (app.session.effectiveRole != UserRole.ADMIN) { toast("Chỉ Admin hệ thống được quản lý tài khoản dự phòng"); return }
+        val content = page("Tài khoản dự phòng", SCREEN_BACKUP)
+        content.addView(infoBox("Danh tính kỹ thuật dùng khi Service lỗi. Không tính nhân sự/năng suất; mật khẩu không lưu trong App, Sheet hoặc log."))
+        content.addView(button("Tạo tài khoản dự phòng", ButtonTone.PRIMARY) { createBackupAccount { showBackupAccounts() } })
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }; content.addView(list)
+        lifecycleScope.launch { runCatching { app.repository.listBackupAccounts() }.onSuccess { rows ->
+            if (rows.length()==0) list.addView(infoBox("Chưa có tài khoản dự phòng."))
+            for (i in 0 until rows.length()) { val a=rows.getJSONObject(i); val row=LinearLayout(this@MainActivity).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(11),dp(9),dp(11),dp(9)); setBackgroundResource(R.drawable.bg_card) }
+                row.addView(text("${a.optString("username")} • ${a.optString("display_name")}",16,true)); row.addView(text("${UserRole.from(a.optString("role")).label} • ${a.optString("status")} • thiết bị ${a.optString("device_scope","*")}",12,false))
+                val id=a.optString("id"); if(a.optString("status")=="ACTIVE") { row.addView(button("Đặt lại mật khẩu") { backupPasswordDialog(id,false) { showBackupAccounts() } }); row.addView(button("Khóa",ButtonTone.DANGER) { lifecycleScope.launch { runCatching { app.repository.lockBackupAccount(id) }.onSuccess { showBackupAccounts() }.onFailure { toast(it.message?:"Không khóa được") } } }) } else row.addView(button("Mở khóa + đặt mật khẩu",ButtonTone.PRIMARY) { backupPasswordDialog(id,true) { showBackupAccounts() } })
+                list.addView(row,LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0,dp(4),0,dp(4)) })
+            }
+        }.onFailure { list.addView(infoBox("Không tải được tài khoản dự phòng: ${it.message}")) } }
+    }
+
+    private fun createBackupAccount(refresh:()->Unit) {
+        val root=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(16),0,dp(16),0) }
+        val username=EditText(this).apply { hint="Username dự phòng" }; val display=EditText(this).apply { hint="Tên hiển thị" }; val device=EditText(this).apply { hint="Device scope (* hoặc device ID)"; setText("*") }; val days=EditText(this).apply { hint="Thời hạn ngày"; inputType=InputType.TYPE_CLASS_NUMBER; setText("30") }; val password=EditText(this).apply { hint="Mật khẩu (>=14 ký tự)"; inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
+        val roles=listOf(UserRole.ADMIN,UserRole.ADMIN_INVENT,UserRole.INVENT,UserRole.PICKER); val role=AutoCompleteTextView(this).apply { threshold=0; setAdapter(ArrayAdapter(this@MainActivity,android.R.layout.simple_dropdown_item_1line,roles.map{it.label})); setText(UserRole.INVENT.label,false) }; listOf(username,display,role,device,days,password).forEach(root::addView)
+        AlertDialog.Builder(this).setTitle("Tạo tài khoản dự phòng").setView(root).setNegativeButton("Hủy",null).setPositiveButton("Tạo") { _,_-> val p=password.text.toString(); if(p.length<14){toast("Mật khẩu cần ít nhất 14 ký tự");return@setPositiveButton}; val selected=roles.firstOrNull{it.label==role.text.toString()}?:UserRole.INVENT; val expiry=Instant.now().plusSeconds((days.text.toString().toLongOrNull()?:30L).coerceAtLeast(1L)*86400L).toString(); lifecycleScope.launch { runCatching { app.repository.createBackupAccount(username.text.toString().trim().lowercase(),display.text.toString().trim(),selected,device.text.toString().trim().ifBlank{"*"},p,expiry) }.onSuccess { toast("Đã tạo tài khoản dự phòng"); refresh() }.onFailure { toast(it.message?:"Không tạo được") } } }.show()
+    }
+
+    private fun backupPasswordDialog(id:String,unlock:Boolean,refresh:()->Unit){ val input=EditText(this).apply { hint="Mật khẩu mới (>=14 ký tự)"; inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }; AlertDialog.Builder(this).setTitle(if(unlock)"Mở khóa tài khoản dự phòng" else "Đặt lại mật khẩu").setView(input).setNegativeButton("Hủy",null).setPositiveButton("Xác nhận") { _,_-> val p=input.text.toString(); if(p.length<14){toast("Mật khẩu cần ít nhất 14 ký tự");return@setPositiveButton}; lifecycleScope.launch { runCatching { if(unlock) app.repository.unlockBackupAccount(id,p) else app.repository.resetBackupAccount(id,p) }.onSuccess { refresh() }.onFailure { toast(it.message?:"Không cập nhật được") } } }.show() }
 
     private fun showServiceMetrics() {
         val content = page("Dung lượng & dịch vụ", SCREEN_SERVICES)
@@ -810,5 +820,6 @@ class MainActivity : AppCompatActivity() {
         private const val SCREEN_SLA = "sla"
         private const val SCREEN_CONFIG = "config"
         private const val SCREEN_USERS = "users"
+        private const val SCREEN_BACKUP = "backup"
     }
 }
