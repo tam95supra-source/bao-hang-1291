@@ -54,10 +54,10 @@ Deno.serve(async (req) => {
     if (result.ok !== true) throw new Error(`Google Sheet rejected batch: ${String(result.error ?? "unknown").slice(0, 300)}`);
 
     const requestedIds = events.map((event) => String(event.event_id ?? "")).filter(Boolean);
-    const acked = Array.isArray(result.ack_event_ids) && result.ack_event_ids.length
-      ? result.ack_event_ids.filter((id) => requestedIds.includes(String(id))).map(String)
-      : requestedIds; // compatibility with the currently deployed legacy script during cutover.
-    if (!acked.length) throw new Error("Google Sheet returned no acknowledgements");
+    const acked = Array.isArray(result.ack_event_ids)
+      ? [...new Set(result.ack_event_ids.filter((id) => requestedIds.includes(String(id))).map(String))]
+      : [];
+    if (!acked.length) throw new Error("Google Sheet returned no event acknowledgements; queue retained");
 
     const now = new Date().toISOString();
     const { error: ackError } = await admin.from("sheet_export_queue")

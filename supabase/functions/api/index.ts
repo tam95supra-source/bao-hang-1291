@@ -314,20 +314,31 @@ async function syncSheet() {
   const url = Deno.env.get("GOOGLE_SHEET_WEBHOOK_URL") ?? "";
   const secret = Deno.env.get("GOOGLE_SHEET_WEBHOOK_SECRET") ?? "";
   if (!url || !secret) throw new HttpError(503, "Chưa cấu hình Google Sheet webhook");
-  const { data: events, error } = await admin.from("sheet_export_queue").select("*").is("exported_at", null).order("id").limit(500);
+  const { data: waiting, error } = await admin.from("sheet_export_queue").select("*").is("sheet_ack_at", null).order("id").limit(500);
   if (error) throw error;
-  if (!events?.length) return { exported: 0, remaining: 0 };
+  const events = waiting ?? [];
+  if (!events.length) return { exported: 0, remaining: 0 };
   const response = await fetch(url, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ secret, events }),
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ secret, mode: "export", events }),
   });
   const responseText = await response.text();
-  if (!response.ok) throw new Error(`Google Sheet ${response.status}: ${responseText}`);
-  const sheetResult = JSON.parse(responseText) as { ok?: boolean; error?: string };
+  if (!response.ok) throw new Error(`Google Sheet ${response.status}: ${responseText.slice(0, 300)}`);
+  const sheetResult = JSON.parse(responseText) as { ok?: boolean; error?: string; ack_event_ids?: string[] };
   if (sheetResult.ok !== true) throw new Error(`Google Sheet từ chối đồng bộ: ${sheetResult.error ?? "Không rõ lỗi"}`);
-  const ids = events.map((event) => event.id);
-  await admin.from("sheet_export_queue").update({ exported_at: new Date().toISOString() }).in("id", ids);
-  const { count } = await admin.from("sheet_export_queue").select("id", { count: "exact", head: true }).is("exported_at", null);
-  return { exported: ids.length, remaining: count ?? 0 };
+  const requested = new Set(events.map((event: any) => String(event.event_id ?? "")).filter(Boolean));
+  const acked = Array.isArray(sheetResult.ack_event_ids)
+    ? [...new Set(sheetResult.ack_event_ids.map(String).filter((id) => requested.has(id)))]
+    : [];
+  if (!acked.length) throw new Error("Google Sheet chưa ACK event nào; queue được giữ nguyên");
+  const now = new Date().toISOString();
+  const { error: ackError } = await admin.from("sheet_export_queue")
+    .update({ exported_at: now, sheet_ack_at: now, reconciliation_status: "SHEET_ACKED" })
+    .in("event_id", acked);
+  if (ackError) throw ackError;
+  const { count, error: countError } = await admin.from("sheet_export_queue").select("id", { count: "exact", head: true }).is("sheet_ack_at", null);
+  if (countError) throw countError;
+  return { exported: acked.length, remaining: count ?? 0 };
 }
 
 async function resendPendingCritical() {
@@ -372,7 +383,7 @@ async function resendPendingCritical() {
 async function slaTick(req: Request) {
   const expected=Deno.env.get("CRON_SECRET")??"";if(!expected||req.headers.get("x-cron-secret")!==expected)throw new HttpError(403,"Cron secret không đúng");
   const {data:events,error}=await admin.rpc("process_sla");if(error)throw error;for(const event of events??[]){const issue=(await issueRows([event.issue_id]))[0];if(issue)await notifyUsers(await inventUserIds(),issue,issue.status,`SKU ${issue.sku} đã vượt mốc thời gian vận hành; cần kiểm tra và phản hồi.`);}
-  await resendPendingCritical();if(await staffSyncDue().catch(()=>false)){try{await syncStaffDirectory("AUTO",null);}catch(error){console.warn("Staff sync deferred",errorText(error));}}try{await syncSheet();}catch(error){console.warn("Sheet sync deferred",errorText(error));}
+  await resendPendingCritical();if(await staffSyncDue().catch(()=>false)){try{await syncStaffDirectory("AUTO",null);}catch(error){console.warn("Staff sync deferred",errorText(error));}}
   return {processed:events?.length??0,auto_skipped:0,critical_reminder_checked:true};
 }
 
