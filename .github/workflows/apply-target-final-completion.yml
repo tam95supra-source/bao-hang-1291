@@ -25,13 +25,16 @@ jobs:
           fetch-depth: 0
       - name: Apply coherent target patch
         run: python3 scripts/apply_target_final_completion.py
+      - name: Restore workflow files handled by connector
+        run: |
+          set -euo pipefail
+          git checkout HEAD -- .github/workflows/deploy-backend.yml .github/workflows/quality-target.yml .github/workflows/apply-target-final-completion.yml
       - name: Validate patch text
         run: |
           set -euo pipefail
           git diff --check
           test -f supabase/functions/backup-account-admin/index.ts
           test -f supabase/migrations/20260814150012_target_final_backup_accounts.sql
-          ! grep -R -n 'Admin Event' app/src/main web-admin/src || true
       - name: Commit target completion patch
         shell: bash
         run: |
