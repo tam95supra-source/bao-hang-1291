@@ -32,20 +32,24 @@ jobs:
       - name: Deploy Android API Edge Function
         run: supabase functions deploy api --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
       - name: Deploy Web Admin API Edge Function
-        if: ${{ hashFiles('supabase/functions/web-api/index.ts') != '' }}
         run: supabase functions deploy web-api --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
       - name: Deploy focused Admin Ops Edge Function
-        if: ${{ hashFiles('supabase/functions/admin-ops/index.ts') != '' }}
         run: supabase functions deploy admin-ops --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
       - name: Deploy lightweight Staff Watch Edge Function
-        if: ${{ hashFiles('supabase/functions/staff-watch/index.ts') != '' }}
         run: supabase functions deploy staff-watch --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
       - name: Deploy event-driven Picker notification worker
-        if: ${{ hashFiles('supabase/functions/notification-worker/index.ts') != '' }}
         run: supabase functions deploy notification-worker --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
       - name: Deploy dedicated Google Sheet worker
-        if: ${{ hashFiles('supabase/functions/sheet-worker/index.ts') != '' }}
         run: supabase functions deploy sheet-worker --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
       - name: Deploy fallback token issuer
-        if: ${{ hashFiles('supabase/functions/fallback-token/index.ts') != '' }}
         run: supabase functions deploy fallback-token --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
+      - name: Deploy Emergency Firebase auth broker
+        run: supabase functions deploy emergency-auth --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
+      - name: Deploy Firestore-to-Sheet emergency drain helper
+        run: supabase functions deploy emergency-drain --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
+      - name: Deploy Sheet-to-Service recovery importer
+        run: supabase functions deploy fallback-importer --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
+      - name: Deploy backup technical account admin
+        run: supabase functions deploy backup-account-admin --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
+      - name: Deploy zero-cost Firebase bootstrap/verifier
+        run: supabase functions deploy firebase-bootstrap --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
