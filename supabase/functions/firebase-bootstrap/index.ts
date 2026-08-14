@@ -4,136 +4,187 @@ const PROJECT_ID = "bao-hang-1291";
 const LOCATION_ID = "asia-southeast1";
 const RULES_RELEASE = `projects/${PROJECT_ID}/releases/cloud.firestore`;
 
+const SHEET_SECRET = Deno.env.get("GOOGLE_SHEET_WEBHOOK_SECRET") ?? "";
+const FIREBASE_API_KEY = "AIzaSyB-n368fntzxsuuLlvte9NXhcuX0DDbTXM";
+const DRAIN_UID = "bh1291-sheet-drain";
+const DRAIN_EMAIL = "sheet-drain@auth.bao-hang-1291.invalid";
 const FIRESTORE_RULES = String.raw`rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function validAuth() {
-      return request.auth != null
-        && request.auth.token.site == '1291'
-        && request.auth.token.emergency_enabled == true
-        && request.auth.token.role in ['PICKER','INVENT','ADMIN_INVENT','ADMIN']
-        && request.auth.token.device_id is string;
-    }
+    function signedIn() { return request.auth != null; }
+    function siteOk() { return signedIn() && request.auth.token.site == '1291'; }
     function role() { return request.auth.token.role; }
-    function ops() { return validAuth() && role() in ['INVENT','ADMIN_INVENT','ADMIN']; }
-    function sameDevice(data) { return data.device_id == request.auth.token.device_id; }
-    function validStatus(status) { return status in ['OPEN','CLAIMED','AVAILABLE','SKIP_ALLOWED']; }
-    function stateKeys(data) {
-      return data.keys().hasOnly(['sku','issue_id','status','issue_version','claimed_by_account_id','updated_at','authority_mode']);
+    function isDrain() { return siteOk() && request.auth.token.account_kind == 'SHEET_DRAIN' && request.auth.token.drain_enabled == true; }
+    function businessUser() {
+      return siteOk()
+        && request.auth.token.emergency_enabled == true
+        && role() in ['PICKER','INVENT','ADMIN_INVENT','ADMIN']
+        && !exists(/databases/$(database)/documents/emergency_revocations/$(request.auth.uid));
     }
-    function stateShape(data) {
-      return stateKeys(data)
-        && data.sku is string && data.sku.size() > 0 && data.sku.size() <= 120
-        && data.issue_id is string && data.issue_id.size() > 0 && data.issue_id.size() <= 100
-        && validStatus(data.status)
-        && data.issue_version is int && data.issue_version >= 1
-        && data.claimed_by_account_id is string
-        && data.authority_mode == 'FIREBASE_EMERGENCY';
+    function ops() { return businessUser() && role() in ['INVENT','ADMIN_INVENT','ADMIN']; }
+    function adminOps() { return businessUser() && role() in ['ADMIN_INVENT','ADMIN']; }
+    function deviceAllowed(data) {
+      return businessUser() && data.device_id is string && (
+        (request.auth.token.account_kind == 'BACKUP' && request.auth.token.device_scope is string && (request.auth.token.device_scope == '*' || request.auth.token.device_scope == data.device_id))
+        || (request.auth.token.account_kind != 'BACKUP' && request.auth.token.device_id is string && request.auth.token.device_id == data.device_id)
+      );
+    }
+    function validStatus(status) { return status in ['OPEN','CLAIMED','AVAILABLE','SKIP_ALLOWED']; }
+    function eventAfter(eventId) { return getAfter(/databases/$(database)/documents/emergency_events/$(eventId)); }
+    function linked(data) {
+      return data.last_event_id is string
+        && data.last_emergency_sequence is int
+        && existsAfter(/databases/$(database)/documents/emergency_events/$(data.last_event_id))
+        && eventAfter(data.last_event_id).data.emergency_sequence == data.last_emergency_sequence
+        && eventAfter(data.last_event_id).data.issue_id == data.issue_id
+        && eventAfter(data.last_event_id).data.sku == data.sku;
+    }
+
+    match /emergency_control/sequence {
+      allow get: if businessUser() || isDrain();
+      allow list: if false;
+      allow create: if businessUser()
+        && request.resource.data.keys().hasOnly(['next_sequence','sheet_acked_sequence','last_event_id','updated_at'])
+        && request.resource.data.next_sequence == 1
+        && request.resource.data.sheet_acked_sequence == 0
+        && request.resource.data.last_event_id is string
+        && existsAfter(/databases/$(database)/documents/emergency_events/$(request.resource.data.last_event_id))
+        && eventAfter(request.resource.data.last_event_id).data.emergency_sequence == 1;
+      allow update: if (
+        businessUser()
+        && request.resource.data.next_sequence == resource.data.next_sequence + 1
+        && request.resource.data.sheet_acked_sequence == resource.data.sheet_acked_sequence
+        && request.resource.data.last_event_id is string
+        && existsAfter(/databases/$(database)/documents/emergency_events/$(request.resource.data.last_event_id))
+        && eventAfter(request.resource.data.last_event_id).data.emergency_sequence == request.resource.data.next_sequence
+      ) || (
+        isDrain()
+        && request.resource.data.next_sequence == resource.data.next_sequence
+        && request.resource.data.last_event_id == resource.data.last_event_id
+        && request.resource.data.sheet_acked_sequence >= resource.data.sheet_acked_sequence
+        && request.resource.data.sheet_acked_sequence <= resource.data.next_sequence
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['sheet_acked_sequence','updated_at'])
+      );
+      allow delete: if false;
     }
 
     match /emergency_state/{skuKey} {
-      allow read: if validAuth();
-      allow create: if validAuth() && stateShape(request.resource.data)
+      allow get: if businessUser();
+      allow list: if ops();
+      allow create: if businessUser()
+        && request.resource.data.keys().hasOnly(['sku','issue_id','status','issue_version','updated_at','authority_mode','last_event_id','last_emergency_sequence'])
         && request.resource.data.status == 'OPEN'
         && request.resource.data.issue_version == 1
-        && request.resource.data.claimed_by_account_id == '';
-      allow update: if validAuth() && stateShape(request.resource.data) && request.resource.data.sku == resource.data.sku && (
-        (role() in ['PICKER','ADMIN']
-          && resource.data.status in ['AVAILABLE','SKIP_ALLOWED']
-          && request.resource.data.status == 'OPEN'
-          && request.resource.data.issue_id != resource.data.issue_id
-          && request.resource.data.issue_version == 1
-          && request.resource.data.claimed_by_account_id == '')
-        || (ops()
-          && request.resource.data.issue_id == resource.data.issue_id
-          && request.resource.data.issue_version == resource.data.issue_version + 1
-          && (
-            (request.resource.data.status == 'CLAIMED'
-              && resource.data.status in ['OPEN','CLAIMED']
-              && request.resource.data.claimed_by_account_id != '')
-            || (request.resource.data.status in ['AVAILABLE','SKIP_ALLOWED']
-              && resource.data.status in ['OPEN','CLAIMED'])
-          ))
-      );
+        && request.resource.data.authority_mode == 'FIREBASE_EMERGENCY'
+        && linked(request.resource.data);
+      allow update: if businessUser()
+        && request.resource.data.sku == resource.data.sku
+        && request.resource.data.issue_id == resource.data.issue_id
+        && request.resource.data.authority_mode == 'FIREBASE_EMERGENCY'
+        && request.resource.data.issue_version == resource.data.issue_version + 1
+        && resource.data.status in ['OPEN','CLAIMED']
+        && request.resource.data.status in ['CLAIMED','AVAILABLE','SKIP_ALLOWED']
+        && linked(request.resource.data)
+        && ops();
       allow delete: if false;
     }
 
     match /emergency_ops_state/{skuKey} {
       allow read: if ops();
-      allow create: if validAuth()
-        && request.resource.data.keys().hasOnly(['sku','issue_id','status','report_count','issue_version','claimed_by_account_id','updated_at','authority_mode'])
+      allow create: if businessUser()
+        && request.resource.data.keys().hasOnly(['sku','issue_id','status','report_count','issue_version','claimed_by_account_id','updated_at','authority_mode','last_event_id','last_emergency_sequence'])
         && request.resource.data.report_count == 1
         && request.resource.data.issue_version == 1
         && request.resource.data.status == 'OPEN'
+        && request.resource.data.claimed_by_account_id == ''
         && request.resource.data.authority_mode == 'FIREBASE_EMERGENCY'
-        && existsAfter(/databases/$(database)/documents/emergency_state/$(skuKey))
-        && getAfter(/databases/$(database)/documents/emergency_state/$(skuKey)).data.issue_id == request.resource.data.issue_id;
-      allow update: if validAuth()
+        && linked(request.resource.data)
+        && existsAfter(/databases/$(database)/documents/emergency_state/$(skuKey));
+      allow update: if businessUser()
+        && request.resource.data.sku == resource.data.sku
+        && request.resource.data.issue_id == resource.data.issue_id
         && request.resource.data.authority_mode == 'FIREBASE_EMERGENCY'
-        && existsAfter(/databases/$(database)/documents/emergency_state/$(skuKey))
-        && request.resource.data.issue_id == getAfter(/databases/$(database)/documents/emergency_state/$(skuKey)).data.issue_id
-        && request.resource.data.status == getAfter(/databases/$(database)/documents/emergency_state/$(skuKey)).data.status
-        && request.resource.data.issue_version == getAfter(/databases/$(database)/documents/emergency_state/$(skuKey)).data.issue_version
-        && request.resource.data.claimed_by_account_id == getAfter(/databases/$(database)/documents/emergency_state/$(skuKey)).data.claimed_by_account_id
+        && linked(request.resource.data)
         && (
-          (request.resource.data.issue_id == resource.data.issue_id
-            && request.resource.data.report_count == resource.data.report_count + 1
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['report_count','updated_at']))
-          || (request.resource.data.issue_id != resource.data.issue_id
-            && request.resource.data.report_count == 1
-            && getAfter(/databases/$(database)/documents/emergency_state/$(skuKey)).data.status == 'OPEN')
+          (request.resource.data.report_count == resource.data.report_count + 1
+            && request.resource.data.status == resource.data.status
+            && request.resource.data.issue_version == resource.data.issue_version
+            && request.resource.data.claimed_by_account_id == resource.data.claimed_by_account_id
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['report_count','updated_at','last_event_id','last_emergency_sequence']))
           || (ops()
-            && request.resource.data.issue_id == resource.data.issue_id
-            && request.resource.data.report_count == resource.data.report_count)
+            && request.resource.data.report_count == resource.data.report_count
+            && request.resource.data.issue_version == resource.data.issue_version + 1
+            && request.resource.data.status in ['CLAIMED','AVAILABLE','SKIP_ALLOWED'])
         );
       allow delete: if false;
     }
 
     match /emergency_events/{eventId} {
-      allow create: if validAuth()
+      allow create: if businessUser()
         && request.resource.data.keys().hasOnly([
-          'event_id','source_mode','event_type','occurred_at_device','accepted_at_authority',
-          'actor_account_id','actor_role','device_id','issue_id','sku','issue_version',
-          'payload_json','payload_sha256','sheet_ack_at','reconciliation_status'
+          'event_id','emergency_sequence','source_mode','event_type','occurred_at_device','accepted_at_authority',
+          'actor_account_id','actor_role','device_id','issue_id','sku','issue_version','payload_json','payload_sha256',
+          'sheet_ack_at','reconciliation_status'
         ])
         && request.resource.data.event_id == eventId
+        && request.resource.data.emergency_sequence is int
+        && request.resource.data.emergency_sequence >= 1
         && request.resource.data.source_mode == 'FIREBASE_EMERGENCY'
         && request.resource.data.actor_account_id == request.auth.uid
         && request.resource.data.actor_role == role()
-        && sameDevice(request.resource.data)
+        && deviceAllowed(request.resource.data)
         && request.resource.data.event_type in ['REPORT_SHORTAGE','CLAIM','AVAILABLE','SKIP_ALLOWED','REASSIGN']
+        && (request.resource.data.event_type != 'REPORT_SHORTAGE' || role() in ['PICKER','ADMIN'])
+        && (request.resource.data.event_type == 'REPORT_SHORTAGE' || ops())
+        && (request.resource.data.event_type != 'REASSIGN' || adminOps())
         && request.resource.data.reconciliation_status == 'PENDING_SHEET'
         && request.resource.data.sheet_ack_at == null
         && request.resource.data.issue_id is string
         && request.resource.data.sku is string
-        && request.resource.data.issue_version is int;
-      allow get, list: if validAuth() && (resource.data.actor_account_id == request.auth.uid || ops());
-      allow update, delete: if false;
+        && request.resource.data.issue_version is int
+        && existsAfter(/databases/$(database)/documents/emergency_control/sequence)
+        && getAfter(/databases/$(database)/documents/emergency_control/sequence).data.next_sequence == request.resource.data.emergency_sequence
+        && getAfter(/databases/$(database)/documents/emergency_control/sequence).data.last_event_id == eventId;
+      allow get: if isDrain() || (businessUser() && (resource.data.actor_account_id == request.auth.uid || ops()));
+      allow list: if isDrain() || ops();
+      allow update: if isDrain()
+        && resource.data.reconciliation_status == 'PENDING_SHEET'
+        && request.resource.data.reconciliation_status == 'SHEET_ACKED'
+        && request.resource.data.sheet_ack_at is timestamp
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['sheet_ack_at','reconciliation_status']);
+      allow delete: if false;
     }
 
     match /emergency_user_state/{projectionId} {
-      allow read: if validAuth() && (resource.data.target_user_id == request.auth.uid || ops());
-      allow create: if validAuth()
-        && request.resource.data.keys().hasOnly(['target_user_id','issue_id','sku','status','issue_version','updated_at','authority_mode'])
+      allow get, list: if businessUser() && (resource.data.target_user_id == request.auth.uid || ops());
+      allow create: if businessUser()
+        && request.resource.data.keys().hasOnly(['target_user_id','issue_id','sku','status','issue_version','updated_at','authority_mode','last_event_id','last_emergency_sequence'])
         && request.resource.data.target_user_id == request.auth.uid
         && request.resource.data.status == 'OPEN'
         && request.resource.data.issue_version >= 1
-        && request.resource.data.authority_mode == 'FIREBASE_EMERGENCY';
+        && request.resource.data.authority_mode == 'FIREBASE_EMERGENCY'
+        && linked(request.resource.data);
       allow update: if ops()
         && request.resource.data.target_user_id == resource.data.target_user_id
         && request.resource.data.issue_id == resource.data.issue_id
         && request.resource.data.sku == resource.data.sku
         && request.resource.data.status in ['AVAILABLE','SKIP_ALLOWED']
         && request.resource.data.issue_version > resource.data.issue_version
-        && request.resource.data.authority_mode == 'FIREBASE_EMERGENCY';
+        && request.resource.data.authority_mode == 'FIREBASE_EMERGENCY'
+        && linked(request.resource.data);
       allow delete: if false;
+    }
+
+    match /emergency_revocations/{accountId} {
+      allow read, write: if false;
     }
 
     match /{document=**} {
       allow read, write: if false;
     }
   }
-}`;
+}
+`;
 
 type ServiceAccount = { project_id: string; client_email: string; private_key: string };
 
@@ -187,6 +238,30 @@ async function googleJson(url: string, token: string, init: RequestInit = {}): P
   const text = await response.text();
   const body = text ? JSON.parse(text) : {};
   return { status: response.status, body };
+}
+
+async function deriveDrainPassword(secret: string): Promise<string> {
+  if (secret.length < 24) throw new Error("SHEET_SECRET_NOT_CONFIGURED");
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name:"HMAC", hash:"SHA-256" }, false, ["sign"]);
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode("sheet-drain-password-v1")));
+  const hex = [...sig].map((b)=>b.toString(16).padStart(2,"0")).join("");
+  return `Bh1291!${hex}aA1!`;
+}
+async function provisionDrainIdentity(token: string): Promise<boolean> {
+  const password = await deriveDrainPassword(SHEET_SECRET);
+  const create = await googleJson(`https://identitytoolkit.googleapis.com/v1/projects/${PROJECT_ID}/accounts?key=${encodeURIComponent(FIREBASE_API_KEY)}`, token, {
+    method:"POST", body:JSON.stringify({ localId:DRAIN_UID, email:DRAIN_EMAIL, password, displayName:"Báo hàng 1291 Sheet Drain", emailVerified:true, disabled:false })
+  });
+  if (![200,201,400].includes(create.status)) throw new Error(`DRAIN_CREATE_${create.status}`);
+  if (create.status === 400) {
+    const message=String(create.body?.error?.message??"");
+    if (!message.includes("LOCAL_ID_EXISTS") && !message.includes("EMAIL_EXISTS")) throw new Error(`DRAIN_CREATE_${message.slice(0,80)}`);
+  }
+  const update = await googleJson(`https://identitytoolkit.googleapis.com/v1/projects/${PROJECT_ID}/accounts:update?key=${encodeURIComponent(FIREBASE_API_KEY)}`, token, {
+    method:"POST", body:JSON.stringify({ localId:DRAIN_UID, targetProjectId:PROJECT_ID, email:DRAIN_EMAIL, password, displayName:"Báo hàng 1291 Sheet Drain", emailVerified:true, disableUser:false, customAttributes:JSON.stringify({site:"1291",account_kind:"SHEET_DRAIN",drain_enabled:true}) })
+  });
+  if (update.status !== 200) throw new Error(`DRAIN_UPDATE_${update.status}`);
+  return true;
 }
 
 async function sha256(value: string): Promise<string> {
@@ -264,6 +339,8 @@ Deno.serve(async (req) => {
       return json({ ok: false, phase: "release_deploy", status: release.status, reason: String(release.body?.error?.status ?? "DEPLOY_FAILED") }, 500);
     }
 
+    const drainIdentityReady = await provisionDrainIdentity(token);
+
     return json({
       ok: true,
       billing: "DISABLED",
@@ -274,6 +351,7 @@ Deno.serve(async (req) => {
       delete_protection: database.body?.deleteProtectionState ?? "",
       ruleset_name: ruleset.body.name,
       rules_sha256: await sha256(FIRESTORE_RULES),
+      drain_identity_ready: drainIdentityReady,
     });
   } catch (error) {
     console.error(error instanceof Error ? error.message.slice(0, 300) : "firebase bootstrap error");

@@ -37,16 +37,18 @@ Deno.serve(async (req) => {
     if (!CRON_SECRET || req.headers.get("x-cron-secret") !== CRON_SECRET) return json({ error: "Unauthorized" }, 403);
     if (!SHEET_URL || !SHEET_SECRET) return json({ error: "Sheet recovery not configured" }, 503);
 
+    await sheet({ mode: "recovery_state", state: "RECOVERY_IMPORTING" });
     const { data: cursor, error: cursorError } = await admin.from("sheet_recovery_cursor")
       .select("imported_sequence,acknowledged_sequence,state").eq("singleton", true).single();
     if (cursorError) throw cursorError;
-    if (cursor.state === "BLOCKED") return json({ ok: false, blocked: true, cursor }, 409);
+    if (cursor.state === "BLOCKED") await sheet({ mode: "recovery_state", state: "RECOVERY_BLOCKED" }); return json({ ok: false, blocked: true, cursor }, 409);
 
     const startSequence = Number(cursor.acknowledged_sequence ?? 0);
     const pull = await sheet({ mode: "fallback_pull", after_sequence: startSequence, limit: MAX_BATCH });
     const events = Array.isArray(pull.events) ? pull.events : [];
     if (!events.length) {
       await setCursor({ state: "CAUGHT_UP", imported_sequence: Math.max(Number(cursor.imported_sequence ?? 0), startSequence), last_success_at: new Date().toISOString(), last_error_code: null, last_error_detail: null });
+      await sheet({ mode: "recovery_state", state: "SERVICE_CAUGHT_UP" });
       return json({ ok: true, imported: 0, acknowledged: 0, cursor: startSequence, caught_up: true });
     }
 
@@ -60,16 +62,16 @@ Deno.serve(async (req) => {
       const sequence = Number(event.sheet_sequence ?? 0);
       if (!Number.isFinite(sequence) || sequence !== expected) {
         await setCursor({ state: "BLOCKED", last_error_at: new Date().toISOString(), last_error_code: "SHEET_SEQUENCE_GAP", last_error_detail: `expected=${expected},got=${sequence}` });
-        return json({ ok: false, blocked: true, error: "SHEET_SEQUENCE_GAP", expected, got: sequence }, 409);
+        await sheet({ mode: "recovery_state", state: "RECOVERY_BLOCKED" }); return json({ ok: false, blocked: true, error: "SHEET_SEQUENCE_GAP", expected, got: sequence }, 409);
       }
       const { data, error } = await admin.rpc("import_authority_event_service", { p_event: event });
       if (error) {
         await setCursor({ state: "BLOCKED", last_error_at: new Date().toISOString(), last_error_code: "IMPORT_RPC_ERROR", last_error_detail: error.message.slice(0,500) });
-        return json({ ok: false, blocked: true, error: "IMPORT_RPC_ERROR", sequence }, 409);
+        await sheet({ mode: "recovery_state", state: "RECOVERY_BLOCKED" }); return json({ ok: false, blocked: true, error: "IMPORT_RPC_ERROR", sequence }, 409);
       }
       if (data?.ok !== true) {
         await setCursor({ state: "BLOCKED", imported_sequence: lastImported, last_error_at: new Date().toISOString(), last_error_code: String(data?.error_code ?? "IMPORT_BLOCKED"), last_error_detail: String(data?.error ?? "blocked").slice(0,500) });
-        return json({ ok: false, blocked: true, sequence, event_id: event.event_id, error_code: data?.error_code ?? "IMPORT_BLOCKED" }, 409);
+        await sheet({ mode: "recovery_state", state: "RECOVERY_BLOCKED" }); return json({ ok: false, blocked: true, sequence, event_id: event.event_id, error_code: data?.error_code ?? "IMPORT_BLOCKED" }, 409);
       }
       lastImported = sequence;
       expected++;
@@ -91,8 +93,10 @@ Deno.serve(async (req) => {
       return json({ ok: false, imported: acks.length, acknowledged, retry_ack: true }, 503);
     }
 
-    await setCursor({ acknowledged_sequence: lastImported, imported_sequence: lastImported, state: events.length < MAX_BATCH ? "CAUGHT_UP" : "IMPORTING", last_success_at: new Date().toISOString(), last_error_code: null, last_error_detail: null });
-    return json({ ok: true, imported: acks.length, acknowledged, cursor: lastImported, caught_up: events.length < MAX_BATCH });
+    const caughtUp = events.length < MAX_BATCH;
+    await setCursor({ acknowledged_sequence: lastImported, imported_sequence: lastImported, state: caughtUp ? "CAUGHT_UP" : "IMPORTING", last_success_at: new Date().toISOString(), last_error_code: null, last_error_detail: null });
+    await sheet({ mode: "recovery_state", state: caughtUp ? "SERVICE_CAUGHT_UP" : "RECOVERY_IMPORTING" });
+    return json({ ok: true, imported: acks.length, acknowledged, cursor: lastImported, caught_up: caughtUp });
   } catch (error) {
     const message = error instanceof Error ? error.message.slice(0,500) : "UNKNOWN";
     console.error(message);

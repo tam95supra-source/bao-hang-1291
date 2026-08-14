@@ -212,6 +212,11 @@ async function issueRows(ids?: string[], statuses?: string[], limit = 250) {
   }));
 }
 
+function pickerIssue(issue: Record<string, any>) {
+  const { report_count: _count, assigned_name: _assignedName, assigned_id: _assignedId, latest_reporter_name: _reporter, ...safe } = issue;
+  return safe;
+}
+
 async function bootstrapAdmin(req: Request, body: Record<string, unknown>) {
   const expected = Deno.env.get("BOOTSTRAP_SECRET") ?? "";
   if (!expected || req.headers.get("x-bootstrap-secret") !== expected) throw new HttpError(403, "Bootstrap secret không đúng");
@@ -367,9 +372,8 @@ async function resendPendingCritical() {
 async function slaTick(req: Request) {
   const expected=Deno.env.get("CRON_SECRET")??"";if(!expected||req.headers.get("x-cron-secret")!==expected)throw new HttpError(403,"Cron secret không đúng");
   const {data:events,error}=await admin.rpc("process_sla");if(error)throw error;for(const event of events??[]){const issue=(await issueRows([event.issue_id]))[0];if(issue)await notifyUsers(await inventUserIds(),issue,issue.status,`SKU ${issue.sku} đã vượt mốc thời gian vận hành; cần kiểm tra và phản hồi.`);}
-  const {data:autoSkipped,error:autoSkipError}=await admin.rpc("auto_skip_overdue_service");if(autoSkipError)throw autoSkipError;for(const row of autoSkipped??[]){const issue=(await issueRows([row.issue_id]))[0];if(issue)await notifyUsers(await reporterIds(issue.id),issue,"SKIP_ALLOWED",`Không tìm thấy hàng để bổ sung cho SKU ${issue.sku} trong thời gian quy định. Bạn được phép SKIP SKU này và tiếp tục công việc.`,true);}
   await resendPendingCritical();if(await staffSyncDue().catch(()=>false)){try{await syncStaffDirectory("AUTO",null);}catch(error){console.warn("Staff sync deferred",errorText(error));}}try{await syncSheet();}catch(error){console.warn("Sheet sync deferred",errorText(error));}
-  return {processed:events?.length??0,auto_skipped:autoSkipped?.length??0,critical_reminder_checked:true};
+  return {processed:events?.length??0,auto_skipped:0,critical_reminder_checked:true};
 }
 
 async function cleanupDiagnosticLogs() {
@@ -507,7 +511,7 @@ async function route(req: Request) {
       const issue = data.issue;
       const message = data.already_reported ? `SKU ${issue.sku} vừa có thêm lượt báo; tổng ${issue.report_count} lượt.` : `Picker ${context.profile.full_name} báo thiếu SKU ${issue.sku}.`;
       if (!data.duplicate_request) await notifyUsers(await inventUserIds(), issue, "OPEN", message);
-      return data;
+      return context.effectiveRole === "PICKER" ? { ...data, issue: pickerIssue(issue) } : data;
     }
     case "active-issues": requireRole(context, ["ADMIN", "ADMIN_INVENT", "INVENT"]); return { issues: await issueRows(undefined, ACTIVE_STATUSES) };
     case "issue-board": {
@@ -524,7 +528,8 @@ async function route(req: Request) {
       const { data, error } = await admin.from("issue_reports").select("issue_id").eq("reporter_id", context.userId).order("reported_at", { ascending: false }).limit(200);
       if (error) throw error;
       const ids = [...new Set<string>((data ?? []).map((row: any) => String(row.issue_id)))];
-      return { issues: ids.length ? (await issueRows(ids)).reverse() : [] };
+      const issues = ids.length ? (await issueRows(ids)).reverse() : [];
+      return { issues: context.effectiveRole === "PICKER" ? issues.map((issue: any) => pickerIssue(issue)) : issues };
     }
     case "issue-detail": {
       const id = required(body.issue_id, "Issue ID");
@@ -534,7 +539,7 @@ async function route(req: Request) {
         const { count } = await admin.from("issue_reports").select("id", { count: "exact", head: true }).eq("issue_id", id).eq("reporter_id", context.userId);
         if (!(count ?? 0)) throw new HttpError(403, "Bạn không có quyền xem báo thiếu này");
       }
-      return { issue };
+      return { issue: context.effectiveRole === "PICKER" ? pickerIssue(issue) : issue };
     }
     case "claim-issue": {
       requireRole(context, ["ADMIN", "ADMIN_INVENT", "INVENT"]);
@@ -580,7 +585,7 @@ async function route(req: Request) {
       return { events: (data ?? []).filter((event) => {
         const issue = byId.get(event.issue_id);
         return issue?.status === event.status && Number(issue.issue_version) === Number(event.issue_version);
-      }).map((event) => ({ ...event, issue: byId.get(event.issue_id) })) };
+      }).map((event) => ({ ...event, issue: pickerIssue(byId.get(event.issue_id)) })) };
     }
     case "mark-alert-received": {
       const id = required(body.event_id, "Event ID");
@@ -629,12 +634,11 @@ async function route(req: Request) {
       const values = {
         acknowledge_minutes: Number(body.acknowledge_minutes), reminder_minutes: Number(body.reminder_minutes),
         replenish_minutes: Number(body.replenish_minutes), picker_ack_reminder_minutes: Number(body.picker_ack_reminder_minutes ?? 3),
-        auto_skip_enabled: Boolean(body.auto_skip_enabled), auto_skip_after_minutes: Number(body.auto_skip_after_minutes ?? 120),
+        auto_skip_enabled: false, auto_skip_after_minutes: 0,
         updated_by: context.userId, updated_at: new Date().toISOString(),
       };
       if ([values.acknowledge_minutes, values.reminder_minutes, values.replenish_minutes].some((v) => !Number.isInteger(v) || v < 1 || v > 480)) throw new HttpError(400, "Cấu hình SLA phải từ 1 đến 480 phút");
       if (!Number.isInteger(values.picker_ack_reminder_minutes) || values.picker_ack_reminder_minutes < 1 || values.picker_ack_reminder_minutes > 60) throw new HttpError(400, "Nhắc Picker phải từ 1 đến 60 phút");
-      if (!Number.isInteger(values.auto_skip_after_minutes) || values.auto_skip_after_minutes < 15 || values.auto_skip_after_minutes > 4320) throw new HttpError(400, "Mốc tự động cho phép SKIP phải từ 15 phút đến 72 giờ");
       const { data, error } = await admin.from("app_config").update(values).eq("singleton", true).select("acknowledge_minutes,reminder_minutes,replenish_minutes,picker_ack_reminder_minutes,auto_skip_enabled,auto_skip_after_minutes").single();
       if (error) throw error;
       return data;
@@ -650,15 +654,13 @@ async function route(req: Request) {
       const values: Record<string, unknown> = {
         acknowledge_minutes: Number(body.acknowledge_minutes), reminder_minutes: Number(body.reminder_minutes), replenish_minutes: Number(body.replenish_minutes),
         picker_ack_reminder_minutes: Number(body.picker_ack_reminder_minutes ?? 3), diagnostic_log_retention_days: Number(body.diagnostic_log_retention_days ?? 14),
-        retention_days: Number(body.retention_days ?? 60), auto_skip_enabled: Boolean(body.auto_skip_enabled), auto_skip_after_minutes: Number(body.auto_skip_after_minutes ?? 120),
+        retention_days: 45, auto_skip_enabled: false, auto_skip_after_minutes: 0,
         staff_auto_sync_enabled: Boolean(body.staff_auto_sync_enabled ?? true), staff_sync_interval_minutes: Number(body.staff_sync_interval_minutes ?? 60),
         updated_by: context.userId, updated_at: new Date().toISOString(),
       };
       if ([values.acknowledge_minutes, values.reminder_minutes, values.replenish_minutes].some((v) => !Number.isInteger(v) || Number(v) < 1 || Number(v) > 480)) throw new HttpError(400, "Cấu hình SLA phải từ 1 đến 480 phút");
       if (!Number.isInteger(values.picker_ack_reminder_minutes) || Number(values.picker_ack_reminder_minutes) < 1 || Number(values.picker_ack_reminder_minutes) > 60) throw new HttpError(400, "Nhắc Picker phải từ 1 đến 60 phút");
       if (!Number.isInteger(values.diagnostic_log_retention_days) || Number(values.diagnostic_log_retention_days) < 1 || Number(values.diagnostic_log_retention_days) > 60) throw new HttpError(400, "Lưu log phải từ 1 đến 60 ngày");
-      if (!Number.isInteger(values.retention_days) || Number(values.retention_days) < 7 || Number(values.retention_days) > 365) throw new HttpError(400, "Retention nghiệp vụ phải từ 7 đến 365 ngày");
-      if (!Number.isInteger(values.auto_skip_after_minutes) || Number(values.auto_skip_after_minutes) < 15 || Number(values.auto_skip_after_minutes) > 4320) throw new HttpError(400, "Mốc tự động SKIP phải từ 15 phút đến 72 giờ");
       if (!Number.isInteger(values.staff_sync_interval_minutes) || Number(values.staff_sync_interval_minutes) < 15 || Number(values.staff_sync_interval_minutes) > 1440) throw new HttpError(400, "Chu kỳ đồng bộ nhân sự phải từ 15 phút đến 24 giờ");
       const { data, error } = await admin.from("app_config").update(values).eq("singleton", true).select().single();
       if (error) throw error;
@@ -729,7 +731,7 @@ async function route(req: Request) {
       for(const row of rows){byStatus[row.status]=(byStatus[row.status]??0)+1;skuCounts.set(row.sku,(skuCounts.get(row.sku)??0)+Number(row.report_count??1));if(row.resolved_at)durations.push((new Date(row.resolved_at).getTime()-new Date(row.first_reported_at).getTime())/60000);if(row.claimed_at)claimDurations.push((new Date(row.claimed_at).getTime()-new Date(row.first_reported_at).getTime())/60000);if(row.first_reported_at>=since24)hourly[new Date(row.first_reported_at).getHours()]+=Number(row.report_count??1);}
       const percentile=(v:number[],p:number)=>v.length?[...v].sort((a,b)=>a-b)[Math.min(v.length-1,Math.floor((v.length-1)*p))]:null;const topKeys=[...skuCounts.entries()].sort((a,b)=>b[1]-a[1]).slice(0,20).map(([sku])=>sku),skuNames=new Map<string,string>();if(topKeys.length){const {data:c}=await admin.from("sku_catalog").select("sku,product_name").in("sku",topKeys);(c??[]).forEach((r:any)=>skuNames.set(r.sku,r.product_name));}
       const {data:cfg}=await admin.from("app_config").select("acknowledge_minutes,auto_skip_enabled,auto_skip_after_minutes").eq("singleton",true).single();const overdueCutoff=new Date(now-Math.max(1,Number(cfg?.acknowledge_minutes??15))*60000).toISOString();const {count:overdue}=await admin.from("issues").select("id",{count:"exact",head:true}).in("status",ACTIVE_STATUSES).lte("first_reported_at",overdueCutoff);const {count:autoSkipCount}=await admin.from("issue_audit").select("id",{count:"exact",head:true}).eq("action","AUTO_SKIP").gte("created_at",since30);const last24=rows.filter((r:any)=>r.first_reported_at>=since24),resolved24=last24.filter((r:any)=>r.resolved_at);
-      return {days:30,issues:rows.length,reports:rows.reduce((sum,r)=>sum+Number(r.report_count??1),0),by_status:byStatus,active_now:rows.filter((r:any)=>ACTIVE_STATUSES.includes(r.status)).length,overdue_now:overdue??0,last_24h:{issues:last24.length,reports:last24.reduce((sum,r)=>sum+Number(r.report_count??1),0),resolved:resolved24.length,available:last24.filter((r:any)=>r.status==="AVAILABLE").length,skipped:last24.filter((r:any)=>r.status==="SKIP_ALLOWED").length},average_resolution_minutes:durations.length?Math.round(durations.reduce((a,b)=>a+b,0)/durations.length):null,median_resolution_minutes:percentile(durations,.5)==null?null:Math.round(percentile(durations,.5)!),p95_resolution_minutes:percentile(durations,.95)==null?null:Math.round(percentile(durations,.95)!),median_claim_minutes:percentile(claimDurations,.5)==null?null:Math.round(percentile(claimDurations,.5)!),p95_claim_minutes:percentile(claimDurations,.95)==null?null:Math.round(percentile(claimDurations,.95)!),recurrent_episodes:rows.filter((r:any)=>r.previous_issue_id).length,auto_skip_count_30d:autoSkipCount??0,auto_skip_enabled:Boolean(cfg?.auto_skip_enabled),auto_skip_after_minutes:Number(cfg?.auto_skip_after_minutes??120),top_skus:[...skuCounts.entries()].sort((a,b)=>b[1]-a[1]).slice(0,20).map(([sku,reports])=>({sku,product_name:skuNames.get(sku)??"",reports})),hourly_reports_24h:hourly};
+      return {days:30,issues:rows.length,reports:rows.reduce((sum,r)=>sum+Number(r.report_count??1),0),by_status:byStatus,active_now:rows.filter((r:any)=>ACTIVE_STATUSES.includes(r.status)).length,overdue_now:overdue??0,last_24h:{issues:last24.length,reports:last24.reduce((sum,r)=>sum+Number(r.report_count??1),0),resolved:resolved24.length,available:last24.filter((r:any)=>r.status==="AVAILABLE").length,skipped:last24.filter((r:any)=>r.status==="SKIP_ALLOWED").length},average_resolution_minutes:durations.length?Math.round(durations.reduce((a,b)=>a+b,0)/durations.length):null,median_resolution_minutes:percentile(durations,.5)==null?null:Math.round(percentile(durations,.5)!),p95_resolution_minutes:percentile(durations,.95)==null?null:Math.round(percentile(durations,.95)!),median_claim_minutes:percentile(claimDurations,.5)==null?null:Math.round(percentile(claimDurations,.5)!),p95_claim_minutes:percentile(claimDurations,.95)==null?null:Math.round(percentile(claimDurations,.95)!),recurrent_episodes:rows.filter((r:any)=>r.previous_issue_id).length,auto_skip_count_30d:0,auto_skip_enabled:false,auto_skip_after_minutes:0,top_skus:[...skuCounts.entries()].sort((a,b)=>b[1]-a[1]).slice(0,20).map(([sku,reports])=>({sku,product_name:skuNames.get(sku)??"",reports})),hourly_reports_24h:hourly};
     }
     case "issue-history": {
       requireRole(context, ["ADMIN", "ADMIN_INVENT"]);
