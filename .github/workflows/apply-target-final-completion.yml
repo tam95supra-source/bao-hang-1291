@@ -1,0 +1,44 @@
+name: Apply target final completion patch
+
+on:
+  push:
+    branches: [target-final-20260814-impl]
+    paths:
+      - 'scripts/apply_target_final_completion.py'
+      - '.github/workflows/apply-target-final-completion.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: target-final-completion-patch
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: target-final-20260814-impl
+          fetch-depth: 0
+      - name: Apply coherent target patch
+        run: python3 scripts/apply_target_final_completion.py
+      - name: Validate patch text
+        run: |
+          set -euo pipefail
+          git diff --check
+          test -f supabase/functions/backup-account-admin/index.ts
+          test -f supabase/migrations/20260814150012_target_final_backup_accounts.sql
+          ! grep -R -n 'Admin Event' app/src/main web-admin/src || true
+      - name: Commit target completion patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'bao-hang-1291-automation'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m 'target: complete backup identity and authority surfaces'
+          git push origin HEAD:target-final-20260814-impl
