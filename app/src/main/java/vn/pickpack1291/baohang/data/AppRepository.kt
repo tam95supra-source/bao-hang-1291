@@ -15,6 +15,7 @@ import vn.pickpack1291.baohang.BuildConfig
 import vn.pickpack1291.baohang.diagnostics.DiagnosticsLogger
 import vn.pickpack1291.baohang.network.ApiClient
 import vn.pickpack1291.baohang.network.DirectRpcClient
+import vn.pickpack1291.baohang.network.EmergencyFirestoreClient
 import vn.pickpack1291.baohang.network.SheetFallbackClient
 import vn.pickpack1291.baohang.sync.SyncScheduler
 import java.io.IOException
@@ -31,11 +32,12 @@ class AppRepository(
 ) {
     class MutationUnavailableException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
-    enum class AuthorityMode { SERVICE, SHEET, BLOCKED }
+    enum class AuthorityMode { SERVICE, SHEET, EMERGENCY, BLOCKED }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val direct = DirectRpcClient(session)
     private val sheet = SheetFallbackClient(session)
+    private val emergency = EmergencyFirestoreClient(session)
     @Volatile var authorityMode: AuthorityMode = AuthorityMode.BLOCKED
         private set
 
@@ -46,6 +48,7 @@ class AppRepository(
         diagnostics.info("session_saved", mapOf("employee_code" to auth.profile.employeeCode, "role" to auth.profile.role.wire))
         registerCurrentDevice()
         refreshFallbackCredentialIfPossible(force = true)
+        provisionEmergencyIfPossible()
         if (database.outboxCount() > 0) SyncScheduler.enqueueOutbox(context)
         if (catalogNeedsRefresh()) SyncScheduler.enqueueCatalog(context)
         return auth.profile
@@ -54,6 +57,7 @@ class AppRepository(
     fun logout() {
         diagnostics.info("logout", mapOf("employee_code" to (session.profile?.employeeCode ?: "")))
         authorityMode = AuthorityMode.BLOCKED
+        emergency.signOut()
         session.clear()
     }
 
@@ -62,6 +66,7 @@ class AppRepository(
         session.updateProfile(profile)
         authorityMode = AuthorityMode.SERVICE
         refreshFallbackCredentialIfPossible()
+        provisionEmergencyIfPossible()
         diagnostics.info("profile_refreshed", mapOf("role" to profile.role.wire))
         return profile
     }
@@ -76,12 +81,19 @@ class AppRepository(
 
     suspend fun reportShortage(sku: String): ReportResult {
         val requestId = UUID.randomUUID().toString()
+        val cachedSku = database.searchSkus(sku.trim(), 20).firstOrNull { it.sku.equals(sku.trim(), true) }
         diagnostics.info("shortage_submit", mapOf("sku" to sku, "request_id" to requestId))
-        return mutationWithSheetFallback(
+        return mutationWithAuthorities(
             requestId = requestId,
             operation = "REPORT_SHORTAGE",
             service = { direct.reportShortage(sku, requestId) },
-            fallback = { sheet.reportShortage(sku, requestId) }
+            fallback = { sheet.reportShortage(sku, requestId) },
+            emergencyCall = {
+                if (cachedSku == null || catalogNeedsRefresh(24)) {
+                    throw EmergencyFirestoreClient.EmergencyException("CATALOG_NOT_FRESH", "Không đủ dữ liệu SKU còn hiệu lực để dùng Emergency")
+                }
+                emergency.reportShortage(sku, cachedSku.productName, requestId)
+            }
         ).also { result ->
             database.upsertIssues(listOf(result.issue))
             diagnostics.info("shortage_submit_success", mapOf("sku" to sku, "issue_id" to result.issue.id, "authority" to authorityMode.name))
@@ -94,8 +106,12 @@ class AppRepository(
         } catch (error: Exception) {
             if (!isServiceUnavailable(error)) return runCatching { api.myIssues().also(database::upsertIssues) }.getOrElse { database.cachedIssues(100) }
             if (session.hasValidFallbackCredential) {
-                runCatching { sheet.myIssues() }.onSuccess { authorityMode = AuthorityMode.SHEET; database.upsertIssues(it) }.getOrElse { database.cachedIssues(100) }
-            } else database.cachedIssues(100)
+                try { return sheet.myIssues().also { authorityMode = AuthorityMode.SHEET; database.upsertIssues(it) } }
+                catch (sheetError: Exception) { if (!isSheetUnavailable(sheetError)) return database.cachedIssues(100) }
+            }
+            if (emergency.isProvisioned) {
+                runCatching { emergency.myIssues() }.onSuccess { authorityMode = AuthorityMode.EMERGENCY; database.upsertIssues(it) }.getOrElse { authorityMode = AuthorityMode.BLOCKED; database.cachedIssues(100) }
+            } else { authorityMode = AuthorityMode.BLOCKED; database.cachedIssues(100) }
         }
     }
 
@@ -107,90 +123,98 @@ class AppRepository(
         } catch (error: Exception) {
             if (!isServiceUnavailable(error)) throw error
             if (session.hasValidFallbackCredential) {
-                try {
-                    sheet.issueBoard().also { authorityMode = AuthorityMode.SHEET; database.upsertIssues(it.open + it.claimed + it.recent) }
-                } catch (sheetError: Exception) {
-                    authorityMode = AuthorityMode.BLOCKED
-                    diagnostics.warn("board_sheet_fallback_failed", mapOf("error" to sheetError.message.orEmpty().take(200)))
-                    val cached = database.cachedIssues(200)
-                    IssueBoard(cached.filter { it.status == IssueStatus.OPEN }, cached.filter { it.status.isClaimedBucket }, cached.filter { !it.status.isOpenBucket })
-                }
-            } else {
-                authorityMode = AuthorityMode.BLOCKED
-                val cached = database.cachedIssues(200)
-                IssueBoard(cached.filter { it.status == IssueStatus.OPEN }, cached.filter { it.status.isClaimedBucket }, cached.filter { !it.status.isOpenBucket })
+                try { return sheet.issueBoard().also { authorityMode = AuthorityMode.SHEET; database.upsertIssues(it.open + it.claimed + it.recent) } }
+                catch (sheetError: Exception) { if (!isSheetUnavailable(sheetError)) throw sheetError }
             }
+            if (emergency.isProvisioned) {
+                try { return emergency.issueBoard().also { authorityMode = AuthorityMode.EMERGENCY; database.upsertIssues(it.open + it.claimed + it.recent) } }
+                catch (fireError: Exception) { diagnostics.warn("emergency_board_unavailable", mapOf("error" to fireError.message.orEmpty().take(200))) }
+            }
+            authorityMode = AuthorityMode.BLOCKED
+            val cached = database.cachedIssues(200)
+            IssueBoard(cached.filter { it.status == IssueStatus.OPEN }, cached.filter { it.status.isClaimedBucket }, cached.filter { !it.status.isOpenBucket })
         }
     }
 
     suspend fun claimIssue(issueId: String): StockIssue {
         val requestId = UUID.randomUUID().toString()
-        return mutationWithSheetFallback(
-            requestId, "CLAIM",
+        return mutationWithAuthorities(requestId, "CLAIM",
             service = { direct.claimIssue(issueId, requestId) },
-            fallback = { sheet.claimIssue(issueId, requestId) }
+            fallback = { sheet.claimIssue(issueId, requestId) },
+            emergencyCall = { emergency.claimIssue(issueId, requestId) }
         ).also { database.upsertIssues(listOf(it)); diagnostics.info("issue_claim", mapOf("issue_id" to issueId, "version" to it.issueVersion, "authority" to authorityMode.name)) }
     }
 
     suspend fun reassignIssue(issueId: String, newAssigneeId: String, reason: String): StockIssue {
         val requestId = UUID.randomUUID().toString()
-        return mutationWithSheetFallback(
-            requestId, "REASSIGN",
+        return mutationWithAuthorities(requestId, "REASSIGN",
             service = { direct.reassignIssue(issueId, newAssigneeId, reason, requestId) },
-            fallback = { sheet.reassignIssue(issueId, newAssigneeId, reason, requestId) }
+            fallback = { sheet.reassignIssue(issueId, newAssigneeId, reason, requestId) },
+            emergencyCall = { emergency.reassignIssue(issueId, newAssigneeId, reason, requestId) }
         ).also { database.upsertIssues(listOf(it)); diagnostics.info("issue_reassign", mapOf("issue_id" to issueId, "new_assignee" to newAssigneeId, "version" to it.issueVersion, "authority" to authorityMode.name)) }
     }
 
     suspend fun updateIssue(issueId: String, action: String): StockIssue {
         val requestId = UUID.randomUUID().toString()
         diagnostics.info("issue_update_start", mapOf("issue_id" to issueId, "action" to action, "request_id" to requestId))
-        return mutationWithSheetFallback(
-            requestId, action.uppercase(),
+        return mutationWithAuthorities(requestId, action.uppercase(),
             service = { direct.updateIssue(issueId, action, requestId) },
-            fallback = { sheet.updateIssue(issueId, action, requestId) }
+            fallback = { sheet.updateIssue(issueId, action, requestId) },
+            emergencyCall = { emergency.updateIssue(issueId, action, requestId) }
         ).also { database.upsertIssues(listOf(it)); diagnostics.info("issue_update_success", mapOf("issue_id" to issueId, "status" to it.status.wire, "version" to it.issueVersion, "authority" to authorityMode.name)) }
     }
 
-    private suspend fun <T> mutationWithSheetFallback(
+    private suspend fun <T> mutationWithAuthorities(
         requestId: String,
         operation: String,
         service: suspend () -> T,
-        fallback: suspend () -> T
+        fallback: suspend () -> T,
+        emergencyCall: suspend () -> T
     ): T {
-        var lastServiceError: Exception? = null
-        val delays = longArrayOf(0L, 500L, 1_500L)
-        for (index in delays.indices) {
-            if (delays[index] > 0) delay(delays[index])
+        var lastError: Exception? = null
+        val retryMs = longArrayOf(0L, 500L, 1_500L)
+        for (index in retryMs.indices) {
+            if (retryMs[index] > 0) delay(retryMs[index])
             try {
-                return service().also {
-                    authorityMode = AuthorityMode.SERVICE
-                    if (index > 0) diagnostics.info("service_mutation_recovered", mapOf("operation" to operation, "request_id" to requestId, "attempt" to index + 1))
-                }
+                return service().also { authorityMode = AuthorityMode.SERVICE }
             } catch (error: Exception) {
                 if (!isServiceUnavailable(error)) {
                     diagnostics.warn("service_business_rejected", mapOf("operation" to operation, "request_id" to requestId, "error" to error.message.orEmpty().take(200)))
                     throw error
                 }
-                lastServiceError = error
+                lastError = error
             }
         }
 
-        diagnostics.warn("service_unavailable_switch_candidate", mapOf("operation" to operation, "request_id" to requestId))
         if (session.hasValidFallbackCredential) {
-            try {
-                return fallback().also {
-                    authorityMode = AuthorityMode.SHEET
-                    diagnostics.warn("sheet_fallback_committed", mapOf("operation" to operation, "request_id" to requestId))
+            for (index in retryMs.indices) {
+                if (retryMs[index] > 0) delay(retryMs[index])
+                try {
+                    return fallback().also { authorityMode = AuthorityMode.SHEET; diagnostics.warn("sheet_fallback_committed", mapOf("operation" to operation, "request_id" to requestId)) }
+                } catch (error: Exception) {
+                    if (!isSheetUnavailable(error)) {
+                        diagnostics.warn("sheet_business_rejected", mapOf("operation" to operation, "request_id" to requestId, "error" to error.message.orEmpty().take(200)))
+                        throw error
+                    }
+                    lastError = error
                 }
-            } catch (sheetError: Exception) {
-                diagnostics.warn("sheet_fallback_unavailable", mapOf("operation" to operation, "request_id" to requestId, "error" to sheetError.message.orEmpty().take(200)))
             }
         }
+
+        if (emergency.isProvisioned) {
+            try {
+                return emergencyCall().also { authorityMode = AuthorityMode.EMERGENCY; diagnostics.warn("firebase_emergency_committed", mapOf("operation" to operation, "request_id" to requestId)) }
+            } catch (error: EmergencyFirestoreClient.EmergencyException) {
+                if (!isEmergencyUnavailable(error)) throw error
+                lastError = error
+            } catch (error: Exception) {
+                lastError = error
+            }
+        }
+
         authorityMode = AuthorityMode.BLOCKED
-        throw MutationUnavailableException(
-            "Không có hệ thống trực tuyến nào xác nhận thao tác. Dữ liệu chưa được gửi và sẽ không tự động gửi lại.",
-            lastServiceError
-        )
+        diagnostics.warn("mutation_blocked_no_authority", mapOf("operation" to operation, "request_id" to requestId))
+        throw MutationUnavailableException("Không có cloud nào xác nhận thao tác. Dữ liệu chưa được gửi và sẽ không tự động gửi lại.", lastError)
     }
 
     private fun isServiceUnavailable(error: Exception): Boolean = when (error) {
@@ -199,12 +223,31 @@ class AppRepository(
         else -> false
     }
 
+    private fun isSheetUnavailable(error: Exception): Boolean = when (error) {
+        is SheetFallbackClient.FallbackException -> {
+            val code = error.code.uppercase()
+            code == "LOCK_TIMEOUT" || code == "INVALID_RESPONSE" || code == "FALLBACK_TOKEN_EXPIRED" ||
+                code == "HTTP_408" || code == "HTTP_429" || code.removePrefix("HTTP_").toIntOrNull()?.let { it >= 500 } == true
+        }
+        is IOException -> true
+        else -> false
+    }
+
+    private fun isEmergencyUnavailable(error: EmergencyFirestoreClient.EmergencyException): Boolean =
+        error.code in setOf("NOT_PROVISIONED", "AUTH_FAILED", "HTTP_408", "HTTP_429", "HTTP_500", "HTTP_502", "HTTP_503", "HTTP_504")
+
     private suspend fun refreshFallbackCredentialIfPossible(force: Boolean = false) {
         val shouldRefresh = force || !session.hasValidFallbackCredential || session.fallbackExpiresAtMillis < System.currentTimeMillis() + 24L * 60L * 60L * 1000L
         if (!shouldRefresh) return
         runCatching { sheet.refreshCredential() }
             .onSuccess { diagnostics.info("fallback_credential_refreshed", mapOf("expires_at_ms" to session.fallbackExpiresAtMillis)) }
             .onFailure { diagnostics.warn("fallback_credential_refresh_deferred", mapOf("error" to it.message.orEmpty().take(160))) }
+    }
+
+    private suspend fun provisionEmergencyIfPossible() {
+        runCatching { emergency.provision() }
+            .onSuccess { diagnostics.info("emergency_identity_provisioned", mapOf("device_id_suffix" to session.deviceId.takeLast(6))) }
+            .onFailure { diagnostics.warn("emergency_identity_provision_deferred", mapOf("error" to it.message.orEmpty().take(160))) }
     }
 
     suspend fun pendingAlerts(): List<PendingAlert> = runCatching { direct.pendingAlerts() }.getOrElse { api.pendingAlerts() }
@@ -259,7 +302,7 @@ class AppRepository(
         val token = FirebaseMessaging.getInstance().token.await(); val device = "${Build.MANUFACTURER} ${Build.MODEL}"; val version = "${BuildConfig.VERSION_NAME} [${BuildConfig.OTA_CHANNEL.uppercase()}]"
         runCatching { direct.registerDevice(token, device, version) }.getOrElse { api.registerDevice(token, device, version) }; session.markDeviceRegistered(); diagnostics.info("device_registered", mapOf("device" to device, "version" to BuildConfig.VERSION_NAME))
     }
-    fun registerDeviceAsync(token: String) { scope.launch { val device="${Build.MANUFACTURER} ${Build.MODEL}"; val version="${BuildConfig.VERSION_NAME} [${BuildConfig.OTA_CHANNEL.uppercase()}]"; runCatching { runCatching { direct.registerDevice(token,device,version) }.getOrElse { api.registerDevice(token,device,version) }; session.markDeviceRegistered(); refreshFallbackCredentialIfPossible(); diagnostics.info("fcm_token_registered",mapOf("version" to BuildConfig.VERSION_NAME)) }.onFailure { diagnostics.error("fcm_token_register_failed",it) } } }
+    fun registerDeviceAsync(token: String) { scope.launch { val device="${Build.MANUFACTURER} ${Build.MODEL}"; val version="${BuildConfig.VERSION_NAME} [${BuildConfig.OTA_CHANNEL.uppercase()}]"; runCatching { runCatching { direct.registerDevice(token,device,version) }.getOrElse { api.registerDevice(token,device,version) }; session.markDeviceRegistered(); refreshFallbackCredentialIfPossible(); provisionEmergencyIfPossible(); diagnostics.info("fcm_token_registered",mapOf("version" to BuildConfig.VERSION_NAME)) }.onFailure { diagnostics.error("fcm_token_register_failed",it) } } }
 
     suspend fun sendDiagnosticLog(): JSONObject { diagnostics.info("diagnostic_upload_requested",mapOf("role" to session.effectiveRole.wire,"version" to BuildConfig.VERSION_NAME)); val bundle=diagnostics.prepareUpload()?:return JSONObject().put("uploaded",false).put("message","Chưa có log để gửi"); val result=api.uploadDiagnosticLog(bundle); if(result.optBoolean("uploaded",false))diagnostics.clearAfterConfirmedUpload(); return result }
     fun skuCount()=database.skuCount()
