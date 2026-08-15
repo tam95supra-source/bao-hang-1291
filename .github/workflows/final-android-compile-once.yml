@@ -1,0 +1,44 @@
+name: Final Android compile once
+
+on:
+  push:
+    branches:
+      - target-final-20260814-impl
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: target-final-20260814-impl
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.9'
+          cache-disabled: true
+      - name: Unit test and compile app
+        run: gradle --no-daemon testDebugUnitTest assembleDebug
+      - name: Verify requested UI source guards
+        run: |
+          grep -Fq 'button("CÓ HÀNG"' app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt
+          grep -Fq 'button("SKIP HÀNG"' app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt
+          grep -Fq 'renderedSignatures' app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt
+          grep -Fq 'inventSelectedTab' app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt
+          grep -Fq 'CÓ SKU CẦN XỬ LÝ' app/src/main/java/vn/pickpack1291/baohang/notifications/NotificationHelper.kt
+          echo 'ANDROID_REALTIME_UI_GUARDS=PASS'
+      - name: Remove one-shot workflow
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA="$(gh api repos/tam95supra-source/bao-hang-1291/contents/.github/workflows/final-android-compile-once.yml?ref=target-final-20260814-impl --jq .sha)"
+          gh api -X DELETE repos/tam95supra-source/bao-hang-1291/contents/.github/workflows/final-android-compile-once.yml -f message='ops: remove final Android compile gate' -f sha="$SHA" -f branch='target-final-20260814-impl'
