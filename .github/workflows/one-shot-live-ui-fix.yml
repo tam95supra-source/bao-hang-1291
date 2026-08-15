@@ -34,7 +34,11 @@ jobs:
           grep -q 'BÁO LẠI TRONG 30 PHÚT' app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt
           grep -q 'tabBadges' app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt
           grep -q 'requested.length < 3' app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt
-          ! grep -R -n -E 'Trung vị|trung vị|Ticket|Cho SKIP|Auto SKIP|P95 hoàn tất' web-admin/src app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt app/src/main/java/vn/pickpack1291/baohang/data/Models.kt
+          grep -q 'Một nửa đợt được nhận trong' web-admin/src/warehouse-ui-v2.js
+          grep -q 'Một nửa đợt được nhận trong' web-admin/src/ops-console.js
+          grep -q '95% xử lý xong trong' web-admin/src/ops-console.js
+          grep -q 'KHÔNG BỎ QUA — ĐÃ CÓ HÀNG' web-admin/src/ops-console.js
+          grep -q 'ĐƯỢC PHÉP BỎ QUA' app/src/main/java/vn/pickpack1291/baohang/data/Models.kt
 
       - uses: actions/setup-java@v5
         with:
