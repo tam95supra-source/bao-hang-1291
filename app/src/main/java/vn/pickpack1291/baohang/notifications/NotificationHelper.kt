@@ -42,9 +42,15 @@ object NotificationHelper {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        val title = when (status) {
+            IssueStatus.OPEN -> "CÓ SKU CẦN XỬ LÝ • SKU $sku"
+            IssueStatus.AVAILABLE -> "ĐÃ CÓ HÀNG • SKU $sku"
+            IssueStatus.SKIP_ALLOWED -> "CHO PHÉP SKIP • SKU $sku"
+            else -> "${status.label} • SKU $sku"
+        }
         val notification = NotificationCompat.Builder(context, ALERT_CHANNEL)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("${status.label} • SKU $sku")
+            .setContentTitle(title)
             .setContentText(message)
             .setStyle(NotificationCompat.BigTextStyle().bigText(message))
             .setPriority(NotificationCompat.PRIORITY_MAX)
