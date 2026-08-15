@@ -115,7 +115,6 @@ new = '''                val tab = button(label) {
                 }
 '''
 src = replace_once(src, old, new, 'tab reset signatures')
-
 main_path.write_text(src, encoding='utf-8')
 
 msg_path = Path('app/src/main/java/vn/pickpack1291/baohang/notifications/StockMessagingService.kt')
@@ -147,24 +146,9 @@ new = '''            runCatching { ContextCompat.startForegroundService(this, ov
 msg = replace_once(msg, old, new, 'background OPEN displayed gate')
 msg_path.write_text(msg, encoding='utf-8')
 
-helper_path = Path('app/src/main/java/vn/pickpack1291/baohang/notifications/NotificationHelper.kt')
-helper = helper_path.read_text(encoding='utf-8')
-old = '''            .setContentTitle("Báo hàng 1291 • $status")
-'''
-new = '''            .setContentTitle(when (status.uppercase()) {
-                "OPEN" -> "CÓ SKU CẦN XỬ LÝ"
-                "AVAILABLE" -> "ĐÃ CÓ HÀNG"
-                "SKIP_ALLOWED" -> "CHO PHÉP SKIP"
-                else -> "Báo hàng 1291 • $status"
-            })
-'''
-helper = replace_once(helper, old, new, 'notification title')
-helper_path.write_text(helper, encoding='utf-8')
-
 required = {
     main_path: ['renderedSignatures', 'boardContainer.getChildAt(it).tag == id', 'tag = "__empty__"'],
     msg_path: ['app.repository.markAlertDisplayed(eventId)'],
-    helper_path: ['"OPEN" -> "CÓ SKU CẦN XỬ LÝ"'],
 }
 for path, tokens in required.items():
     text = path.read_text(encoding='utf-8')
