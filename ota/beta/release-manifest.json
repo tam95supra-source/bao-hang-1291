@@ -1,11 +1,11 @@
 {
   "channel": "beta",
-  "versionCode": 7,
-  "versionName": "1.5.0",
-  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.5.0/bao-hang-1291-beta-1.5.0.apk",
-  "sha256": "2214c1423018562a57d98ab7990e1cd79192f0d376beda9f7083b9a6a85ed5d2",
+  "versionCode": 8,
+  "versionName": "1.6.0",
+  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.0/bao-hang-1291-beta-1.6.0.apk",
+  "sha256": "4ee697b4f086d8eaaaef9f30886d879fc5d3232ac60cb820c0c57fa232444cb6",
   "mandatory": false,
-  "releaseNotes": "Beta 1.5.0: sửa dứt điểm Web bị nhảy giữa hai giao diện bằng một owner Realtime ticket; bổ sung footer bản quyền; Xử lý báo hàng chia rõ Chờ xử lý, Đang xử lý, Đã có hàng, Đã bỏ qua; cho phép báo lại đã có hàng từ ticket đã bỏ qua và gửi cảnh báo lại cho người liên quan; Báo cáo vận hành kho dùng thuật ngữ thuần Việt, chi tiết hơn và xuất Excel; Android đồng bộ cùng phân loại và nghiệp vụ.",
+  "releaseNotes": "Beta 1.6.0: sửa App → Web Realtime; cập nhật giao diện Android theo diff từng SKU thay vì reload; hiển thị tổng SKU cần xử lý ở tiêu đề; giữ nguyên tab/vị trí sau Nhận xử lý, Có hàng hoặc Skip hàng; bố trí hai nút CÓ HÀNG và SKIP HÀNG đối xứng; cảnh báo SKU mới chỉ ở lượt báo đầu tiên, các lượt sau chỉ cộng dồn và ghi log, kết quả vẫn gửi đúng các Picker đã báo.",
   "signerSha256": "2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0",
-  "sourceSha": "16b06f814a678e5c5923355749a7988bed7205f7"
+  "sourceSha": "2dd1e419735c72bba90dda6b6a8d2dda92421642"
 }
