@@ -10,9 +10,9 @@ permissions:
   contents: read
 
 jobs:
-  configure-auth:
+  publish-rules:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
         with:
@@ -50,19 +50,9 @@ jobs:
           jq -e '.project_id == "bao-hang-1291" and .client_email and .private_key' "$SA_FILE" >/dev/null
           echo "GOOGLE_APPLICATION_CREDENTIALS=$SA_FILE" >> "$GITHUB_ENV"
 
-      - name: Configure Firebase Email Password authentication
+      - name: Publish validated Firestore rules
         shell: bash
-        run: npx --yes firebase-tools@15.25.0 deploy --only auth --project bao-hang-1291 --non-interactive
-
-      - name: Verify Auth config through Admin API
-        shell: bash
-        env:
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-        run: |
-          set -euo pipefail
-          node <<'NODE'
-          const crypto=require('crypto');const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');const enc=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');async function token(){const n=Math.floor(Date.now()/1000),h=enc({alg:'RS256',typ:'JWT'}),c=enc({iss:sa.client_email,scope:'https://www.googleapis.com/auth/cloud-platform',aud:'https://oauth2.googleapis.com/token',iat:n,exp:n+900}),u=`${h}.${c}`,s=crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url'),r=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:`${u}.${s}`})});if(!r.ok)throw new Error(`OAuth ${r.status}`);return(await r.json()).access_token}(async()=>{const a=await token(),r=await fetch('https://identitytoolkit.googleapis.com/admin/v2/projects/bao-hang-1291/config',{headers:{Authorization:`Bearer ${a}`}});if(!r.ok)throw new Error(`AUTH_CONFIG_HTTP_${r.status}`);const c=await r.json();if(c?.signIn?.email?.enabled!==true||c?.signIn?.email?.passwordRequired!==true)throw new Error('AUTH_EMAIL_PASSWORD_NOT_ENABLED');console.log('AUTH_EMAIL_PASSWORD=PASS');})().catch(e=>{console.error(e.message);process.exitCode=4});
-          NODE
+        run: npx --yes firebase-tools@15.25.0 deploy --only firestore:rules --project bao-hang-1291 --non-interactive
 
       - name: Cleanup credential
         if: always()
