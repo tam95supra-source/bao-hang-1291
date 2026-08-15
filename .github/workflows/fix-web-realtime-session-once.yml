@@ -1,0 +1,119 @@
+name: Fix web realtime session once
+
+on:
+  push:
+    branches:
+      - target-final-20260814-impl
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: target-final-20260814-impl
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Upgrade Supabase client and bind Auth session to Realtime
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+
+          pkg_path = Path('web-admin/package.json')
+          pkg = json.loads(pkg_path.read_text(encoding='utf-8'))
+          old_version = pkg['dependencies'].get('@supabase/supabase-js')
+          if old_version != '2.57.4':
+              raise SystemExit(f'unexpected supabase-js version: {old_version}')
+          pkg['dependencies']['@supabase/supabase-js'] = '2.111.0'
+          pkg_path.write_text(json.dumps(pkg, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+
+          path = Path('web-admin/src/main.js')
+          src = path.read_text(encoding='utf-8')
+
+          anchor = "async function refreshSessionIfNeeded() {\n"
+          helper = """async function bindSupabaseClientSession() {
+  if (!state.session?.access_token || !state.session?.refresh_token) throw new Error('Phiên đăng nhập không đầy đủ.');
+  const { data, error } = await realtimeClient.auth.setSession({
+    access_token: state.session.access_token,
+    refresh_token: state.session.refresh_token,
+  });
+  if (error) throw error;
+  const managed = data?.session;
+  if (managed?.access_token) {
+    saveSession({
+      ...state.session,
+      access_token: managed.access_token,
+      refresh_token: managed.refresh_token || state.session.refresh_token,
+      expires_at: managed.expires_at || state.session.expires_at,
+    });
+  }
+  await realtimeClient.realtime.setAuth();
+}
+"""
+          if anchor not in src:
+              raise SystemExit('refreshSessionIfNeeded anchor missing')
+          if 'async function bindSupabaseClientSession()' not in src:
+              src = src.replace(anchor, helper + anchor, 1)
+
+          old = "  await realtimeClient.realtime.setAuth(state.session.access_token);\n}"
+          if old not in src:
+              raise SystemExit('refresh explicit setAuth anchor missing')
+          src = src.replace(old, "}", 1)
+
+          old = "  await realtimeClient.realtime.setAuth(state.session.access_token);\n  const subscribeStatus = (kind) => (status) => {"
+          new = "  await bindSupabaseClientSession();\n  const subscribeStatus = (kind) => (status) => {"
+          if old not in src:
+              raise SystemExit('startRealtime explicit setAuth anchor missing')
+          src = src.replace(old, new, 1)
+
+          required = [
+              'async function bindSupabaseClientSession()',
+              'await realtimeClient.auth.setSession({',
+              'await realtimeClient.realtime.setAuth();',
+              'await bindSupabaseClientSession();',
+          ]
+          for token in required:
+              if token not in src:
+                  raise SystemExit(f'missing guardrail: {token}')
+          if 'realtime.setAuth(state.session.access_token)' in src:
+              raise SystemExit('stale manual realtime token binding remains')
+          path.write_text(src, encoding='utf-8')
+          PY
+
+      - name: Build Web Admin
+        shell: bash
+        run: |
+          npm --prefix web-admin install --ignore-scripts --no-audit --no-fund --no-package-lock
+          npm --prefix web-admin run build
+
+      - name: Verify auth/realtime guardrails
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q '"@supabase/supabase-js": "2.111.0"' web-admin/package.json
+          grep -q 'await realtimeClient.auth.setSession({' web-admin/src/main.js
+          grep -q 'await realtimeClient.realtime.setAuth();' web-admin/src/main.js
+          grep -q 'await bindSupabaseClientSession();' web-admin/src/main.js
+          ! grep -q 'realtime.setAuth(state.session.access_token)' web-admin/src/main.js
+
+      - name: Commit fix and remove one-shot workflow
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add web-admin/package.json web-admin/src/main.js
+          git rm .github/workflows/fix-web-realtime-session-once.yml
+          git commit -m 'fix(web): bind authenticated session to private realtime channels'
+          git push origin HEAD:target-final-20260814-impl
