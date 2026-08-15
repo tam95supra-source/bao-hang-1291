@@ -595,7 +595,7 @@ function validateBackupAccount_(book,accountId,deviceId,role) {
 }
 
 function requireIntegrationSecret_(body) { const expected=String(PropertiesService.getScriptProperties().getProperty('WEBHOOK_SECRET')||''); if(!expected||!constantEqual_(String(body.secret||''),expected))throw new Error('UNAUTHORIZED'); }
-function parseBody_(e) { if(!e||!e.postData)return {}; const raw=String(e.postData.contents||''); if(raw.length>2_000_000)throw new Error('REQUEST_TOO_LARGE'); return raw?JSON.parse(raw):{}; }
+function parseBody_(e) { if(!e||!e.postData)return {}; const raw=String(e.postData.contents||''); if(raw.length>2000000)throw new Error('REQUEST_TOO_LARGE'); return raw?JSON.parse(raw):{}; }
 function normalizeSku_(value) { return String(value||'').trim().toUpperCase(); }
 function safeError_(error) { const text=String(error instanceof Error?error.message:error||'ERROR'); return text.replace(/Bearer\s+[A-Za-z0-9._-]+/gi,'Bearer [REDACTED]').slice(0,300); }
 function canonicalJson_(value) { return JSON.stringify(sortObject_(value)); }
