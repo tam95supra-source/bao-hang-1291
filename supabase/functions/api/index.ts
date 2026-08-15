@@ -97,7 +97,7 @@ async function notifyUsers(userIds: string[], issue: Record<string, unknown>, st
   if (!unique.length) return;
   const issueVersion = Math.max(1, Number(issue.issue_version ?? 1));
   const titleMap: Record<string, string> = {
-    OPEN: `Báo thiếu • SKU ${issue.sku}`,
+    OPEN: `CÓ SKU CẦN XỬ LÝ • SKU ${issue.sku}`,
     CLAIMED: `Đã nhận xử lý • SKU ${issue.sku}`,
     AVAILABLE: `ĐÃ CÓ HÀNG • SKU ${issue.sku}`,
     SKIP_ALLOWED: `CHO PHÉP SKIP • SKU ${issue.sku}`,
@@ -528,8 +528,10 @@ async function route(req: Request) {
       const { data, error } = await admin.rpc("report_shortage_atomic", { p_sku: required(body.sku, "SKU"), p_reporter: context.userId, p_client_request_id: String(body.client_request_id ?? "") || null });
       if (error) throw error;
       const issue = data.issue;
-      const message = data.already_reported ? `SKU ${issue.sku} vừa có thêm lượt báo; tổng ${issue.report_count} lượt.` : `Picker ${context.profile.full_name} báo thiếu SKU ${issue.sku}.`;
-      if (!data.duplicate_request) await notifyUsers(await inventUserIds(), issue, "OPEN", message);
+      if (!data.duplicate_request && !data.already_reported) {
+        const message = `Picker ${context.profile.full_name} vừa báo thiếu SKU ${issue.sku}. Chọn NHẬN XỬ LÝ nếu bạn tiếp nhận SKU này.`;
+        await notifyUsers(await inventUserIds(), issue, "OPEN", message);
+      }
       return context.effectiveRole === "PICKER" ? { ...data, issue: pickerIssue(issue) } : data;
     }
     case "active-issues": requireRole(context, ["ADMIN", "ADMIN_INVENT", "INVENT"]); return { issues: await issueRows(undefined, ACTIVE_STATUSES) };
