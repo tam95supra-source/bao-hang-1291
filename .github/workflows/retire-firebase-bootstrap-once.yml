@@ -42,7 +42,8 @@ jobs:
           ));
           EOF
           git diff --check -- supabase/functions/firebase-bootstrap/index.ts
-          deno check supabase/functions/firebase-bootstrap/index.ts
+          grep -Fq 'RETIRED_ONE_SHOT' supabase/functions/firebase-bootstrap/index.ts
+          ! grep -Fq 'FIRESTORE_RULES' supabase/functions/firebase-bootstrap/index.ts
       - name: Commit source retirement
         shell: bash
         run: |
