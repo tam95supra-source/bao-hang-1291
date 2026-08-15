@@ -41,7 +41,11 @@ function staffRole(position: string, employeeCode: string): Role {
     : "PICKER";
 }
 function roleRank(role: string): number { return role === "ADMIN" ? 3 : role === "ADMIN_INVENT" ? 2 : 1; }
-function errorText(error: unknown): string { return error instanceof Error ? error.message : String(error ?? "UNKNOWN"); }
+function errorText(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error !== null) { try { return JSON.stringify(error); } catch { /* ignore */ } }
+  return String(error ?? "UNKNOWN");
+}
 function materiallyDifferent(p: Profile, s: Staff): boolean {
   return p.full_name !== s.full_name || p.contractor !== s.contractor || p.role !== s.role || p.source_position !== s.source_position || !p.active;
 }
@@ -143,13 +147,11 @@ async function fetchFilteredStaff(): Promise<{ staff: Staff[]; sourceHash: strin
   return { staff, sourceHash: await sha256(canonical), responseBytes };
 }
 
-async function defaultPassword(employeeCode: string, adminEmployeeCode?: string): Promise<string> {
-  const { data, error } = await admin.rpc("staff_default_password", {
-    p_employee_code: employeeCode,
-    p_admin_employee_code: adminEmployeeCode ?? null,
-  });
-  if (error || !data) throw new Error("STAFF_DEFAULT_PASSWORD_NOT_CONFIGURED");
-  return String(data);
+async function defaultPassword(_employeeCode: string, _adminEmployeeCode?: string): Promise<string> {
+  const { data, error } = await admin.rpc("get_staff_default_password_service");
+  const password = String(data ?? "");
+  if (error || password.length < 8) throw new Error("STAFF_DEFAULT_PASSWORD_NOT_CONFIGURED");
+  return password;
 }
 
 async function writeAudit(runId: string, employeeCode: string, action: string, before: unknown, after: unknown, ok: boolean, error?: string) {
@@ -165,7 +167,7 @@ async function writeAudit(runId: string, employeeCode: string, action: string, b
 }
 
 async function createStaff(runId: string, s: Staff): Promise<{ ok: boolean; id?: string; error?: string }> {
-  const email = `${s.employee_code.toLowerCase()}@auth.bao-hang-1291.invalid`;
+  const email = `${s.employee_code.toLowerCase()}@bao-hang-1291.local`;
   try {
     const password = await defaultPassword(s.employee_code);
     const { data: authData, error: authError } = await admin.auth.admin.createUser({ email, password, email_confirm: true });
@@ -181,7 +183,7 @@ async function createStaff(runId: string, s: Staff): Promise<{ ok: boolean; id?:
       source_kind: "GSHEET",
       source_position: s.source_position,
       protected_account: s.employee_code === PROTECTED_ADMIN_CODE,
-      last_seen_in_staff_source_at: new Date().toISOString(),
+      source_last_seen_at: new Date().toISOString(),
     }, { onConflict: "id" });
     if (profileError) {
       await admin.auth.admin.deleteUser(id).catch(() => undefined);
@@ -207,10 +209,10 @@ async function updateStaff(runId: string, current: Profile, s: Staff): Promise<{
       contractor: s.contractor,
       role: protectedAccount && roleRank(current.role) > roleRank(s.role) ? current.role : s.role,
       active: true,
-      source_kind: "GSHEET",
+      source_kind: protectedAccount ? current.source_kind : "GSHEET",
       source_position: s.source_position,
       protected_account: protectedAccount,
-      last_seen_in_staff_source_at: new Date().toISOString(),
+      source_last_seen_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
     const { error } = await admin.from("profiles").update(patch).eq("id", current.id);
@@ -250,7 +252,7 @@ async function deactivateStaff(runId: string, current: Profile): Promise<{ ok: b
 async function runWatch(triggerSource: string) {
   const startedAt = new Date().toISOString();
   const { staff, sourceHash, responseBytes } = await fetchFilteredStaff();
-  const { data: lastRun } = await admin.from("staff_sync_runs").select("source_hash").in("status", ["SUCCEEDED", "PARTIAL", "NO_CHANGE"]).order("started_at", { ascending: false }).limit(1).maybeSingle();
+  const { data: lastRun } = await admin.from("staff_sync_runs").select("source_hash").in("status", ["SUCCEEDED", "NO_CHANGE"]).order("started_at", { ascending: false }).limit(1).maybeSingle();
   const { data: run, error: runError } = await admin.from("staff_sync_runs").insert({
     trigger_source: triggerSource,
     status: lastRun?.source_hash === sourceHash ? "NO_CHANGE" : "RUNNING",
@@ -289,11 +291,11 @@ async function runWatch(triggerSource: string) {
       const r = await updateStaff(runId, current, s);
       if (r.ok) updated++; else { failed++; if (r.error) errors.push(`${s.employee_code}: ${r.error}`); }
     } else {
-      await admin.from("profiles").update({ last_seen_in_staff_source_at: new Date().toISOString() }).eq("id", current.id);
+      await admin.from("profiles").update({ source_last_seen_at: new Date().toISOString() }).eq("id", current.id);
     }
   }
 
-  for (const current of currentByCode.values()) {
+  if (failed === 0) for (const current of currentByCode.values()) {
     if (current.source_kind !== "GSHEET" || !current.active || seen.has(current.employee_code.toLowerCase())) continue;
     const r = await deactivateStaff(runId, current);
     if (r.ok) deactivated++; else { failed++; if (r.error) errors.push(`${current.employee_code}: ${r.error}`); }

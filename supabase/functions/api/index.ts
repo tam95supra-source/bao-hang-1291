@@ -10,8 +10,8 @@ const MAX_LOG_BYTES = 2 * 1024 * 1024;
 const ACTIVE_STATUSES = ["OPEN", "CLAIMED", "SEARCHING", "REPLENISHING"];
 const SITE_ID = "1291";
 const PROTECTED_ADMIN_CODE = "6281280";
-const STAFF_SHEET_ID = "1FRROqCp1lmkuHc3lc4UBpVI5_ZrtiPI1thlEymv458E";
-const STAFF_SHEET_NAME = "DANH MỤC NHÂN SỰ";
+const STAFF_SHEET_ID = "1HLBzpxHLd8qoTJopOA7M_q0dDvO56G0Tb4curKZV7EM";
+const STAFF_SHEET_NAME = "Trang tính1";
 
 type Role = "ADMIN" | "ADMIN_INVENT" | "INVENT" | "PICKER";
 type Profile = { id: string; employee_code: string; full_name: string; contractor: string; role: Role; active: boolean; source_kind?: string; source_position?: string; protected_account?: boolean };
@@ -383,7 +383,7 @@ async function resendPendingCritical() {
 async function slaTick(req: Request) {
   const expected=Deno.env.get("CRON_SECRET")??"";if(!expected||req.headers.get("x-cron-secret")!==expected)throw new HttpError(403,"Cron secret không đúng");
   const {data:events,error}=await admin.rpc("process_sla");if(error)throw error;for(const event of events??[]){const issue=(await issueRows([event.issue_id]))[0];if(issue)await notifyUsers(await inventUserIds(),issue,issue.status,`SKU ${issue.sku} đã vượt mốc thời gian vận hành; cần kiểm tra và phản hồi.`);}
-  await resendPendingCritical();if(await staffSyncDue().catch(()=>false)){try{await syncStaffDirectory("AUTO",null);}catch(error){console.warn("Staff sync deferred",errorText(error));}}
+  await resendPendingCritical();
   return {processed:events?.length??0,auto_skipped:0,critical_reminder_checked:true};
 }
 
@@ -483,6 +483,14 @@ async function syncStaffDirectory(triggerSource:"AUTO"|"MANUAL"|"DEPLOY",actorId
     if(failed===0){const missing=(profiles??[]).filter((p:any)=>p.source_kind==="GSHEET"&&!p.protected_account&&p.employee_code!==PROTECTED_ADMIN_CODE&&!seen.includes(String(p.employee_code).toLowerCase())&&p.active);for(const p of missing){const {error}=await admin.from("profiles").update({active:false,updated_at:new Date().toISOString()}).eq("id",p.id);if(error){failed++;failures.push(`${p.employee_code}: ${errorText(error)}`);continue;}deactivated++;await admin.from("sheet_export_queue").insert({event_type:"USER_UPSERT",payload:{id:p.id,employee_code:p.employee_code,full_name:p.full_name,contractor:p.contractor,role:p.role,active:false}});}}
     await admin.from("profiles").update({role:"ADMIN",active:true,protected_account:true}).eq("employee_code",PROTECTED_ADMIN_CODE);const status=failed?"PARTIAL":"SUCCEEDED";await admin.from("staff_sync_runs").update({status,source_hash:sourceHash,source_rows:Math.max(0,rows.length-1),eligible_rows:byCode.size,created_count:created,updated_count:updated,deactivated_count:deactivated,failed_count:failed,error_summary:failures.slice(0,20).join("; ").slice(0,3000),finished_at:new Date().toISOString()}).eq("id",run.id);const {error:broadcastError}=await admin.rpc("broadcast_staff_change_service",{p_payload:{run_id:run.id,status,created,updated,deactivated}});if(broadcastError)console.warn("Staff realtime broadcast deferred",errorText(broadcastError));return {status,run_id:run.id,eligible_rows:byCode.size,created,updated,deactivated,failed,errors:failures.slice(0,20)};
   }catch(error){await admin.from("staff_sync_runs").update({status:"FAILED",failed_count:1,error_summary:errorText(error).slice(0,3000),finished_at:new Date().toISOString()}).eq("id",run.id);throw error;}
+}
+async function triggerDedicatedStaffWatch(){
+  const secret=Deno.env.get("CRON_SECRET")??"";
+  if(!secret)throw new HttpError(503,"Staff Watch chưa được cấu hình");
+  const response=await fetch(`${SUPABASE_URL}/functions/v1/staff-watch`,{method:"POST",headers:{"content-type":"application/json","x-cron-secret":secret},body:"{}"});
+  const text=await response.text();
+  if(!response.ok)throw new HttpError(502,`Staff Watch HTTP ${response.status}`);
+  try{return JSON.parse(text);}catch{throw new HttpError(502,"Staff Watch trả dữ liệu không hợp lệ");}
 }
 async function staffSyncStatus(context:Context){requireRole(context,["ADMIN","ADMIN_INVENT"]);const {data,error}=await admin.from("staff_sync_runs").select("*").order("started_at",{ascending:false}).limit(10);if(error)throw error;return {runs:data??[],source_sheet_id:STAFF_SHEET_ID,source_sheet_name:STAFF_SHEET_NAME};}
 async function replaceCatalog(context:Context,body:Record<string,unknown>){requireRole(context,["ADMIN","ADMIN_INVENT"]);const items=Array.isArray(body.items)?body.items as Record<string,unknown>[]:[];if(!items.length||items.length>10000)throw new HttpError(400,"File danh mục cần từ 1 đến 10.000 SKU");const clean=items.map(item=>({sku:required(item.sku,"SKU").trim(),product_name:required(item.product_name,"Tên sản phẩm").trim()}));const canonical=clean.slice().sort((a,b)=>a.sku.localeCompare(b.sku)).map(x=>`${x.sku}|${x.product_name}`).join("\n");const sourceSha=await sha256(canonical);const {data,error}=await admin.rpc("replace_sku_catalog_service",{p_items:clean,p_actor:context.userId,p_source_name:String(body.source_name??"Tồn Bin XLSX").slice(0,240),p_source_sha:sourceSha});if(error)throw error;return {...data,source_sha256:sourceSha};}
@@ -714,7 +722,7 @@ async function route(req: Request) {
       requireRole(context, ["ADMIN", "ADMIN_INVENT"]);
       throw new HttpError(410, "Chức năng tồn kho chi tiết đã ngừng. Vui lòng dùng Danh mục SKU / Tên hàng ở phiên bản mới.");
     case "replace-catalog": return replaceCatalog(context, body);
-    case "staff-sync-now": requireRole(context,["ADMIN","ADMIN_INVENT"]); return syncStaffDirectory("MANUAL",context.userId);
+    case "staff-sync-now": requireRole(context,["ADMIN","ADMIN_INVENT"]); return triggerDedicatedStaffWatch();
     case "staff-sync-status": return staffSyncStatus(context);
     case "service-metrics": return serviceMetrics(context);
     case "delete-user": return deleteManagedUser(context, body);
