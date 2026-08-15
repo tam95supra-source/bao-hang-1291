@@ -119,13 +119,30 @@ async function fetchProfile(accessToken, userId) {
   if (!Array.isArray(rows) || !rows.length) throw new Error('Tài khoản chưa có hồ sơ nhân sự.');
   return rows[0];
 }
+async function bindSupabaseClientSession() {
+  if (!state.session?.access_token || !state.session?.refresh_token) throw new Error('Phiên đăng nhập không đầy đủ.');
+  const { data, error } = await realtimeClient.auth.setSession({
+    access_token: state.session.access_token,
+    refresh_token: state.session.refresh_token,
+  });
+  if (error) throw error;
+  const managed = data?.session;
+  if (managed?.access_token) {
+    saveSession({
+      ...state.session,
+      access_token: managed.access_token,
+      refresh_token: managed.refresh_token || state.session.refresh_token,
+      expires_at: managed.expires_at || state.session.expires_at,
+    });
+  }
+  await realtimeClient.realtime.setAuth();
+}
 async function refreshSessionIfNeeded() {
   if (!state.session) throw new Error('Phiên đăng nhập không tồn tại.');
   const now = Math.floor(Date.now() / 1000);
   if ((state.session.expires_at || 0) > now + 120) return;
   const token = await authToken({ refresh_token: state.session.refresh_token }, 'refresh_token');
   saveSession({ ...state.session, access_token: token.access_token, refresh_token: token.refresh_token || state.session.refresh_token, expires_at: now + Number(token.expires_in || 3600) });
-  await realtimeClient.realtime.setAuth(state.session.access_token);
 }
 async function api(action, payload = {}) {
   await refreshSessionIfNeeded();
@@ -285,7 +302,7 @@ async function startRealtime() {
   await stopRealtime();
   if (!state.session || document.hidden) return;
   await refreshSessionIfNeeded().catch(() => {});
-  await realtimeClient.realtime.setAuth(state.session.access_token);
+  await bindSupabaseClientSession();
   const subscribeStatus = (kind) => (status) => {
     state.channelStatus[kind] = status;
     syncRealtimeHealth();
