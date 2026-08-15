@@ -1,0 +1,21 @@
+name: Dispatch guarded web realtime deploy once
+
+on:
+  push:
+    branches:
+      - target-final-20260814-impl
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch existing guarded Web Admin deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run deploy-web-admin.yml --repo tam95supra-source/bao-hang-1291 --ref target-final-20260814-impl
