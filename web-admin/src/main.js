@@ -135,7 +135,7 @@ async function bindSupabaseClientSession() {
       expires_at: managed.expires_at || state.session.expires_at,
     });
   }
-  await realtimeClient.realtime.setAuth();
+  await realtimeClient.realtime.setAuth(state.session.access_token);
 }
 async function refreshSessionIfNeeded() {
   if (!state.session) throw new Error('Phiên đăng nhập không tồn tại.');

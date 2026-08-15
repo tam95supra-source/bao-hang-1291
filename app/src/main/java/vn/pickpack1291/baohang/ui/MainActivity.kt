@@ -56,6 +56,10 @@ class MainActivity : AppCompatActivity() {
     private var searchJob: Job? = null
     private var realtimeAuthJob: Job? = null
     private var currentScreen = ""
+    private var inventSelectedTab = 0
+    private var inventRefresh: (() -> Unit)? = null
+    private var inventRenderSignature = ""
+    private var activeAlertEventId: String? = null
 
     private enum class ButtonTone { PRIMARY, SECONDARY, SUCCESS, DANGER }
 
@@ -65,7 +69,7 @@ class MainActivity : AppCompatActivity() {
             onIssueChanged = {
                 runOnUiThread {
                     when (currentScreen) {
-                        SCREEN_INVENT -> showInventBoard()
+                        SCREEN_INVENT -> inventRefresh?.invoke()
                         SCREEN_PICKER -> lifecycleScope.launch { checkPendingAlerts() }
                     }
                 }
@@ -174,6 +178,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun page(title: String, screen: String): LinearLayout {
         currentScreen = screen
+        if (screen != SCREEN_INVENT) {
+            inventRefresh = null
+            inventRenderSignature = ""
+        }
         container.removeAllViews()
         updateBackButton()
         val scroll = ScrollView(this).apply { isFillViewport = true }
@@ -248,6 +256,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun showInventBoard() {
         val content = page("Xử lý báo hàng", SCREEN_INVENT)
+        if (content.childCount > 0) content.removeViewAt(0)
+        val titleRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val title = text("Xử lý báo hàng", 23, true)
+        val totalBadge = text("0 SKU", 14, true).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(11), dp(7), dp(11), dp(7))
+            setBackgroundResource(R.drawable.bg_button_secondary)
+        }
+        titleRow.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        titleRow.addView(totalBadge, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        content.addView(titleRow, 0)
+
         val status = text("Đang tải dữ liệu…", 13, false).apply { setTextColor(getColor(R.color.text_secondary)) }
         val tabs = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val boardContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -257,40 +277,74 @@ class MainActivity : AppCompatActivity() {
         addDiagnosticsButton(content)
 
         var board: IssueBoard? = null
-        var selected = 0
+        inventRenderSignature = ""
         val tabButtons = mutableListOf<Button>()
+
         fun updateTabs() {
             tabButtons.forEachIndexed { index, tab ->
-                val active = index == selected
+                val active = index == inventSelectedTab
                 tab.setBackgroundResource(if (active) R.drawable.bg_button_primary else R.drawable.bg_button_secondary)
                 tab.setTextColor(getColor(if (active) R.color.white else R.color.navy_900))
             }
         }
-        fun draw() {
+
+        fun draw(force: Boolean = false) {
             val data = board ?: return
-            val list = when (selected) {
+            val list = when (inventSelectedTab) {
                 1 -> data.claimed
                 2 -> data.available
                 3 -> data.skipped
                 else -> data.open
             }
-            boardContainer.removeAllViews()
-            if (list.isEmpty()) boardContainer.addView(infoBox("Không có SKU trong nhóm này."))
-            list.forEach { issue -> boardContainer.addView(issueCard(issue, selected) { loadInventBoard(status) { board = it; draw() } }) }
-            status.text = when (selected) {
+            totalBadge.text = "${data.open.size + data.claimed.size} SKU"
+            status.text = when (inventSelectedTab) {
                 1 -> "${list.size} SKU đang xử lý${if (app.session.effectiveRole == UserRole.INVENT) " của tôi" else ""}"
                 2 -> "${list.size} SKU đã có hàng"
                 3 -> "${list.size} SKU đã được cho phép bỏ qua"
                 else -> "${list.size} SKU đang chờ xử lý"
             }
             updateTabs()
+
+            val signature = buildString {
+                append(inventSelectedTab).append('|')
+                list.forEach { append(it.id).append(':').append(it.status.wire).append(':').append(it.reportCount).append(':').append(it.issueVersion).append(';') }
+            }
+            if (!force && signature == inventRenderSignature) return
+            inventRenderSignature = signature
+
+            val scroll = content.parent as? ScrollView
+            val oldScrollY = scroll?.scrollY ?: 0
+            boardContainer.removeAllViews()
+            if (list.isEmpty()) boardContainer.addView(infoBox("Không có SKU trong nhóm này."))
+            list.forEach { issue -> boardContainer.addView(issueCard(issue, inventSelectedTab) { inventRefresh?.invoke() }) }
+            scroll?.post { scroll.scrollTo(0, oldScrollY) }
         }
+
+        fun refreshBoard(initial: Boolean) {
+            if (initial && board == null) status.text = "Đang tải dữ liệu…"
+            lifecycleScope.launch {
+                runCatching { app.repository.loadIssueBoard() }
+                    .onSuccess {
+                        board = it
+                        draw(false)
+                    }
+                    .onFailure {
+                        app.diagnostics.error("issue_board_load_failed", it)
+                        if (board == null) status.text = "Không tải được dữ liệu: ${it.message}"
+                    }
+            }
+        }
+
         val labels = listOf("Chờ xử lý", "Đang xử lý", "Đã có hàng", "Đã bỏ qua")
         labels.chunked(2).forEachIndexed { rowIndex, rowLabels ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
             rowLabels.forEachIndexed { columnIndex, label ->
                 val index = rowIndex * 2 + columnIndex
-                val tab = button(label) { selected = index; draw() }
+                val tab = button(label) {
+                    inventSelectedTab = index
+                    inventRenderSignature = ""
+                    draw(true)
+                }
                 tabButtons += tab
                 row.addView(tab, LinearLayout.LayoutParams(0, dp(48), 1f).apply { setMargins(dp(2), dp(3), dp(2), dp(3)) })
             }
@@ -298,7 +352,8 @@ class MainActivity : AppCompatActivity() {
         }
         tabs.setPadding(0, dp(3), 0, dp(7))
         updateTabs()
-        loadInventBoard(status) { board = it; draw() }
+        inventRefresh = { refreshBoard(false) }
+        refreshBoard(true)
     }
 
     private fun loadInventBoard(status: TextView, onLoaded: (IssueBoard) -> Unit) {
@@ -333,14 +388,14 @@ class MainActivity : AppCompatActivity() {
             })
             if (elevated) {
                 val direct = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-                direct.addView(button("Cho phép bỏ qua", ButtonTone.DANGER) { confirmIssueUpdate(issue, "NOT_FOUND", refresh) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(0, dp(5), dp(2), 0) })
-                direct.addView(button("Đã có hàng", ButtonTone.SUCCESS) { confirmIssueUpdate(issue, "AVAILABLE", refresh) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(dp(2), dp(5), 0, 0) })
+                direct.addView(button("CÓ HÀNG", ButtonTone.SUCCESS) { confirmIssueUpdate(issue, "AVAILABLE", refresh) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(0, dp(5), dp(2), 0) })
+                direct.addView(button("SKIP HÀNG", ButtonTone.DANGER) { confirmIssueUpdate(issue, "NOT_FOUND", refresh) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(dp(2), dp(5), 0, 0) })
                 card.addView(direct)
             }
         } else if (bucket == 1) {
-            val actions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            actions.addView(button("Đã có hàng / đã châm hàng", ButtonTone.SUCCESS) { confirmIssueUpdate(issue, "AVAILABLE", refresh) })
-            actions.addView(button("Không tìm thấy • cho phép bỏ qua", ButtonTone.DANGER) { confirmIssueUpdate(issue, "NOT_FOUND", refresh) })
+            val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            actions.addView(button("CÓ HÀNG", ButtonTone.SUCCESS) { confirmIssueUpdate(issue, "AVAILABLE", refresh) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(0, dp(5), dp(2), 0) })
+            actions.addView(button("SKIP HÀNG", ButtonTone.DANGER) { confirmIssueUpdate(issue, "NOT_FOUND", refresh) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(dp(2), dp(5), 0, 0) })
             card.addView(actions)
             if (elevated) card.addView(button("Điều phối lại") { reassignIssue(issue, refresh) })
         } else if (bucket == 3) {
@@ -711,18 +766,55 @@ class MainActivity : AppCompatActivity() {
     private fun navigateBack() { if (isRoleRoot()) finish() else renderForRole() }
 
     private suspend fun checkPendingAlerts() {
-        if (!app.session.isLoggedIn || app.session.effectiveRole != UserRole.PICKER) return
+        if (!app.session.isLoggedIn || activeAlertEventId != null) return
         runCatching { app.repository.pendingAlerts() }.onSuccess { alerts ->
-            val alert = alerts.firstOrNull { it.status in setOf(IssueStatus.AVAILABLE, IssueStatus.SKIP_ALLOWED) } ?: return@onSuccess
+            val effectiveRole = app.session.effectiveRole
+            val alert = alerts.firstOrNull {
+                when (it.status) {
+                    IssueStatus.OPEN -> effectiveRole in setOf(UserRole.INVENT, UserRole.ADMIN_INVENT, UserRole.ADMIN)
+                    IssueStatus.AVAILABLE, IssueStatus.SKIP_ALLOWED -> true
+                    else -> false
+                }
+            } ?: return@onSuccess
+            activeAlertEventId = alert.eventId
             runCatching { app.repository.markAlertReceived(alert.eventId) }
-            val dialog = AlertDialog.Builder(this@MainActivity)
-                .setTitle(alert.title.ifBlank { alert.status.label })
-                .setMessage("${alert.message}\n\nTrạng thái v${alert.issueVersion}")
-                .setCancelable(false)
-                .setPositiveButton("Xác nhận") { _, _ -> lifecycleScope.launch { app.repository.acknowledgeAlert(alert.eventId) } }
-                .create()
-            dialog.setOnShowListener { lifecycleScope.launch { runCatching { app.repository.markAlertDisplayed(alert.eventId) } } }
-            if (!isFinishing && !isDestroyed) dialog.show()
+
+            if (alert.status == IssueStatus.OPEN) {
+                val sku = alert.issue?.sku.orEmpty()
+                val dialog = AlertDialog.Builder(this@MainActivity)
+                    .setTitle(alert.title.ifBlank { "CÓ SKU CẦN XỬ LÝ" })
+                    .setMessage("${alert.message}\n\nCảnh báo này chỉ hiển thị lần đầu của đợt SKU.")
+                    .setNegativeButton("ĐỂ SAU", null)
+                    .setPositiveButton("NHẬN XỬ LÝ") { _, _ ->
+                        val issueId = alert.issue?.id.orEmpty()
+                        if (issueId.isNotBlank()) {
+                            lifecycleScope.launch {
+                                runCatching { app.repository.claimIssue(issueId) }
+                                    .onSuccess {
+                                        toast("Đã nhận xử lý SKU ${sku.ifBlank { it.sku }}")
+                                        inventRefresh?.invoke()
+                                    }
+                                    .onFailure { toast(it.message ?: "Không nhận được SKU") }
+                            }
+                        }
+                    }
+                    .create()
+                dialog.setOnShowListener {
+                    lifecycleScope.launch { runCatching { app.repository.markAlertDisplayed(alert.eventId) } }
+                }
+                dialog.setOnDismissListener { activeAlertEventId = null }
+                if (!isFinishing && !isDestroyed) dialog.show() else activeAlertEventId = null
+            } else {
+                val dialog = AlertDialog.Builder(this@MainActivity)
+                    .setTitle(alert.title.ifBlank { alert.status.label })
+                    .setMessage("${alert.message}\n\nTrạng thái v${alert.issueVersion}")
+                    .setCancelable(false)
+                    .setPositiveButton("Xác nhận") { _, _ -> lifecycleScope.launch { app.repository.acknowledgeAlert(alert.eventId) } }
+                    .create()
+                dialog.setOnShowListener { lifecycleScope.launch { runCatching { app.repository.markAlertDisplayed(alert.eventId) } } }
+                dialog.setOnDismissListener { activeAlertEventId = null }
+                if (!isFinishing && !isDestroyed) dialog.show() else activeAlertEventId = null
+            }
         }.onFailure { app.diagnostics.warn("pending_alert_check_failed", mapOf("error" to it.message.orEmpty())) }
     }
 
