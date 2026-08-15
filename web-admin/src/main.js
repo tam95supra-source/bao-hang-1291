@@ -32,6 +32,7 @@ const state = {
   catalogChannel: null,
   staffChannel: null,
   realtimeStatus: 'OFFLINE',
+  channelStatus: { issue: 'OFFLINE', catalog: 'OFFLINE', staff: 'OFFLINE' },
   fallbackTimer: null,
   refreshTimers: new Map(),
   liveRefresh: { issue: null, staff: null, catalog: null },
@@ -81,6 +82,7 @@ async function stopRealtime() {
   state.staffChannel = null;
   for (const channel of channels) await realtimeClient.removeChannel(channel).catch(() => {});
   state.realtimeStatus = 'OFFLINE';
+  state.channelStatus = { issue: 'OFFLINE', catalog: 'OFFLINE', staff: 'OFFLINE' };
 }
 function clearSession() {
   stopRealtime();
@@ -123,7 +125,7 @@ async function refreshSessionIfNeeded() {
   if ((state.session.expires_at || 0) > now + 120) return;
   const token = await authToken({ refresh_token: state.session.refresh_token }, 'refresh_token');
   saveSession({ ...state.session, access_token: token.access_token, refresh_token: token.refresh_token || state.session.refresh_token, expires_at: now + Number(token.expires_in || 3600) });
-  realtimeClient.realtime.setAuth(state.session.access_token);
+  await realtimeClient.realtime.setAuth(state.session.access_token);
 }
 async function api(action, payload = {}) {
   await refreshSessionIfNeeded();
@@ -254,36 +256,56 @@ function setRealtimeHealth(value, kind = '') {
   el.className = `health-chip ${kind}`;
   $('em', el).textContent = value;
 }
+function expectedRealtimeKinds() {
+  if (role() === 'PICKER') return ['issue', 'catalog'];
+  if (['ADMIN', 'ADMIN_INVENT'].includes(role())) return ['issue', 'staff', 'catalog'];
+  return ['issue', 'catalog'];
+}
+function syncRealtimeHealth() {
+  const expected = expectedRealtimeKinds();
+  const statuses = expected.map((kind) => state.channelStatus[kind]);
+  const allOnline = statuses.every((status) => status === 'SUBSCRIBED');
+  const hasFailure = statuses.some((status) => ['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(status));
+  if (allOnline) {
+    const wasOnline = state.realtimeStatus === 'ONLINE';
+    setRealtimeHealth('ONLINE', 'good');
+    clearInterval(state.fallbackTimer);
+    state.fallbackTimer = null;
+    if (!wasOnline) expected.forEach(runLiveRefresh);
+    return;
+  }
+  if (hasFailure) {
+    setRealtimeHealth('FALLBACK', 'warn');
+    ensureFallbackPolling();
+  } else {
+    setRealtimeHealth('ĐANG NỐI');
+  }
+}
 async function startRealtime() {
   await stopRealtime();
   if (!state.session || document.hidden) return;
   await refreshSessionIfNeeded().catch(() => {});
-  realtimeClient.realtime.setAuth(state.session.access_token);
-  const subscribeStatus = (status) => {
-    if (status === 'SUBSCRIBED') {
-      setRealtimeHealth('ONLINE', 'good');
-      clearInterval(state.fallbackTimer); state.fallbackTimer = null;
-    } else if (['CHANNEL_ERROR','TIMED_OUT','CLOSED'].includes(status)) {
-      setRealtimeHealth('FALLBACK', 'warn');
-      ensureFallbackPolling();
-    }
+  await realtimeClient.realtime.setAuth(state.session.access_token);
+  const subscribeStatus = (kind) => (status) => {
+    state.channelStatus[kind] = status;
+    syncRealtimeHealth();
   };
   if (role() === 'PICKER') {
     state.issueChannel = realtimeClient.channel(`user:1291:${state.session.profile.id}`, { config: { private: true } })
       .on('broadcast', { event: 'picker_status_changed' }, () => scheduleLiveRefresh('issue'))
-      .subscribe(subscribeStatus);
+      .subscribe(subscribeStatus('issue'));
   } else {
     state.issueChannel = realtimeClient.channel('site:1291:issues', { config: { private: true } })
       .on('broadcast', { event: 'issue_changed' }, () => scheduleLiveRefresh('issue'))
-      .subscribe(subscribeStatus);
+      .subscribe(subscribeStatus('issue'));
     if (['ADMIN','ADMIN_INVENT'].includes(role())) {
       state.staffChannel = realtimeClient.channel('site:1291:staff', { config: { private: true } })
-        .on('broadcast', { event: 'staff_changed' }, () => scheduleLiveRefresh('staff')).subscribe(subscribeStatus);
+        .on('broadcast', { event: 'staff_changed' }, () => scheduleLiveRefresh('staff')).subscribe(subscribeStatus('staff'));
     }
   }
   state.catalogChannel = realtimeClient.channel('site:1291:catalog', { config: { private: true } })
-    .on('broadcast', { event: 'catalog_changed' }, () => scheduleLiveRefresh('catalog')).subscribe(subscribeStatus);
-  setTimeout(() => { if (state.realtimeStatus !== 'ONLINE') ensureFallbackPolling(); }, 6000);
+    .on('broadcast', { event: 'catalog_changed' }, () => scheduleLiveRefresh('catalog')).subscribe(subscribeStatus('catalog'));
+  setTimeout(() => { if (!expectedRealtimeKinds().every((kind) => state.channelStatus[kind] === 'SUBSCRIBED')) { setRealtimeHealth('FALLBACK', 'warn'); ensureFallbackPolling(); } }, 6000);
 }
 function ensureFallbackPolling() {
   if (state.fallbackTimer || document.hidden || !state.session) return;
