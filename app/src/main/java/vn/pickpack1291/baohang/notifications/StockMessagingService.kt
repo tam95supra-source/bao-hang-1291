@@ -104,9 +104,15 @@ class StockMessagingService : FirebaseMessagingService() {
                 .onFailure {
                     app.diagnostics.error("overlay_start_failed", it, mapOf("event_id" to eventId))
                     NotificationHelper.alert(this, sku, status, body, eventId)
+                    if (isHandlerOpenAlert && eventId.isNotBlank()) {
+                        scope.launch { runCatching { app.repository.markAlertDisplayed(eventId) } }
+                    }
                 }
         } else {
             NotificationHelper.alert(this, sku, status, body, eventId)
+            if (isHandlerOpenAlert && eventId.isNotBlank()) {
+                scope.launch { runCatching { app.repository.markAlertDisplayed(eventId) } }
+            }
         }
     }
 }

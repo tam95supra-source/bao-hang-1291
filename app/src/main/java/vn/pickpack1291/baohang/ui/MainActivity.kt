@@ -279,6 +279,7 @@ class MainActivity : AppCompatActivity() {
         var board: IssueBoard? = null
         inventRenderSignature = ""
         val tabButtons = mutableListOf<Button>()
+        val renderedSignatures = mutableMapOf<String, String>()
 
         fun updateTabs() {
             tabButtons.forEachIndexed { index, tab ->
@@ -305,19 +306,67 @@ class MainActivity : AppCompatActivity() {
             }
             updateTabs()
 
-            val signature = buildString {
-                append(inventSelectedTab).append('|')
-                list.forEach { append(it.id).append(':').append(it.status.wire).append(':').append(it.reportCount).append(':').append(it.issueVersion).append(';') }
-            }
-            if (!force && signature == inventRenderSignature) return
-            inventRenderSignature = signature
-
             val scroll = content.parent as? ScrollView
             val oldScrollY = scroll?.scrollY ?: 0
-            boardContainer.removeAllViews()
-            if (list.isEmpty()) boardContainer.addView(infoBox("Không có SKU trong nhóm này."))
-            list.forEach { issue -> boardContainer.addView(issueCard(issue, inventSelectedTab) { inventRefresh?.invoke() }) }
-            scroll?.post { scroll.scrollTo(0, oldScrollY) }
+            if (list.isEmpty()) {
+                val alreadyEmpty = boardContainer.childCount == 1 && boardContainer.getChildAt(0).tag == "__empty__"
+                if (!alreadyEmpty) {
+                    boardContainer.removeAllViews()
+                    boardContainer.addView(infoBox("Không có SKU trong nhóm này.").apply { tag = "__empty__" })
+                }
+                renderedSignatures.clear()
+                inventRenderSignature = "${inventSelectedTab}|empty"
+                return
+            }
+
+            if (boardContainer.childCount == 1 && boardContainer.getChildAt(0).tag == "__empty__") {
+                boardContainer.removeAllViews()
+            }
+
+            val desiredIds = list.map { it.id }
+            list.forEachIndexed { index, issue ->
+                val id = issue.id
+                val issueSignature = buildString {
+                    append(issue.status.wire).append(':')
+                    append(issue.reportCount).append(':')
+                    append(issue.issueVersion).append(':')
+                    append(issue.assignedId.orEmpty()).append(':')
+                    append(issue.assignedName).append(':')
+                    append(issue.latestReporterName).append(':')
+                    append(issue.recurrence30m)
+                }
+                var currentIndex = (0 until boardContainer.childCount)
+                    .firstOrNull { boardContainer.getChildAt(it).tag == id } ?: -1
+
+                if (currentIndex >= 0 && currentIndex != index) {
+                    val existing = boardContainer.getChildAt(currentIndex)
+                    boardContainer.removeViewAt(currentIndex)
+                    boardContainer.addView(existing, index)
+                    currentIndex = index
+                }
+
+                val needsReplace = currentIndex < 0 || force || renderedSignatures[id] != issueSignature
+                if (needsReplace) {
+                    val card = issueCard(issue, inventSelectedTab) { inventRefresh?.invoke() }.apply { tag = id }
+                    if (currentIndex >= 0) {
+                        boardContainer.removeViewAt(index)
+                        boardContainer.addView(card, index)
+                    } else {
+                        boardContainer.addView(card, index)
+                    }
+                }
+                renderedSignatures[id] = issueSignature
+            }
+
+            while (boardContainer.childCount > list.size) {
+                boardContainer.removeViewAt(boardContainer.childCount - 1)
+            }
+            renderedSignatures.keys.retainAll(desiredIds.toSet())
+            inventRenderSignature = buildString {
+                append(inventSelectedTab).append('|')
+                desiredIds.forEach { append(it).append(';') }
+            }
+            scroll?.post { if (scroll.scrollY != oldScrollY) scroll.scrollTo(0, oldScrollY) }
         }
 
         fun refreshBoard(initial: Boolean) {
@@ -343,6 +392,7 @@ class MainActivity : AppCompatActivity() {
                 val tab = button(label) {
                     inventSelectedTab = index
                     inventRenderSignature = ""
+                    renderedSignatures.clear()
                     draw(true)
                 }
                 tabButtons += tab
