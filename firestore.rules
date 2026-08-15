@@ -4,7 +4,7 @@ service cloud.firestore {
     function signedIn() { return request.auth != null; }
     function siteOk() { return signedIn() && request.auth.token.site == '1291'; }
     function role() { return request.auth.token.role; }
-    function isDrain() { return siteOk() && request.auth.token.account_kind == 'SHEET_DRAIN' && request.auth.token.drain_enabled == true; }
+    function isDrain() { return siteOk() && request.auth.token.get('account_kind', '') == 'SHEET_DRAIN' && request.auth.token.get('drain_enabled', false) == true; }
     function businessUser() {
       return siteOk()
         && request.auth.token.emergency_enabled == true
@@ -15,8 +15,8 @@ service cloud.firestore {
     function adminOps() { return businessUser() && role() in ['ADMIN_INVENT','ADMIN']; }
     function deviceAllowed(data) {
       return businessUser() && data.device_id is string && (
-        (request.auth.token.account_kind == 'BACKUP' && request.auth.token.device_scope is string && (request.auth.token.device_scope == '*' || request.auth.token.device_scope == data.device_id))
-        || (request.auth.token.account_kind != 'BACKUP' && request.auth.token.device_id is string && request.auth.token.device_id == data.device_id)
+        (request.auth.token.get('account_kind', '') == 'BACKUP' && request.auth.token.get('device_scope', '') is string && (request.auth.token.get('device_scope', '') == '*' || request.auth.token.get('device_scope', '') == data.device_id))
+        || (request.auth.token.get('account_kind', '') != 'BACKUP' && request.auth.token.get('device_id', '') is string && request.auth.token.get('device_id', '') == data.device_id)
       );
     }
     function eventAfter(eventId) { return getAfter(/databases/$(database)/documents/emergency_events/$(eventId)); }
