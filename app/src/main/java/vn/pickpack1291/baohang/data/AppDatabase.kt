@@ -101,25 +101,31 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
     }
 
     fun searchSkus(query: String, limit: Int = 20): List<SkuItem> {
-        val normalized = normalize(query)
+        val raw = query.trim()
+        val normalized = normalize(raw)
         if (normalized.isBlank()) return emptyList()
-        val tokens = normalized.split(' ').filter { it.isNotBlank() }.take(6)
-        val where = tokens.joinToString(" AND ") { "(lower(sku) LIKE ? OR search_text LIKE ?)" }
+
+        readableDatabase.rawQuery(
+            "SELECT sku,product_name FROM sku_catalog WHERE sku=? LIMIT 1",
+            arrayOf(raw)
+        ).use { exact ->
+            if (exact.moveToFirst()) return listOf(SkuItem(exact.getString(0), exact.getString(1)))
+        }
+
+        val tokens = normalized.split(' ').filter { it.isNotBlank() }.take(4)
+        val where = tokens.joinToString(" AND ") { "search_text LIKE ?" }
         val args = mutableListOf<String>()
-        tokens.forEach { token -> args += "%$token%"; args += "%$token%" }
-        val skuRaw = query.trim().lowercase(Locale.ROOT)
-        args += skuRaw
-        args += "$skuRaw%"
-        args += "%$skuRaw%"
+        tokens.forEach { token -> args += "%$token%" }
+        args += raw
+        args += "$raw%"
         args += limit.toString()
         val cursor = readableDatabase.rawQuery(
             """SELECT sku, product_name FROM sku_catalog
                WHERE $where
                ORDER BY CASE
-                 WHEN lower(sku)=? THEN 0
-                 WHEN lower(sku) LIKE ? THEN 1
-                 WHEN lower(sku) LIKE ? THEN 2
-                 ELSE 3 END, sku
+                 WHEN sku=? THEN 0
+                 WHEN sku LIKE ? THEN 1
+                 ELSE 2 END, sku
                LIMIT ?""", args.toTypedArray()
         )
         return cursor.use { buildList { while (it.moveToNext()) add(SkuItem(it.getString(0), it.getString(1))) } }

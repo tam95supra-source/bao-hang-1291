@@ -8,6 +8,7 @@ import okhttp3.WebSocketListener
 import org.json.JSONObject
 import vn.pickpack1291.baohang.BuildConfig
 import vn.pickpack1291.baohang.diagnostics.DiagnosticsLogger
+import vn.pickpack1291.baohang.data.UserRole
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.Executors
@@ -45,13 +46,15 @@ class RealtimeClient(
     @Volatile private var running = false
     @Volatile private var socket: WebSocket? = null
     @Volatile private var accessToken = ""
+    @Volatile private var userRole = UserRole.PICKER
     @Volatile private var reconnectAttempt = 0
     private var heartbeat: ScheduledFuture<*>? = null
     private var reconnect: ScheduledFuture<*>? = null
     private val joins = mutableMapOf<String, String>()
 
-    fun start(token: String) {
+    fun start(token: String, role: UserRole) {
         accessToken = token
+        userRole = role
         if (running) {
             updateAccessToken(token)
             return
@@ -115,10 +118,12 @@ class RealtimeClient(
             }
             reconnectAttempt = 0
             synchronized(joins) { joins.clear() }
-            join(webSocket, ISSUE_TOPIC)
             join(webSocket, CATALOG_TOPIC)
-            join(webSocket, STAFF_TOPIC)
-            join(webSocket, CONFIG_TOPIC)
+            if (userRole.canProcessIssues) {
+                join(webSocket, ISSUE_TOPIC)
+                join(webSocket, STAFF_TOPIC)
+            }
+            if (userRole in setOf(UserRole.ADMIN, UserRole.ADMIN_INVENT)) join(webSocket, CONFIG_TOPIC)
             heartbeat?.cancel(false)
             heartbeat = scheduler.scheduleAtFixedRate({
                 if (running) sendHeartbeat()

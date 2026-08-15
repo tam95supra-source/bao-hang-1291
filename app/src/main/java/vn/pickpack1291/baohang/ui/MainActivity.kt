@@ -3,6 +3,7 @@ package vn.pickpack1291.baohang.ui
 import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.text.Editable
@@ -136,7 +137,7 @@ class MainActivity : AppCompatActivity() {
                 runCatching {
                     app.api.refreshSessionIfNeeded()
                     if (app.session.accessToken.isNotBlank()) {
-                        realtime.start(app.session.accessToken)
+                        realtime.start(app.session.accessToken, app.session.profile?.role ?: app.session.effectiveRole)
                         realtime.updateAccessToken(app.session.accessToken)
                     }
                 }.onFailure { app.diagnostics.warn("realtime_auth_refresh_failed", mapOf("error" to it.message.orEmpty())) }
@@ -257,11 +258,18 @@ class MainActivity : AppCompatActivity() {
         var board: IssueBoard? = null
         var selected = 0
         val tabButtons = mutableListOf<Button>()
+        val tabBadges = mutableListOf<TextView>()
         fun updateTabs() {
+            val counts = board?.let { listOf(it.open.size, it.claimed.size, it.available.size, it.skipped.size) } ?: listOf(0, 0, 0, 0)
             tabButtons.forEachIndexed { index, tab ->
                 val active = index == selected
                 tab.setBackgroundResource(if (active) R.drawable.bg_button_primary else R.drawable.bg_button_secondary)
                 tab.setTextColor(getColor(if (active) R.color.white else R.color.navy_900))
+                tabBadges.getOrNull(index)?.let { badge ->
+                    val count = counts.getOrElse(index) { 0 }
+                    badge.text = if (count > 99) "99+" else count.toString()
+                    badge.visibility = if (count > 0) View.VISIBLE else View.GONE
+                }
             }
         }
         fun draw() {
@@ -289,8 +297,29 @@ class MainActivity : AppCompatActivity() {
             rowLabels.forEachIndexed { columnIndex, label ->
                 val index = rowIndex * 2 + columnIndex
                 val tab = button(label) { selected = index; draw() }
+                val badge = text("", 11, true).apply {
+                    gravity = Gravity.CENTER
+                    setTextColor(getColor(R.color.white))
+                    minWidth = dp(22)
+                    minHeight = dp(22)
+                    setPadding(dp(5), 0, dp(5), 0)
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.RECTANGLE
+                        cornerRadius = dp(12).toFloat()
+                        setColor(getColor(R.color.red_600))
+                        setStroke(dp(2), getColor(R.color.white))
+                    }
+                    elevation = dp(4).toFloat()
+                    visibility = View.GONE
+                }
+                val tabFrame = FrameLayout(this)
+                tabFrame.addView(tab, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), Gravity.BOTTOM))
+                tabFrame.addView(badge, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(24), Gravity.TOP or Gravity.END).apply {
+                    setMargins(0, 0, dp(1), 0)
+                })
                 tabButtons += tab
-                row.addView(tab, LinearLayout.LayoutParams(0, dp(48), 1f).apply { setMargins(dp(2), dp(3), dp(2), dp(3)) })
+                tabBadges += badge
+                row.addView(tabFrame, LinearLayout.LayoutParams(0, dp(52), 1f).apply { setMargins(dp(2), dp(1), dp(2), dp(1)) })
             }
             tabs.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
@@ -316,7 +345,7 @@ class MainActivity : AppCompatActivity() {
             setBackgroundResource(R.drawable.bg_card)
         }
         card.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(5), 0, dp(5)) }
-        val recurrent = if (issue.recurrence30m) " • TÁI PHÁT ≤30 PHÚT" else ""
+        val recurrent = if (issue.recurrence30m) " • BÁO LẠI TRONG 30 PHÚT" else ""
         card.addView(text("SKU ${issue.sku}", 18, true))
         card.addView(text(issue.productName, 14, false).apply { setPadding(0, dp(2), 0, dp(4)) })
         card.addView(text("${issue.status.label} • ${issue.reportCount} lượt • v${issue.issueVersion}$recurrent", 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
@@ -440,6 +469,8 @@ class MainActivity : AppCompatActivity() {
         val content = page("Báo thiếu hàng", SCREEN_PICKER)
         content.addView(text("Quét SKU hoặc nhập tên hàng", 14, true).apply { setPadding(0, 0, 0, dp(5)) })
         val input = AutoCompleteTextView(this).apply { hint = "Quét SKU / nhập tên sản phẩm"; threshold = 1; setSingleLine(true) }
+        val suggestionsAdapter = ArrayAdapter<SkuItem>(this, android.R.layout.simple_dropdown_item_1line, mutableListOf())
+        input.setAdapter(suggestionsAdapter)
         val selected = infoBox("Chưa chọn SKU")
         val reportButton = button("Báo thiếu", ButtonTone.DANGER) {}
         reportButton.isEnabled = false
@@ -455,19 +486,32 @@ class MainActivity : AppCompatActivity() {
             chosen = item
             selected.text = "SKU ${item.sku}\n${item.productName}"
             reportButton.isEnabled = true
-            input.setText("")
+            searchJob?.cancel()
+            suggestionsAdapter.clear()
+            input.dismissDropDown()
+            input.setText("", false)
         }
         fun suggestions(query: String) {
-            searchJob?.cancel(); searchJob = lifecycleScope.launch {
-                delay(120)
-                val local = withContext(Dispatchers.IO) { app.repository.searchSkus(query) }
-                val items = if (local.isNotEmpty()) local else runCatching { app.repository.searchSkusOnline(query) }.getOrDefault(emptyList())
-                input.setAdapter(ArrayAdapter(this@MainActivity, android.R.layout.simple_dropdown_item_1line, items)); if (items.isNotEmpty()) input.showDropDown()
+            searchJob?.cancel()
+            val requested = query.trim()
+            if (requested.isBlank()) { suggestionsAdapter.clear(); input.dismissDropDown(); return }
+            searchJob = lifecycleScope.launch {
+                delay(220)
+                val local = withContext(Dispatchers.IO) { app.repository.searchSkus(requested) }
+                val items = if (local.isNotEmpty() || requested.length < 3) local else runCatching { app.repository.searchSkusOnline(requested) }.getOrDefault(emptyList())
+                if (input.text.toString().trim() != requested || !input.hasFocus()) return@launch
+                suggestionsAdapter.clear()
+                suggestionsAdapter.addAll(items)
+                suggestionsAdapter.notifyDataSetChanged()
+                if (items.isNotEmpty()) input.showDropDown() else input.dismissDropDown()
             }
         }
         input.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(v: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(v: CharSequence?, start: Int, before: Int, count: Int) { if (!v.isNullOrBlank()) suggestions(v.toString()) }
+            override fun onTextChanged(v: CharSequence?, start: Int, before: Int, count: Int) {
+                searchJob?.cancel()
+                if (v.isNullOrBlank()) { suggestionsAdapter.clear(); input.dismissDropDown() } else suggestions(v.toString())
+            }
             override fun afterTextChanged(v: Editable?) = Unit
         })
         input.setOnItemClickListener { parent, _, position, _ -> (parent.getItemAtPosition(position) as? SkuItem)?.let(::select) }
@@ -519,9 +563,11 @@ class MainActivity : AppCompatActivity() {
             override fun onTextChanged(v: CharSequence?, start: Int, before: Int, count: Int) {
                 searchJob?.cancel()
                 if (v.isNullOrBlank()) { result.text = "Nhập từ khóa để tra cứu."; return }
+                val requested = v.toString()
                 searchJob = lifecycleScope.launch {
-                    delay(120)
-                    val items = withContext(Dispatchers.IO) { app.repository.searchSkus(v.toString()) }
+                    delay(220)
+                    val items = withContext(Dispatchers.IO) { app.repository.searchSkus(requested) }
+                    if (input.text.toString() != requested) return@launch
                     result.text = if (items.isEmpty()) "Không tìm thấy SKU phù hợp." else items.take(20).joinToString("\n") { "${it.sku} • ${it.productName}" }
                 }
             }
@@ -547,9 +593,9 @@ class MainActivity : AppCompatActivity() {
                     "Đã có hàng / đã châm hàng: ${day.optInt("available")} • Đã cho phép bỏ qua: ${day.optInt("skipped")}\n\n" +
                     "CHẤT LƯỢNG XỬ LÝ 30 NGÀY\n" +
                     "Đang cần xử lý: ${report.optInt("active_now")} • Quá thời gian tiếp nhận: ${report.optInt("overdue_now")}\n" +
-                    "Thời gian nhận xử lý trung vị: ${report.opt("median_claim_minutes") ?: "—"} phút • 95% được nhận trong: ${report.opt("p95_claim_minutes") ?: "—"} phút\n" +
-                    "Thời gian xử lý xong trung vị: ${report.opt("median_resolution_minutes") ?: "—"} phút • 95% xử lý xong trong: ${report.opt("p95_resolution_minutes") ?: "—"} phút\n" +
-                    "Đợt tái phát: ${report.optInt("recurrent_episodes")} • Tự cho phép bỏ qua do quá thời gian: ${report.optInt("auto_skip_count_30d")}\n\n" +
+                    "Một nửa đợt được nhận trong: ${report.opt("median_claim_minutes") ?: "—"} phút • 95% được nhận trong: ${report.opt("p95_claim_minutes") ?: "—"} phút\n" +
+                    "Một nửa đợt xử lý xong trong: ${report.opt("median_resolution_minutes") ?: "—"} phút • 95% xử lý xong trong: ${report.opt("p95_resolution_minutes") ?: "—"} phút\n" +
+                    "Đợt báo lại trong 30 phút: ${report.optInt("recurrent_episodes")} • Tự cho phép bỏ qua do quá thời gian: ${report.optInt("auto_skip_count_30d")}\n\n" +
                     "SKU PHÁT SINH BÁO THIẾU NHIỀU$topLines"
             }.onFailure { body.text = "Không tải được báo cáo: ${it.message}" }
         }
