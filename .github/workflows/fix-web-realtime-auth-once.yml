@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   fix:
-    if: github.actor != 'github-actions[bot]'
+    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -35,7 +35,6 @@ jobs:
           src = path.read_text(encoding='utf-8')
           original = src
 
-          # Realtime auth must complete before private channels subscribe.
           count = src.count('realtimeClient.realtime.setAuth(state.session.access_token);')
           if count != 2:
               raise SystemExit(f'expected 2 setAuth calls, got {count}')
@@ -54,32 +53,34 @@ jobs:
           src = src.replace(old, new, 1)
 
           marker = "async function startRealtime() {"
-          helper = r'''function expectedRealtimeKinds() {
-  if (role() === 'PICKER') return ['issue', 'catalog'];
-  if (['ADMIN', 'ADMIN_INVENT'].includes(role())) return ['issue', 'staff', 'catalog'];
-  return ['issue', 'catalog'];
-}
-function syncRealtimeHealth() {
-  const expected = expectedRealtimeKinds();
-  const statuses = expected.map((kind) => state.channelStatus[kind]);
-  const allOnline = statuses.every((status) => status === 'SUBSCRIBED');
-  const hasFailure = statuses.some((status) => ['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(status));
-  if (allOnline) {
-    const wasOnline = state.realtimeStatus === 'ONLINE';
-    setRealtimeHealth('ONLINE', 'good');
-    clearInterval(state.fallbackTimer);
-    state.fallbackTimer = null;
-    if (!wasOnline) expected.forEach(runLiveRefresh);
-    return;
-  }
-  if (hasFailure) {
-    setRealtimeHealth('FALLBACK', 'warn');
-    ensureFallbackPolling();
-  } else {
-    setRealtimeHealth('ĐANG NỐI');
-  }
-}
-'''
+          helper = "\n".join([
+              "function expectedRealtimeKinds() {",
+              "  if (role() === 'PICKER') return ['issue', 'catalog'];",
+              "  if (['ADMIN', 'ADMIN_INVENT'].includes(role())) return ['issue', 'staff', 'catalog'];",
+              "  return ['issue', 'catalog'];",
+              "}",
+              "function syncRealtimeHealth() {",
+              "  const expected = expectedRealtimeKinds();",
+              "  const statuses = expected.map((kind) => state.channelStatus[kind]);",
+              "  const allOnline = statuses.every((status) => status === 'SUBSCRIBED');",
+              "  const hasFailure = statuses.some((status) => ['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(status));",
+              "  if (allOnline) {",
+              "    const wasOnline = state.realtimeStatus === 'ONLINE';",
+              "    setRealtimeHealth('ONLINE', 'good');",
+              "    clearInterval(state.fallbackTimer);",
+              "    state.fallbackTimer = null;",
+              "    if (!wasOnline) expected.forEach(runLiveRefresh);",
+              "    return;",
+              "  }",
+              "  if (hasFailure) {",
+              "    setRealtimeHealth('FALLBACK', 'warn');",
+              "    ensureFallbackPolling();",
+              "  } else {",
+              "    setRealtimeHealth('ĐANG NỐI');",
+              "  }",
+              "}",
+              "",
+          ])
           if marker not in src:
               raise SystemExit('startRealtime marker missing')
           src = src.replace(marker, helper + marker, 1)
@@ -90,16 +91,15 @@ function syncRealtimeHealth() {
           if n != 1:
               raise SystemExit(f'subscribeStatus block matches={n}')
 
-          # Assign status callback to each private channel independently.
-          old_new = [
+          replacements = [
               (".on('broadcast', { event: 'picker_status_changed' }, () => scheduleLiveRefresh('issue'))\n      .subscribe(subscribeStatus);", ".on('broadcast', { event: 'picker_status_changed' }, () => scheduleLiveRefresh('issue'))\n      .subscribe(subscribeStatus('issue'));"),
               (".on('broadcast', { event: 'issue_changed' }, () => scheduleLiveRefresh('issue'))\n      .subscribe(subscribeStatus);", ".on('broadcast', { event: 'issue_changed' }, () => scheduleLiveRefresh('issue'))\n      .subscribe(subscribeStatus('issue'));"),
               (".on('broadcast', { event: 'staff_changed' }, () => scheduleLiveRefresh('staff')).subscribe(subscribeStatus);", ".on('broadcast', { event: 'staff_changed' }, () => scheduleLiveRefresh('staff')).subscribe(subscribeStatus('staff'));"),
               (".on('broadcast', { event: 'catalog_changed' }, () => scheduleLiveRefresh('catalog')).subscribe(subscribeStatus);", ".on('broadcast', { event: 'catalog_changed' }, () => scheduleLiveRefresh('catalog')).subscribe(subscribeStatus('catalog'));"),
           ]
-          for old, new in old_new:
+          for old, new in replacements:
               if old not in src:
-                  raise SystemExit(f'channel subscribe anchor missing: {old[:50]}')
+                  raise SystemExit('channel subscribe anchor missing')
               src = src.replace(old, new, 1)
 
           old = "  setTimeout(() => { if (state.realtimeStatus !== 'ONLINE') ensureFallbackPolling(); }, 6000);"
@@ -108,16 +108,8 @@ function syncRealtimeHealth() {
               raise SystemExit('fallback timeout anchor missing')
           src = src.replace(old, new, 1)
 
-          required = [
-              'await realtimeClient.realtime.setAuth(state.session.access_token);',
-              "subscribeStatus('issue')",
-              "subscribeStatus('catalog')",
-              'expectedRealtimeKinds',
-              'syncRealtimeHealth',
-          ]
-          for token in required:
-              if token not in src:
-                  raise SystemExit(f'missing required token: {token}')
+          if src.count('await realtimeClient.realtime.setAuth(state.session.access_token);') != 2:
+              raise SystemExit('await setAuth guard failed')
           if 'subscribe(subscribeStatus);' in src:
               raise SystemExit('stale shared subscribe status remains')
           if src == original:
