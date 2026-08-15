@@ -32,7 +32,7 @@ Deno.serve(async (req) => {
     const issueId = String(body.issue_id ?? "").trim();
     const issueVersion = Number(body.issue_version ?? 0);
     const status = String(body.status ?? "").trim().toUpperCase();
-    if (!issueId || !Number.isFinite(issueVersion) || issueVersion < 1 || !["AVAILABLE", "SKIP_ALLOWED"].includes(status)) {
+    if (!issueId || !Number.isFinite(issueVersion) || issueVersion < 1 || !["OPEN", "AVAILABLE", "SKIP_ALLOWED"].includes(status)) {
       return json({ error: "Invalid notification scope" }, 400);
     }
 
@@ -77,6 +77,7 @@ Deno.serve(async (req) => {
       if (attemptError) throw attemptError;
 
       let accepted = false;
+      const isHandlerOpenAlert = event.status === "OPEN";
       const payload = {
         event_id: event.id,
         notification_event_id: event.id,
@@ -88,13 +89,13 @@ Deno.serve(async (req) => {
         sku: String(issue.sku ?? ""),
         product_name: String(issue.product_name_snapshot ?? ""),
         message: event.message,
-        critical: "true",
+        critical: isHandlerOpenAlert ? "false" : "true",
       };
       for (const token of tokens.get(event.target_user_id) ?? []) {
         try {
           const result = await sendFcm(token, payload, {
             ttlSeconds: 3600,
-            collapseKey: `issue-${event.issue_id}-picker`,
+            collapseKey: isHandlerOpenAlert ? `issue-${event.issue_id}-handler` : `issue-${event.issue_id}-picker`,
             priority: "high",
           });
           accepted ||= result.accepted;
