@@ -1,0 +1,124 @@
+name: Repair staff source once
+
+on:
+  push:
+    branches: [target-final-20260814-impl]
+    paths:
+      - '.github/workflows/repair-staff-source-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_ID: oedasgcdjppjwidhlqdr
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: target-final-20260814-impl
+          fetch-depth: 0
+
+      - name: Patch staff source and legacy API routing
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              if old not in text:
+                  raise SystemExit(f"missing expected source fragment: {label}")
+              return text.replace(old, new, 1)
+
+          staff_path = Path('supabase/functions/staff-watch/index.ts')
+          s = staff_path.read_text(encoding='utf-8')
+          s = replace_once(
+              s,
+              'function errorText(error: unknown): string { return error instanceof Error ? error.message : String(error ?? "UNKNOWN"); }',
+              'function errorText(error: unknown): string {\n  if (error instanceof Error) return error.message;\n  if (typeof error === "object" && error !== null) { try { return JSON.stringify(error); } catch { /* ignore */ } }\n  return String(error ?? "UNKNOWN");\n}',
+              'staff error serializer',
+          )
+          s = replace_once(
+              s,
+              '''async function defaultPassword(employeeCode: string, adminEmployeeCode?: string): Promise<string> {\n  const { data, error } = await admin.rpc("staff_default_password", {\n    p_employee_code: employeeCode,\n    p_admin_employee_code: adminEmployeeCode ?? null,\n  });\n  if (error || !data) throw new Error("STAFF_DEFAULT_PASSWORD_NOT_CONFIGURED");\n  return String(data);\n}''',
+              '''async function defaultPassword(_employeeCode: string, _adminEmployeeCode?: string): Promise<string> {\n  const { data, error } = await admin.rpc("get_staff_default_password_service");\n  const password = String(data ?? "");\n  if (error || password.length < 8) throw new Error("STAFF_DEFAULT_PASSWORD_NOT_CONFIGURED");\n  return password;\n}''',
+              'staff password rpc',
+          )
+          s = s.replace('@auth.bao-hang-1291.invalid', '@bao-hang-1291.local')
+          if 'last_seen_in_staff_source_at' not in s:
+              raise SystemExit('missing expected last_seen_in_staff_source_at field')
+          s = s.replace('last_seen_in_staff_source_at', 'source_last_seen_at')
+          s = replace_once(
+              s,
+              '.in("status", ["SUCCEEDED", "PARTIAL", "NO_CHANGE"])',
+              '.in("status", ["SUCCEEDED", "NO_CHANGE"])',
+              'staff successful hash statuses',
+          )
+          s = replace_once(
+              s,
+              '''      source_kind: "GSHEET",\n      source_position: s.source_position,\n      protected_account: protectedAccount,''',
+              '''      source_kind: protectedAccount ? current.source_kind : "GSHEET",\n      source_position: s.source_position,\n      protected_account: protectedAccount,''',
+              'protected account source kind',
+          )
+          s = replace_once(
+              s,
+              '  for (const current of currentByCode.values()) {\n    if (current.source_kind !== "GSHEET" || !current.active || seen.has(current.employee_code.toLowerCase())) continue;',
+              '  if (failed === 0) for (const current of currentByCode.values()) {\n    if (current.source_kind !== "GSHEET" || !current.active || seen.has(current.employee_code.toLowerCase())) continue;',
+              'fail closed deactivation',
+          )
+          staff_path.write_text(s, encoding='utf-8')
+
+          api_path = Path('supabase/functions/api/index.ts')
+          a = api_path.read_text(encoding='utf-8')
+          a = replace_once(a, 'const STAFF_SHEET_ID = "1FRROqCp1lmkuHc3lc4UBpVI5_ZrtiPI1thlEymv458E";', 'const STAFF_SHEET_ID = "1HLBzpxHLd8qoTJopOA7M_q0dDvO56G0Tb4curKZV7EM";', 'api staff sheet id')
+          a = replace_once(a, 'const STAFF_SHEET_NAME = "DANH MỤC NHÂN SỰ";', 'const STAFF_SHEET_NAME = "Trang tính1";', 'api staff sheet name')
+          a = replace_once(
+              a,
+              '  await resendPendingCritical();if(await staffSyncDue().catch(()=>false)){try{await syncStaffDirectory("AUTO",null);}catch(error){console.warn("Staff sync deferred",errorText(error));}}',
+              '  await resendPendingCritical();',
+              'disable legacy auto gviz staff sync',
+          )
+          marker = 'async function staffSyncStatus(context:Context){'
+          if marker not in a:
+              raise SystemExit('missing staffSyncStatus marker')
+          helper = '''async function triggerDedicatedStaffWatch(){\n  const secret=Deno.env.get("CRON_SECRET")??"";\n  if(!secret)throw new HttpError(503,"Staff Watch chưa được cấu hình");\n  const response=await fetch(`${SUPABASE_URL}/functions/v1/staff-watch`,{method:"POST",headers:{"content-type":"application/json","x-cron-secret":secret},body:"{}"});\n  const text=await response.text();\n  if(!response.ok)throw new HttpError(502,`Staff Watch HTTP ${response.status}`);\n  try{return JSON.parse(text);}catch{throw new HttpError(502,"Staff Watch trả dữ liệu không hợp lệ");}\n}\n'''
+          a = a.replace(marker, helper + marker, 1)
+          a = replace_once(
+              a,
+              'case "staff-sync-now": requireRole(context,["ADMIN","ADMIN_INVENT"]); return syncStaffDirectory("MANUAL",context.userId);',
+              'case "staff-sync-now": requireRole(context,["ADMIN","ADMIN_INVENT"]); return triggerDedicatedStaffWatch();',
+              'manual staff sync route',
+          )
+          api_path.write_text(a, encoding='utf-8')
+
+          Path('supabase/migrations/20260815023319_staff_sync_source_response_bytes.sql').write_text('''alter table public.staff_sync_runs\n  add column if not exists source_response_bytes integer not null default 0;\n\ndo $$\nbegin\n  if not exists (\n    select 1 from pg_constraint\n    where conname = 'staff_sync_runs_source_response_bytes_check'\n      and conrelid = 'public.staff_sync_runs'::regclass\n  ) then\n    alter table public.staff_sync_runs\n      add constraint staff_sync_runs_source_response_bytes_check\n      check (source_response_bytes >= 0);\n  end if;\nend $$;\n''', encoding='utf-8')
+
+          Path('supabase/migrations/20260815023738_staff_sync_audit_guard.sql').write_text('''create table if not exists public.staff_sync_audit (\n  id bigint generated by default as identity primary key,\n  run_id uuid not null references public.staff_sync_runs(id) on delete cascade,\n  employee_code text,\n  action text not null,\n  before_row jsonb,\n  after_row jsonb,\n  success boolean not null,\n  error text,\n  created_at timestamptz not null default now()\n);\n\ncreate index if not exists staff_sync_audit_run_id_created_at_idx\n  on public.staff_sync_audit (run_id, created_at);\n\nalter table public.staff_sync_audit enable row level security;\nrevoke all on table public.staff_sync_audit from anon, authenticated;\ngrant all on table public.staff_sync_audit to service_role;\n''', encoding='utf-8')
+          PY
+
+      - name: Commit repaired source
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/staff-watch/index.ts supabase/functions/api/index.ts supabase/migrations/20260815023319_staff_sync_source_response_bytes.sql supabase/migrations/20260815023738_staff_sync_audit_guard.sql
+          git diff --cached --check
+          git commit -m "fix: repair authoritative staff synchronization"
+          git push origin HEAD:target-final-20260814-impl
+
+      - name: Validate deployment credential
+        shell: bash
+        run: test -n "${SUPABASE_ACCESS_TOKEN:-}"
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Deploy repaired staff watcher and API only
+        shell: bash
+        run: |
+          supabase functions deploy staff-watch --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
+          supabase functions deploy api --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
