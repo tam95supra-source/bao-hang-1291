@@ -1,0 +1,85 @@
+name: Validate permanent production signing once
+
+on:
+  push:
+    branches: [target-final-20260814-impl]
+    paths:
+      - '.github/workflows/validate-production-signing-once.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: target-final-20260814-impl
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.9'
+          cache-disabled: true
+      - name: Restore, build, sign and verify without publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test -s signing/production-signing.bundle.enc
+          test -s signing/production-cert-sha256.txt
+          test "$(cat signing/wrap-scheme.txt)" = 'firebase-service-account-private-key-v1'
+          test -n "${FIREBASE_SERVICE_ACCOUNT:-}"
+
+          work="$RUNNER_TEMP/production-signing-validation"
+          mkdir -p "$work/plain"
+          trap 'rm -rf "$work" "$RUNNER_TEMP/release-store-password" "$RUNNER_TEMP/release-key-password"' EXIT
+
+          firebase_private_key="$(jq -er '.private_key' <<<"$FIREBASE_SERVICE_ACCOUNT")"
+          wrap_key="$({ printf '%s\0' "$firebase_private_key"; printf '%s' "$GITHUB_REPOSITORY"; } | sha256sum | awk '{print $1}')"
+          echo "::add-mask::$wrap_key"
+          WRAP_KEY="$wrap_key" openssl enc -d -aes-256-cbc -pbkdf2 -iter 250000 -md sha256 \
+            -pass env:WRAP_KEY -in signing/production-signing.bundle.enc -out "$work/signing.tar"
+          tar -C "$work/plain" -xf "$work/signing.tar"
+          test -s "$work/plain/bao-hang-1291-production.p12"
+          test -s "$work/plain/signing.properties"
+
+          source "$work/plain/signing.properties"
+          echo "::add-mask::$RELEASE_STORE_PASSWORD"
+          echo "::add-mask::$RELEASE_KEY_PASSWORD"
+          pinned="$(tr -d '[:space:]' < signing/production-cert-sha256.txt | tr '[:upper:]' '[:lower:]')"
+          [[ "$pinned" =~ ^[0-9a-f]{64}$ ]]
+          keytool -list -v -keystore "$work/plain/bao-hang-1291-production.p12" -storetype PKCS12 \
+            -storepass "$RELEASE_STORE_PASSWORD" -alias "$RELEASE_KEY_ALIAS" 2>/dev/null > "$work/keytool.txt"
+          cert="$(sed -n 's/^.*SHA256: //p' "$work/keytool.txt" | sed -n '1p' | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')"
+          test "$cert" = "$pinned"
+
+          RELEASE_STORE_FILE="$work/plain/bao-hang-1291-production.p12" \
+          RELEASE_STORE_PASSWORD="$RELEASE_STORE_PASSWORD" \
+          RELEASE_KEY_ALIAS="$RELEASE_KEY_ALIAS" \
+          RELEASE_KEY_PASSWORD="$RELEASE_KEY_PASSWORD" \
+            gradle --no-daemon testReleaseUnitTest assembleRelease \
+              -PVERSION_NAME='0.0.0' -PVERSION_CODE='1' -POTA_CHANNEL='beta'
+
+          apk='app/build/outputs/apk/release/app-release.apk'
+          test -s "$apk"
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n1)"
+          apkanalyzer="$(find "$ANDROID_HOME/cmdline-tools" -type f -name apkanalyzer -perm -111 | sort -V | tail -n1)"
+          test -x "$apksigner"
+          test -x "$apkanalyzer"
+          "$apksigner" verify --verbose --print-certs "$apk" > "$work/apksigner.txt"
+          actual="$(sed -n 's/^.*certificate SHA-256 digest: //p' "$work/apksigner.txt" | sed -n '1p' | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')"
+          test "$actual" = "$pinned"
+          test "$("$apkanalyzer" manifest application-id "$apk")" = 'vn.pickpack1291.baohang'
+          test "$("$apkanalyzer" manifest version-code "$apk")" = '1'
+          test "$("$apkanalyzer" manifest version-name "$apk")" = '0.0.0'
+          "$apkanalyzer" manifest print "$apk" > "$work/manifest.xml"
+          grep -F 'vn.pickpack1291.baohang.OTA_CHANNEL' "$work/manifest.xml" >/dev/null
+          grep -F 'android:value="beta"' "$work/manifest.xml" >/dev/null
+          echo 'PERMANENT_PRODUCTION_SIGNING=PASS package=vn.pickpack1291.baohang channel=beta'
