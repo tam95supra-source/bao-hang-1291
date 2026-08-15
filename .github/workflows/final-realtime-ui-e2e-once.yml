@@ -1,0 +1,169 @@
+name: Final realtime UI E2E once
+
+on:
+  push:
+    branches:
+      - target-final-20260814-impl
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_ID: oedasgcdjppjwidhlqdr
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: target-final-20260814-impl
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.9'
+          cache-disabled: true
+      - name: Android unit test and compile
+        run: gradle --no-daemon testDebugUnitTest assembleDebug
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v1.46.3
+      - name: Type-check changed Edge Functions
+        run: |
+          deno check supabase/functions/_shared/fcm.ts supabase/functions/api/index.ts supabase/functions/notification-worker/index.ts
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Deploy isolated Realtime E2E probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          PROBE_KEY="$(openssl rand -hex 32)"
+          printf '%s' "$PROBE_KEY" > "$RUNNER_TEMP/probe-key"
+          mkdir -p supabase/functions/realtime-e2e-probe
+          PROBE_KEY="$PROBE_KEY" python3 - <<'PY'
+          import os
+          from pathlib import Path
+          key = os.environ['PROBE_KEY']
+          source = r'''import { createClient } from "jsr:@supabase/supabase-js@2";
+const URL = Deno.env.get("SUPABASE_URL")!;
+const ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
+const SERVICE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const KEY = "__KEY__";
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+Deno.serve(async (req) => {
+  if (req.headers.get("x-probe-key") !== KEY) return json({ error: "forbidden" }, 403);
+  const admin = createClient(URL, SERVICE, { auth: { persistSession: false, autoRefreshToken: false } });
+  const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 16);
+  const email = `rt-e2e-${suffix}@bao-hang-1291.local`;
+  const password = `${crypto.randomUUID()}Aa1!`;
+  const employee = `RTE2E${suffix}`;
+  let userId = "";
+  let receiver: any = null;
+  let sender: any = null;
+  let client: any = null;
+  let serviceRealtime: any = null;
+  try {
+    const created = await admin.auth.admin.createUser({ email, password, email_confirm: true });
+    if (created.error || !created.data.user) throw created.error ?? new Error("create user failed");
+    userId = created.data.user.id;
+    const inserted = await admin.from("profiles").insert({ id: userId, employee_code: employee, full_name: "Realtime E2E Probe", contractor: "SYSTEM_TEST", role: "INVENT", active: true, source_kind: "MANUAL", source_position: "SYSTEM_TEST", protected_account: false, account_kind: "PERSONNEL" });
+    if (inserted.error) throw inserted.error;
+
+    client = createClient(URL, ANON, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
+    const signed = await client.auth.signInWithPassword({ email, password });
+    if (signed.error || !signed.data.session) throw signed.error ?? new Error("signin failed");
+    const session = signed.data.session;
+    const bound = await client.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token });
+    if (bound.error) throw bound.error;
+    await client.realtime.setAuth(session.access_token);
+
+    const marker = crypto.randomUUID();
+    let eventResolve: (value: unknown) => void;
+    const eventPromise = new Promise((resolve) => { eventResolve = resolve; });
+    receiver = client.channel("site:1291:issues", { config: { private: true } })
+      .on("broadcast", { event: "issue_changed" }, ({ payload }: any) => {
+        if (payload?.probe_marker === marker) eventResolve(payload);
+      });
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("receiver subscribe timeout")), 15000);
+      receiver.subscribe((status: string, error: unknown) => {
+        if (status === "SUBSCRIBED") { clearTimeout(timer); resolve(); }
+        else if (["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"].includes(status)) { clearTimeout(timer); reject(error ?? new Error(status)); }
+      });
+    });
+
+    serviceRealtime = createClient(URL, SERVICE, { auth: { persistSession: false, autoRefreshToken: false } });
+    await serviceRealtime.realtime.setAuth(SERVICE);
+    sender = serviceRealtime.channel("site:1291:issues", { config: { private: true } });
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("sender subscribe timeout")), 15000);
+      sender.subscribe((status: string, error: unknown) => {
+        if (status === "SUBSCRIBED") { clearTimeout(timer); resolve(); }
+        else if (["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"].includes(status)) { clearTimeout(timer); reject(error ?? new Error(status)); }
+      });
+    });
+    const sent = await sender.send({ type: "broadcast", event: "issue_changed", payload: { probe_marker: marker } });
+    if (sent !== "ok") throw new Error(`broadcast send ${sent}`);
+    await Promise.race([eventPromise, new Promise((_, reject) => setTimeout(() => reject(new Error("event timeout")), 15000))]);
+    return json({ ok: true, private_issue_channel: "SUBSCRIBED", event_received: true });
+  } catch (error) {
+    return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 500);
+  } finally {
+    if (client && receiver) await client.removeChannel(receiver).catch(() => {});
+    if (serviceRealtime && sender) await serviceRealtime.removeChannel(sender).catch(() => {});
+    if (userId) {
+      await admin.from("profiles").delete().eq("id", userId).catch(() => {});
+      await admin.auth.admin.deleteUser(userId).catch(() => {});
+    }
+  }
+});
+'''.replace('__KEY__', key)
+          Path('supabase/functions/realtime-e2e-probe/index.ts').write_text(source, encoding='utf-8')
+          PY
+          supabase functions deploy realtime-e2e-probe --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
+
+      - name: Run authenticated private Realtime E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROBE_KEY="$(cat "$RUNNER_TEMP/probe-key")"
+          URL="https://${SUPABASE_PROJECT_ID}.supabase.co/functions/v1/realtime-e2e-probe"
+          curl -fsS --retry 3 --retry-delay 1 --max-time 55 -X POST "$URL" -H "x-probe-key: $PROBE_KEY" -H 'content-type: application/json' -d '{}' -o "$RUNNER_TEMP/rt-e2e.json"
+          jq -e '.ok == true and .private_issue_channel == "SUBSCRIBED" and .event_received == true' "$RUNNER_TEMP/rt-e2e.json" >/dev/null
+          echo 'REALTIME_PRIVATE_ISSUE_E2E=PASS'
+
+      - name: Source safety guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq '!data.duplicate_request && !data.already_reported' supabase/functions/api/index.ts
+          grep -Fq 'button("CÓ HÀNG"' app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt
+          grep -Fq 'button("SKIP HÀNG"' app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt
+          grep -Fq 'renderedSignatures' app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt
+          grep -Fq 'realtime.setAuth(state.session.access_token)' web-admin/src/main.js
+          ! grep -R -n -E '^[[:space:]]*-----BEGIN (RSA )?PRIVATE KEY-----|"private_key"[[:space:]]*:[[:space:]]*"-----BEGIN' supabase app web-admin
+          echo 'FINAL_SOURCE_GUARDS=PASS'
+
+      - name: Cleanup probe function and local material
+        if: always()
+        shell: bash
+        run: |
+          rm -rf supabase/functions/realtime-e2e-probe "$RUNNER_TEMP/probe-key" "$RUNNER_TEMP/rt-e2e.json"
+          supabase functions delete realtime-e2e-probe --project-ref "$SUPABASE_PROJECT_ID" --yes || true
+
+      - name: Remove one-shot workflow
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA="$(gh api repos/tam95supra-source/bao-hang-1291/contents/.github/workflows/final-realtime-ui-e2e-once.yml?ref=target-final-20260814-impl --jq .sha)"
+          gh api -X DELETE repos/tam95supra-source/bao-hang-1291/contents/.github/workflows/final-realtime-ui-e2e-once.yml -f message='ops: remove final realtime UI E2E workflow' -f sha="$SHA" -f branch='target-final-20260814-impl'
