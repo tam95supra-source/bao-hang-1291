@@ -6,7 +6,7 @@ enum class UserRole(val wire: String, val label: String) {
     ADMIN("ADMIN", "Admin hệ thống"),
     ADMIN_INVENT("ADMIN_INVENT", "Admin Event"),
     INVENT("INVENT", "Người báo hàng"),
-    PICKER("PICKER", "Picker / Người lấy hàng");
+    PICKER("PICKER", "Người lấy hàng");
 
     val canProcessIssues: Boolean get() = this in setOf(ADMIN, ADMIN_INVENT, INVENT)
     val canViewReports: Boolean get() = this in setOf(ADMIN, ADMIN_INVENT)
@@ -27,12 +27,12 @@ enum class UserRole(val wire: String, val label: String) {
 }
 
 enum class IssueStatus(val wire: String, val label: String, val criticalForPicker: Boolean = false) {
-    OPEN("OPEN", "CHỜ NHẬN"),
+    OPEN("OPEN", "CHỜ XỬ LÝ"),
     CLAIMED("CLAIMED", "ĐANG XỬ LÝ"),
     SEARCHING("SEARCHING", "ĐANG XỬ LÝ"),
     REPLENISHING("REPLENISHING", "ĐANG XỬ LÝ"),
     AVAILABLE("AVAILABLE", "ĐÃ CÓ HÀNG • QUAY LẠI LẤY HÀNG", true),
-    SKIP_ALLOWED("SKIP_ALLOWED", "CHO PHÉP SKIP • TIẾP TỤC CÔNG VIỆC", true),
+    SKIP_ALLOWED("SKIP_ALLOWED", "ĐƯỢC PHÉP BỎ QUA • TIẾP TỤC CÔNG VIỆC", true),
     CLOSED("CLOSED", "ĐÃ ĐÓNG");
 
     val isOpenBucket: Boolean get() = this in setOf(OPEN, CLAIMED, SEARCHING, REPLENISHING)
