@@ -1,0 +1,30 @@
+name: Patch Android incremental UI once
+
+on:
+  push:
+    branches:
+      - target-final-20260814-impl
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: target-final-20260814-impl
+          fetch-depth: 0
+      - name: Apply incremental UI patch
+        run: python3 scripts/ops_patch_android_incremental_ui_20260815.py
+      - name: Commit patch and cleanup one-shot
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt app/src/main/java/vn/pickpack1291/baohang/notifications/StockMessagingService.kt app/src/main/java/vn/pickpack1291/baohang/notifications/NotificationHelper.kt
+          git rm scripts/ops_patch_android_incremental_ui_20260815.py .github/workflows/patch-android-incremental-ui-once.yml
+          git commit -m 'perf(app): diff issue cards and preserve live UI state'
+          git push origin HEAD:target-final-20260814-impl
