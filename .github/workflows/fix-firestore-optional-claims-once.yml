@@ -26,32 +26,20 @@ jobs:
           from pathlib import Path
           p = Path('firestore.rules')
           text = p.read_text()
-          old = """    function isDrain() { return siteOk() && request.auth.token.account_kind == 'SHEET_DRAIN' && request.auth.token.drain_enabled == true; }"""
-          new = """    function isDrain() { return siteOk() && request.auth.token.get('account_kind', '') == 'SHEET_DRAIN' && request.auth.token.get('drain_enabled', false) == true; }"""
-          if old not in text:
-              raise SystemExit('expected isDrain source not found')
-          text = text.replace(old, new, 1)
-          old = """    function deviceAllowed(data) {
-              return businessUser() && data.device_id is string && (
-                (request.auth.token.account_kind == 'BACKUP' && request.auth.token.device_scope is string && (request.auth.token.device_scope == '*' || request.auth.token.device_scope == data.device_id))
-                || (request.auth.token.account_kind != 'BACKUP' && request.auth.token.device_id is string && request.auth.token.device_id == data.device_id)
-              );
-            }"""
-          new = """    function deviceAllowed(data) {
-              return businessUser() && data.device_id is string && (
-                (request.auth.token.get('account_kind', '') == 'BACKUP'
-                  && request.auth.token.get('device_scope', '') is string
-                  && (request.auth.token.get('device_scope', '') == '*' || request.auth.token.get('device_scope', '') == data.device_id))
-                || (request.auth.token.get('account_kind', '') != 'BACKUP'
-                  && request.auth.token.get('device_id', '') is string
-                  && request.auth.token.get('device_id', '') == data.device_id)
-              );
-            }"""
-          if old not in text:
-              raise SystemExit('expected deviceAllowed source not found')
-          p.write_text(text.replace(old, new, 1))
+          replacements = {
+              "request.auth.token.account_kind": "request.auth.token.get('account_kind', '')",
+              "request.auth.token.drain_enabled": "request.auth.token.get('drain_enabled', false)",
+              "request.auth.token.device_scope": "request.auth.token.get('device_scope', '')",
+              "request.auth.token.device_id": "request.auth.token.get('device_id', '')",
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f'expected source token not found: {old}')
+              text = text.replace(old, new)
+          p.write_text(text)
           PY
           git diff --check -- firestore.rules
+          ! grep -Eq 'request\.auth\.token\.(account_kind|drain_enabled|device_scope|device_id)' firestore.rules
           grep -q "token.get('account_kind', '')" firestore.rules
       - name: Commit fix
         shell: bash
