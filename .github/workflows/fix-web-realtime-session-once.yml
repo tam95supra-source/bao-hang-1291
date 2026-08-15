@@ -41,50 +41,51 @@ jobs:
 
           path = Path('web-admin/src/main.js')
           src = path.read_text(encoding='utf-8')
-
           anchor = "async function refreshSessionIfNeeded() {\n"
-          helper = """async function bindSupabaseClientSession() {
-  if (!state.session?.access_token || !state.session?.refresh_token) throw new Error('Phiên đăng nhập không đầy đủ.');
-  const { data, error } = await realtimeClient.auth.setSession({
-    access_token: state.session.access_token,
-    refresh_token: state.session.refresh_token,
-  });
-  if (error) throw error;
-  const managed = data?.session;
-  if (managed?.access_token) {
-    saveSession({
-      ...state.session,
-      access_token: managed.access_token,
-      refresh_token: managed.refresh_token || state.session.refresh_token,
-      expires_at: managed.expires_at || state.session.expires_at,
-    });
-  }
-  await realtimeClient.realtime.setAuth();
-}
-"""
+          helper_lines = [
+              "async function bindSupabaseClientSession() {",
+              "  if (!state.session?.access_token || !state.session?.refresh_token) throw new Error('Phiên đăng nhập không đầy đủ.');",
+              "  const { data, error } = await realtimeClient.auth.setSession({",
+              "    access_token: state.session.access_token,",
+              "    refresh_token: state.session.refresh_token,",
+              "  });",
+              "  if (error) throw error;",
+              "  const managed = data?.session;",
+              "  if (managed?.access_token) {",
+              "    saveSession({",
+              "      ...state.session,",
+              "      access_token: managed.access_token,",
+              "      refresh_token: managed.refresh_token || state.session.refresh_token,",
+              "      expires_at: managed.expires_at || state.session.expires_at,",
+              "    });",
+              "  }",
+              "  await realtimeClient.realtime.setAuth();",
+              "}",
+              "",
+          ]
+          helper = '\n'.join(helper_lines)
           if anchor not in src:
               raise SystemExit('refreshSessionIfNeeded anchor missing')
           if 'async function bindSupabaseClientSession()' not in src:
               src = src.replace(anchor, helper + anchor, 1)
 
-          old = "  await realtimeClient.realtime.setAuth(state.session.access_token);\n}"
-          if old not in src:
+          refresh_old = "  await realtimeClient.realtime.setAuth(state.session.access_token);\n}"
+          if refresh_old not in src:
               raise SystemExit('refresh explicit setAuth anchor missing')
-          src = src.replace(old, "}", 1)
+          src = src.replace(refresh_old, "}", 1)
 
-          old = "  await realtimeClient.realtime.setAuth(state.session.access_token);\n  const subscribeStatus = (kind) => (status) => {"
-          new = "  await bindSupabaseClientSession();\n  const subscribeStatus = (kind) => (status) => {"
-          if old not in src:
+          start_old = "  await realtimeClient.realtime.setAuth(state.session.access_token);\n  const subscribeStatus = (kind) => (status) => {"
+          start_new = "  await bindSupabaseClientSession();\n  const subscribeStatus = (kind) => (status) => {"
+          if start_old not in src:
               raise SystemExit('startRealtime explicit setAuth anchor missing')
-          src = src.replace(old, new, 1)
+          src = src.replace(start_old, start_new, 1)
 
-          required = [
+          for token in [
               'async function bindSupabaseClientSession()',
               'await realtimeClient.auth.setSession({',
               'await realtimeClient.realtime.setAuth();',
               'await bindSupabaseClientSession();',
-          ]
-          for token in required:
+          ]:
               if token not in src:
                   raise SystemExit(f'missing guardrail: {token}')
           if 'realtime.setAuth(state.session.access_token)' in src:
