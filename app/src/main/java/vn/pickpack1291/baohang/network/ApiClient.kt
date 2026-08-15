@@ -232,6 +232,11 @@ class ApiClient(
         request("POST", "$baseUrl/functions/v1/api/$action", payload, authenticated = true, eventName = "api_$action")
     }
 
+    suspend fun invokeEdge(function: String, action: String, payload: JSONObject): JSONObject = withContext(Dispatchers.IO) {
+        refreshSessionIfNeeded()
+        request("POST", "$baseUrl/functions/v1/${function.trim('/')}/${action.trim('/')}", payload, authenticated = true, eventName = "edge_${function}_$action")
+    }
+
     private fun fetchProfile(accessToken: String, userId: String): UserProfile {
         val encodedId = URLEncoder.encode(userId, StandardCharsets.UTF_8.name())
         val result = requestArray(

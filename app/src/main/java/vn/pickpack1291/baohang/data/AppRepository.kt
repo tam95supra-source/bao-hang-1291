@@ -6,6 +6,7 @@ import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import org.json.JSONArray
@@ -13,7 +14,12 @@ import org.json.JSONObject
 import vn.pickpack1291.baohang.BuildConfig
 import vn.pickpack1291.baohang.diagnostics.DiagnosticsLogger
 import vn.pickpack1291.baohang.network.ApiClient
+import vn.pickpack1291.baohang.network.ApiException
+import vn.pickpack1291.baohang.network.DirectRpcClient
+import vn.pickpack1291.baohang.network.EmergencyFirestoreClient
+import vn.pickpack1291.baohang.network.SheetFallbackClient
 import vn.pickpack1291.baohang.sync.SyncScheduler
+import java.io.IOException
 import java.time.Duration
 import java.time.Instant
 import java.util.UUID
@@ -25,26 +31,79 @@ class AppRepository(
     private val api: ApiClient,
     private val diagnostics: DiagnosticsLogger
 ) {
+    class MutationUnavailableException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+    enum class AuthorityMode { SERVICE, SHEET, EMERGENCY, BLOCKED }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val direct = DirectRpcClient(session)
+    private val sheet = SheetFallbackClient(session)
+    private val emergency = EmergencyFirestoreClient(session)
+    @Volatile var authorityMode: AuthorityMode = runCatching { AuthorityMode.valueOf(session.preferredAuthority) }.getOrDefault(AuthorityMode.SERVICE)
+        private set
+
+    private val preferredAuthority: AuthorityMode
+        get() = runCatching { AuthorityMode.valueOf(session.preferredAuthority) }.getOrDefault(AuthorityMode.SERVICE)
+
+    private fun commitAuthority(mode: AuthorityMode) {
+        require(mode != AuthorityMode.BLOCKED)
+        authorityMode = mode
+        session.setPreferredAuthority(mode.name)
+    }
 
     suspend fun login(employeeCode: String, password: String): UserProfile {
-        val auth = api.signIn(employeeCode.trim(), password)
-        session.save(auth)
-        diagnostics.info("session_saved", mapOf("employee_code" to auth.profile.employeeCode, "role" to auth.profile.role.wire))
-        registerCurrentDevice()
-        if (database.outboxCount() > 0) SyncScheduler.enqueueOutbox(context)
-        if (catalogNeedsRefresh()) SyncScheduler.enqueueCatalog(context)
-        return auth.profile
+        var lastServiceError: Exception? = null
+        for ((index, waitMs) in longArrayOf(0L, 500L, 1_500L).withIndex()) {
+            if (waitMs > 0) delay(waitMs)
+            try {
+                val auth = api.signIn(employeeCode.trim(), password)
+                session.save(auth)
+                commitAuthority(AuthorityMode.SERVICE)
+                diagnostics.info("session_saved", mapOf("employee_code" to auth.profile.employeeCode, "role" to auth.profile.role.wire, "attempt" to index + 1))
+                registerCurrentDevice()
+                refreshFallbackCredentialIfPossible(force = true)
+                provisionEmergencyIfPossible()
+                resolveAuthorityFromRecoveryState()
+                if (database.outboxCount() > 0) SyncScheduler.enqueueOutbox(context)
+                if (catalogNeedsRefresh()) SyncScheduler.enqueueCatalog(context)
+                return auth.profile
+            } catch (error: Exception) {
+                if (!isLoginServiceUnavailable(error)) throw error
+                lastServiceError = error
+            }
+        }
+        val backup = try { sheet.backupLogin(employeeCode, password) } catch (error: Exception) {
+            throw MutationUnavailableException("Service không khả dụng và đăng nhập dự phòng không được xác nhận.", error)
+        }
+        session.saveBackupProfile(backup.profile)
+        session.saveFallbackCredential(backup.fallbackToken, backup.fallbackUrl, backup.expiresAtMillis)
+        commitAuthority(AuthorityMode.SHEET)
+        runCatching { emergency.provisionBackup(backup.firebaseEmail, password, backup.profile.id) }
+            .onFailure { diagnostics.warn("backup_emergency_provision_deferred", mapOf("error" to it.message.orEmpty().take(160))) }
+        diagnostics.info("backup_session_saved", mapOf("account_id" to backup.profile.id, "role" to backup.profile.role.wire))
+        return backup.profile
+    }
+
+    private fun isLoginServiceUnavailable(error: Exception): Boolean = when (error) {
+        is ApiException -> error.statusCode == 408 || error.statusCode == 429 || error.statusCode >= 500
+        is IOException -> true
+        else -> false
     }
 
     fun logout() {
         diagnostics.info("logout", mapOf("employee_code" to (session.profile?.employeeCode ?: "")))
+        authorityMode = AuthorityMode.BLOCKED
+        emergency.signOut()
         session.clear()
     }
 
     suspend fun refreshProfile(): UserProfile {
+        if (session.sessionKind == "BACKUP") { resolveAuthorityFromRecoveryState(); return session.profile ?: throw MutationUnavailableException("Phiên dự phòng không hợp lệ") }
         val profile = api.sessionProfile()
         session.updateProfile(profile)
+        refreshFallbackCredentialIfPossible()
+        provisionEmergencyIfPossible()
+        resolveAuthorityFromRecoveryState()
         diagnostics.info("profile_refreshed", mapOf("role" to profile.role.wire))
         return profile
     }
@@ -55,77 +114,255 @@ class AppRepository(
     }
 
     fun searchSkus(query: String) = database.searchSkus(query)
-    suspend fun searchSkusOnline(query: String) = api.searchSkus(query)
-
+    suspend fun searchSkusOnline(query: String) = runCatching { direct.searchSkus(query) }.getOrElse { api.searchSkus(query) }
 
     suspend fun reportShortage(sku: String): ReportResult {
         val requestId = UUID.randomUUID().toString()
+        val cachedSku = database.searchSkus(sku.trim(), 20).firstOrNull { it.sku.equals(sku.trim(), true) }
         diagnostics.info("shortage_submit", mapOf("sku" to sku, "request_id" to requestId))
-        return try {
-            val result = api.reportShortage(sku, requestId)
+        return mutationWithAuthorities(
+            requestId = requestId,
+            operation = "REPORT_SHORTAGE",
+            service = { direct.reportShortage(sku, requestId) },
+            fallback = { sheet.reportShortage(sku, requestId) },
+            emergencyCall = {
+                if (cachedSku == null || catalogNeedsRefresh(24)) {
+                    throw EmergencyFirestoreClient.EmergencyException("CATALOG_NOT_FRESH", "Không đủ dữ liệu SKU còn hiệu lực để dùng Emergency")
+                }
+                emergency.reportShortage(sku, cachedSku.productName, requestId)
+            }
+        ).also { result ->
             database.upsertIssues(listOf(result.issue))
-            diagnostics.info("shortage_submit_success", mapOf("sku" to sku, "issue_id" to result.issue.id, "report_count" to result.issue.reportCount, "aggregated" to result.wasAlreadyReported))
-            result
-        } catch (error: Exception) {
-            diagnostics.error("shortage_submit_offline", error, mapOf("sku" to sku))
-            val localId = "offline-${UUID.randomUUID()}"
-            val now = Instant.now().toString()
-            val item = database.searchSkus(sku, 1).firstOrNull()
-            val issue = StockIssue(
-                localId, sku, item?.productName.orEmpty(), IssueStatus.OPEN, 1, now, now,
-                latestReporterName = session.profile?.fullName.orEmpty(), latestMessage = "Đang chờ đồng bộ"
-            )
-            database.upsertIssues(listOf(issue))
-            database.enqueue("report-shortage", JSONObject().put("sku", sku).put("client_request_id", requestId))
-            SyncScheduler.enqueueOutbox(context)
-            diagnostics.info("outbox_sync_scheduled", mapOf("action" to "report-shortage", "pending" to database.outboxCount()))
-            ReportResult(issue, false, "ĐÃ LƯU TRÊN MÁY • CHỜ ĐỒNG BỘ")
+            diagnostics.info("shortage_submit_success", mapOf("sku" to sku, "issue_id" to result.issue.id, "authority" to authorityMode.name))
         }
     }
 
-    suspend fun loadMyIssues(): List<StockIssue> = try {
-        api.myIssues().also(database::upsertIssues)
-    } catch (_: Exception) { database.cachedIssues(100) }
-
-    suspend fun loadActiveIssues(): List<StockIssue> = try {
-        api.activeIssues().also(database::upsertIssues)
-    } catch (_: Exception) { database.cachedIssues(200).filter { it.status.isOpenBucket } }
-
-    suspend fun loadIssueBoard(): IssueBoard = api.issueBoard().also {
-        database.upsertIssues(it.open + it.claimed + it.recent)
-    }
-
-    suspend fun claimIssue(issueId: String): StockIssue = api.claimIssue(issueId).also {
-        database.upsertIssues(listOf(it))
-        diagnostics.info("issue_claim", mapOf("issue_id" to issueId, "sku" to it.sku, "version" to it.issueVersion))
-    }
-
-    suspend fun reassignIssue(issueId: String, newAssigneeId: String, reason: String): StockIssue =
-        api.reassignIssue(issueId, newAssigneeId, reason).also {
-            database.upsertIssues(listOf(it))
-            diagnostics.info("issue_reassign", mapOf("issue_id" to issueId, "new_assignee" to newAssigneeId, "version" to it.issueVersion))
+    suspend fun loadMyIssues(): List<StockIssue> {
+        return when (preferredAuthority) {
+            AuthorityMode.SERVICE -> try {
+                direct.myIssues().also { commitAuthority(AuthorityMode.SERVICE); database.upsertIssues(it) }
+            } catch (error: Exception) {
+                if (!isServiceUnavailable(error)) return runCatching { api.myIssues().also(database::upsertIssues) }.getOrElse { database.cachedIssues(100) }
+                readMyIssuesFromFallbacks()
+            }
+            AuthorityMode.SHEET -> readMyIssuesFromSheetThenEmergency()
+            AuthorityMode.EMERGENCY -> readMyIssuesFromEmergency()
+            AuthorityMode.BLOCKED -> database.cachedIssues(100)
         }
+    }
+
+    private suspend fun readMyIssuesFromFallbacks(): List<StockIssue> = readMyIssuesFromSheetThenEmergency()
+
+    private suspend fun readMyIssuesFromSheetThenEmergency(): List<StockIssue> {
+        if (session.hasValidFallbackCredential) {
+            try {
+                return sheet.myIssues().also { commitAuthority(AuthorityMode.SHEET); database.upsertIssues(it) }
+            } catch (sheetError: Exception) {
+                if (!isSheetUnavailable(sheetError)) return database.cachedIssues(100)
+            }
+        }
+        return readMyIssuesFromEmergency()
+    }
+
+    private suspend fun readMyIssuesFromEmergency(): List<StockIssue> {
+        if (!emergency.isProvisioned) { authorityMode = AuthorityMode.BLOCKED; return database.cachedIssues(100) }
+        return runCatching { emergency.myIssues() }
+            .onSuccess { commitAuthority(AuthorityMode.EMERGENCY); database.upsertIssues(it) }
+            .getOrElse { authorityMode = AuthorityMode.BLOCKED; database.cachedIssues(100) }
+    }
+
+    suspend fun loadActiveIssues(): List<StockIssue> = loadIssueBoard().let { it.open + it.claimed }
+
+    suspend fun loadIssueBoard(): IssueBoard {
+        return when (preferredAuthority) {
+            AuthorityMode.SERVICE -> try {
+                direct.issueBoard().also { commitAuthority(AuthorityMode.SERVICE); database.upsertIssues(it.open + it.claimed + it.recent) }
+            } catch (error: Exception) {
+                if (!isServiceUnavailable(error)) throw error
+                readBoardFromSheetThenEmergency()
+            }
+            AuthorityMode.SHEET -> readBoardFromSheetThenEmergency()
+            AuthorityMode.EMERGENCY -> readBoardFromEmergency()
+            AuthorityMode.BLOCKED -> cachedBoard()
+        }
+    }
+
+    private suspend fun readBoardFromSheetThenEmergency(): IssueBoard {
+        if (session.hasValidFallbackCredential) {
+            try {
+                return sheet.issueBoard().also { commitAuthority(AuthorityMode.SHEET); database.upsertIssues(it.open + it.claimed + it.recent) }
+            } catch (sheetError: Exception) {
+                if (!isSheetUnavailable(sheetError)) throw sheetError
+            }
+        }
+        return readBoardFromEmergency()
+    }
+
+    private suspend fun readBoardFromEmergency(): IssueBoard {
+        if (emergency.isProvisioned) {
+            try {
+                return emergency.issueBoard().also { commitAuthority(AuthorityMode.EMERGENCY); database.upsertIssues(it.open + it.claimed + it.recent) }
+            } catch (fireError: Exception) {
+                diagnostics.warn("emergency_board_unavailable", mapOf("error" to fireError.message.orEmpty().take(200)))
+            }
+        }
+        authorityMode = AuthorityMode.BLOCKED
+        return cachedBoard()
+    }
+
+    private fun cachedBoard(): IssueBoard {
+        val cached = database.cachedIssues(200)
+        return IssueBoard(cached.filter { it.status == IssueStatus.OPEN }, cached.filter { it.status.isClaimedBucket }, cached.filter { !it.status.isOpenBucket })
+    }
+
+    suspend fun claimIssue(issueId: String): StockIssue {
+        val requestId = UUID.randomUUID().toString()
+        return mutationWithAuthorities(requestId, "CLAIM",
+            service = { direct.claimIssue(issueId, requestId) },
+            fallback = { sheet.claimIssue(issueId, requestId) },
+            emergencyCall = { emergency.claimIssue(issueId, requestId) }
+        ).also { database.upsertIssues(listOf(it)); diagnostics.info("issue_claim", mapOf("issue_id" to issueId, "version" to it.issueVersion, "authority" to authorityMode.name)) }
+    }
+
+    suspend fun reassignIssue(issueId: String, newAssigneeId: String, reason: String): StockIssue {
+        val requestId = UUID.randomUUID().toString()
+        return mutationWithAuthorities(requestId, "REASSIGN",
+            service = { direct.reassignIssue(issueId, newAssigneeId, reason, requestId) },
+            fallback = { sheet.reassignIssue(issueId, newAssigneeId, reason, requestId) },
+            emergencyCall = { emergency.reassignIssue(issueId, newAssigneeId, reason, requestId) }
+        ).also { database.upsertIssues(listOf(it)); diagnostics.info("issue_reassign", mapOf("issue_id" to issueId, "new_assignee" to newAssigneeId, "version" to it.issueVersion, "authority" to authorityMode.name)) }
+    }
 
     suspend fun updateIssue(issueId: String, action: String): StockIssue {
-        diagnostics.info("issue_update_start", mapOf("issue_id" to issueId, "action" to action))
-        return api.updateIssue(issueId, action).also {
-            database.upsertIssues(listOf(it))
-            diagnostics.info("issue_update_success", mapOf("issue_id" to issueId, "sku" to it.sku, "status" to it.status.wire, "version" to it.issueVersion))
-        }
+        val requestId = UUID.randomUUID().toString()
+        diagnostics.info("issue_update_start", mapOf("issue_id" to issueId, "action" to action, "request_id" to requestId))
+        return mutationWithAuthorities(requestId, action.uppercase(),
+            service = { direct.updateIssue(issueId, action, requestId) },
+            fallback = { sheet.updateIssue(issueId, action, requestId) },
+            emergencyCall = { emergency.updateIssue(issueId, action, requestId) }
+        ).also { database.upsertIssues(listOf(it)); diagnostics.info("issue_update_success", mapOf("issue_id" to issueId, "status" to it.status.wire, "version" to it.issueVersion, "authority" to authorityMode.name)) }
     }
 
-    suspend fun pendingAlerts(): List<PendingAlert> = api.pendingAlerts()
-    suspend fun markAlertReceived(eventId: String) = api.markAlertReceived(eventId)
-    suspend fun markAlertDisplayed(eventId: String) = api.markAlertDisplayed(eventId)
+    private suspend fun <T> mutationWithAuthorities(
+        requestId: String,
+        operation: String,
+        service: suspend () -> T,
+        fallback: suspend () -> T,
+        emergencyCall: suspend () -> T
+    ): T {
+        var lastError: Exception? = null
+        val retryMs = longArrayOf(0L, 500L, 1_500L)
+
+        if (preferredAuthority == AuthorityMode.SERVICE) {
+            for (index in retryMs.indices) {
+                if (retryMs[index] > 0) delay(retryMs[index])
+                try {
+                    return service().also { commitAuthority(AuthorityMode.SERVICE) }
+                } catch (error: Exception) {
+                    if (!isServiceUnavailable(error)) {
+                        diagnostics.warn("service_business_rejected", mapOf("operation" to operation, "request_id" to requestId, "error" to error.message.orEmpty().take(200)))
+                        throw error
+                    }
+                    lastError = error
+                }
+            }
+        }
+
+        if (preferredAuthority in setOf(AuthorityMode.SERVICE, AuthorityMode.SHEET) && session.hasValidFallbackCredential) {
+            for (index in retryMs.indices) {
+                if (retryMs[index] > 0) delay(retryMs[index])
+                try {
+                    return fallback().also {
+                        commitAuthority(AuthorityMode.SHEET)
+                        diagnostics.warn("sheet_fallback_committed", mapOf("operation" to operation, "request_id" to requestId))
+                    }
+                } catch (error: Exception) {
+                    if (!isSheetUnavailable(error)) {
+                        diagnostics.warn("sheet_business_rejected", mapOf("operation" to operation, "request_id" to requestId, "error" to error.message.orEmpty().take(200)))
+                        throw error
+                    }
+                    lastError = error
+                }
+            }
+        }
+
+        if (emergency.isProvisioned) {
+            try {
+                return emergencyCall().also {
+                    commitAuthority(AuthorityMode.EMERGENCY)
+                    diagnostics.warn("firebase_emergency_committed", mapOf("operation" to operation, "request_id" to requestId))
+                }
+            } catch (error: EmergencyFirestoreClient.EmergencyException) {
+                if (!isEmergencyUnavailable(error)) throw error
+                lastError = error
+            } catch (error: Exception) {
+                lastError = error
+            }
+        }
+
+        // BLOCKED is an observed availability state only. Do not erase the sticky
+        // preferred authority; retry must resume the same hierarchy, never jump ahead.
+        authorityMode = AuthorityMode.BLOCKED
+        diagnostics.warn("mutation_blocked_no_authority", mapOf("operation" to operation, "request_id" to requestId, "preferred_authority" to preferredAuthority.name))
+        throw MutationUnavailableException("Không có cloud nào xác nhận thao tác. Dữ liệu chưa được gửi và sẽ không tự động gửi lại.", lastError)
+    }
+
+    private fun isServiceUnavailable(error: Exception): Boolean = when (error) {
+        is DirectRpcClient.RpcException -> error.status == 408 || error.status == 429 || error.status >= 500
+        is IOException -> true
+        else -> false
+    }
+
+    private fun isSheetUnavailable(error: Exception): Boolean = when (error) {
+        is SheetFallbackClient.FallbackException -> {
+            val code = error.code.uppercase()
+            code == "LOCK_TIMEOUT" || code == "INVALID_RESPONSE" || code == "FALLBACK_TOKEN_EXPIRED" ||
+                code == "HTTP_408" || code == "HTTP_429" || code.removePrefix("HTTP_").toIntOrNull()?.let { it >= 500 } == true
+        }
+        is IOException -> true
+        else -> false
+    }
+
+    private fun isEmergencyUnavailable(error: EmergencyFirestoreClient.EmergencyException): Boolean =
+        error.code in setOf("NOT_PROVISIONED", "AUTH_FAILED", "HTTP_408", "HTTP_429", "HTTP_500", "HTTP_502", "HTTP_503", "HTTP_504")
+
+    private suspend fun refreshFallbackCredentialIfPossible(force: Boolean = false) {
+        val shouldRefresh = force || !session.hasValidFallbackCredential || session.fallbackExpiresAtMillis < System.currentTimeMillis() + 24L * 60L * 60L * 1000L
+        if (!shouldRefresh) return
+        runCatching { sheet.refreshCredential() }
+            .onSuccess { diagnostics.info("fallback_credential_refreshed", mapOf("expires_at_ms" to session.fallbackExpiresAtMillis)) }
+            .onFailure { diagnostics.warn("fallback_credential_refresh_deferred", mapOf("error" to it.message.orEmpty().take(160))) }
+    }
+
+    private suspend fun provisionEmergencyIfPossible() {
+        runCatching { emergency.provision() }
+            .onSuccess { diagnostics.info("emergency_identity_provisioned", mapOf("device_id_suffix" to session.deviceId.takeLast(6))) }
+            .onFailure { diagnostics.warn("emergency_identity_provision_deferred", mapOf("error" to it.message.orEmpty().take(160))) }
+    }
+
+    private suspend fun resolveAuthorityFromRecoveryState() {
+        if (!session.hasValidFallbackCredential) return
+        runCatching { sheet.health() }.onSuccess { health ->
+            when (health.sheetMode) {
+                "ACTIVE_FALLBACK", "RECOVERY_IMPORTING", "RECOVERY_BLOCKED", "EMERGENCY_DRAIN" -> {
+                    if (preferredAuthority != AuthorityMode.EMERGENCY) commitAuthority(AuthorityMode.SHEET)
+                }
+                "EMERGENCY_CAUGHT_UP" -> commitAuthority(AuthorityMode.SHEET)
+                "SERVICE_CAUGHT_UP", "STANDBY", "ACTIVE_SERVICE" -> commitAuthority(AuthorityMode.SERVICE)
+                // STANDBY_PRE_CUTOVER intentionally leaves the current preference untouched.
+            }
+        }.onFailure { diagnostics.warn("authority_recovery_probe_deferred", mapOf("error" to it.message.orEmpty().take(160))) }
+    }
+
+    suspend fun pendingAlerts(): List<PendingAlert> = runCatching { direct.pendingAlerts() }.getOrElse { api.pendingAlerts() }
+    suspend fun markAlertReceived(eventId: String) = runCatching { direct.markAlertReceived(eventId) }.getOrElse { api.markAlertReceived(eventId) }
+    suspend fun markAlertDisplayed(eventId: String) = runCatching { direct.markAlertDisplayed(eventId) }.getOrElse { api.markAlertDisplayed(eventId) }
 
     suspend fun acknowledgeAlert(eventId: String) {
-        try {
-            api.acknowledgeAlert(eventId)
-            diagnostics.info("alert_ack", mapOf("event_id" to eventId))
-        } catch (error: Exception) {
-            diagnostics.warn("alert_ack_deferred", mapOf("event_id" to eventId, "error" to error.message.orEmpty()))
-            database.enqueue("ack-alert", JSONObject().put("event_id", eventId))
-            SyncScheduler.enqueueOutbox(context)
+        try { direct.acknowledgeAlert(eventId); authorityMode = AuthorityMode.SERVICE; diagnostics.info("alert_ack", mapOf("event_id" to eventId, "authority" to "POSTGRES_RPC")) }
+        catch (directError: Exception) {
+            try { api.acknowledgeAlert(eventId); authorityMode = AuthorityMode.SERVICE }
+            catch (edgeError: Exception) { throw MutationUnavailableException("Không thể xác nhận cảnh báo khi chưa kết nối được hệ thống.", edgeError) }
         }
     }
 
@@ -134,99 +371,54 @@ class AppRepository(
         val last = database.metadata("catalog_last_sync") ?: return true
         return runCatching { Duration.between(Instant.parse(last), Instant.now()).toHours() >= maxAgeHours }.getOrDefault(true)
     }
-
     suspend fun syncCatalogIfStale(maxAgeHours: Long = 6): Int = if (catalogNeedsRefresh(maxAgeHours)) syncCatalog() else 0
-
     suspend fun syncCatalog(onPage: ((count: Int) -> Unit)? = null): Int {
-        var syncUntil: String? = null
-        var afterSku: String? = null
-        var count = 0
-        var revision: Long? = null
-        var hasMore = true
+        var syncUntil: String? = null; var afterSku: String? = null; var count = 0; var revision: Long? = null; var hasMore = true
         diagnostics.info("catalog_sync_start", mapOf("mode" to "active_full"))
         while (hasMore) {
-            val page = api.catalogPage(afterSku, null, syncUntil)
-            syncUntil = page.syncUntil
-            if (revision == null) {
-                revision = page.revision
-                val localRevision = database.metadata("catalog_revision")?.toLongOrNull()
-                if (localRevision != page.revision) database.clearSkus()
-            }
-            database.upsertSkus(page.items)
-            count += page.items.size
-            afterSku = page.items.lastOrNull()?.sku ?: afterSku
-            onPage?.invoke(count)
-            hasMore = page.hasMore && page.items.isNotEmpty()
+            val page = api.catalogPage(afterSku, null, syncUntil); syncUntil = page.syncUntil
+            if (revision == null) { revision = page.revision; if (database.metadata("catalog_revision")?.toLongOrNull() != page.revision) database.clearSkus() }
+            database.upsertSkus(page.items); count += page.items.size; afterSku = page.items.lastOrNull()?.sku ?: afterSku; onPage?.invoke(count); hasMore = page.hasMore && page.items.isNotEmpty()
         }
-        syncUntil?.let { database.setMetadata("catalog_last_sync", it) }
-        revision?.let { database.setMetadata("catalog_revision", it.toString()) }
-        diagnostics.info("catalog_sync_success", mapOf("received" to count, "local_count" to database.skuCount(), "revision" to (revision ?: 0L)))
-        return count
-    }    suspend fun flushOutbox(): Int {
+        syncUntil?.let { database.setMetadata("catalog_last_sync", it) }; revision?.let { database.setMetadata("catalog_revision", it.toString()) }
+        diagnostics.info("catalog_sync_success", mapOf("received" to count, "local_count" to database.skuCount(), "revision" to (revision ?: 0L))); return count
+    }
+
+    suspend fun flushOutbox(): Int {
         var sent = 0
         database.outbox().forEach { item ->
             try {
-                api.invoke(item.action, item.payload)
-                database.removeOutbox(item.id)
-                sent++
+                when (item.action) {
+                    "report-shortage" -> direct.reportShortage(item.payload.optString("sku"), item.payload.optString("client_request_id"))
+                    "ack-alert" -> direct.acknowledgeAlert(item.payload.optString("event_id"))
+                    else -> api.invoke(item.action, item.payload)
+                }
+                database.removeOutbox(item.id); sent++
             } catch (error: Exception) {
-                database.failOutbox(item.id, error.message.orEmpty())
-                diagnostics.warn("outbox_flush_paused", mapOf("action" to item.action, "sent" to sent, "error" to error.message.orEmpty(), "pending" to database.outboxCount()))
-                return sent
+                database.failOutbox(item.id, error.message.orEmpty()); diagnostics.warn("legacy_outbox_flush_paused", mapOf("action" to item.action, "sent" to sent, "error" to error.message.orEmpty().take(200), "pending" to database.outboxCount())); return sent
             }
         }
-        if (sent > 0) diagnostics.info("outbox_flush_success", mapOf("sent" to sent, "remaining" to database.outboxCount()))
-        return sent
+        if (sent > 0) diagnostics.info("legacy_outbox_flush_success", mapOf("sent" to sent, "remaining" to database.outboxCount())); return sent
     }
 
     fun outboxCount(): Int = database.outboxCount()
-
     suspend fun registerCurrentDevice() {
-        val token = FirebaseMessaging.getInstance().token.await()
-        api.registerDevice(token, "${Build.MANUFACTURER} ${Build.MODEL}", "${BuildConfig.VERSION_NAME} [${BuildConfig.OTA_CHANNEL.uppercase()}]")
-        session.markDeviceRegistered()
-        diagnostics.info("device_registered", mapOf("device" to "${Build.MANUFACTURER} ${Build.MODEL}", "version" to BuildConfig.VERSION_NAME))
+        val token = FirebaseMessaging.getInstance().token.await(); val device = "${Build.MANUFACTURER} ${Build.MODEL}"; val version = "${BuildConfig.VERSION_NAME} [${BuildConfig.OTA_CHANNEL.uppercase()}]"
+        runCatching { direct.registerDevice(token, device, version) }.getOrElse { api.registerDevice(token, device, version) }; session.markDeviceRegistered(); diagnostics.info("device_registered", mapOf("device" to device, "version" to BuildConfig.VERSION_NAME))
     }
+    fun registerDeviceAsync(token: String) { scope.launch { val device="${Build.MANUFACTURER} ${Build.MODEL}"; val version="${BuildConfig.VERSION_NAME} [${BuildConfig.OTA_CHANNEL.uppercase()}]"; runCatching { runCatching { direct.registerDevice(token,device,version) }.getOrElse { api.registerDevice(token,device,version) }; session.markDeviceRegistered(); refreshFallbackCredentialIfPossible(); provisionEmergencyIfPossible(); diagnostics.info("fcm_token_registered",mapOf("version" to BuildConfig.VERSION_NAME)) }.onFailure { diagnostics.error("fcm_token_register_failed",it) } } }
 
-    fun registerDeviceAsync(token: String) {
-        scope.launch {
-            runCatching {
-                api.registerDevice(token, "${Build.MANUFACTURER} ${Build.MODEL}", "${BuildConfig.VERSION_NAME} [${BuildConfig.OTA_CHANNEL.uppercase()}]")
-                session.markDeviceRegistered()
-                diagnostics.info("fcm_token_registered", mapOf("version" to BuildConfig.VERSION_NAME))
-            }.onFailure { diagnostics.error("fcm_token_register_failed", it) }
-        }
-    }
+    suspend fun sendDiagnosticLog(): JSONObject { diagnostics.info("diagnostic_upload_requested",mapOf("role" to session.effectiveRole.wire,"version" to BuildConfig.VERSION_NAME)); val bundle=diagnostics.prepareUpload()?:return JSONObject().put("uploaded",false).put("message","Chưa có log để gửi"); val result=api.uploadDiagnosticLog(bundle); if(result.optBoolean("uploaded",false))diagnostics.clearAfterConfirmedUpload(); return result }
+    fun skuCount()=database.skuCount()
+    suspend fun getOperationalConfig()=api.getOperationalConfig(); suspend fun saveOperationalConfig(config:OperationalConfig)=api.saveOperationalConfig(config); suspend fun getConfig()=api.getConfig(); suspend fun saveConfig(config:AppConfig)=api.saveConfig(config); suspend fun importSkus(items:List<SkuItem>)=api.importSkus(items)
+    suspend fun replaceCatalog(items:List<SkuItem>,sourceName:String):JSONObject { val result=api.replaceCatalog(items,sourceName);database.clearSkus();database.setMetadata("catalog_revision","0");syncCatalog();return result }
+    suspend fun listBackupAccounts(): JSONArray = api.invokeEdge("backup-account-admin", "list", JSONObject()).optJSONArray("accounts") ?: JSONArray()
+    suspend fun createBackupAccount(username:String,displayName:String,role:UserRole,deviceScope:String,password:String,expiresAt:String): JSONObject = api.invokeEdge("backup-account-admin","create",JSONObject().put("username",username).put("display_name",displayName).put("role",role.wire).put("device_scope",deviceScope).put("password",password).put("expires_at",expiresAt))
+    suspend fun lockBackupAccount(id:String): JSONObject = api.invokeEdge("backup-account-admin","lock",JSONObject().put("id",id))
+    suspend fun resetBackupAccount(id:String,password:String): JSONObject = api.invokeEdge("backup-account-admin","reset",JSONObject().put("id",id).put("password",password))
+    suspend fun unlockBackupAccount(id:String,password:String): JSONObject = api.invokeEdge("backup-account-admin","unlock",JSONObject().put("id",id).put("password",password))
 
-    suspend fun sendDiagnosticLog(): JSONObject {
-        diagnostics.info("diagnostic_upload_requested", mapOf("role" to session.effectiveRole.wire, "version" to BuildConfig.VERSION_NAME))
-        val bundle = diagnostics.prepareUpload() ?: return JSONObject().put("uploaded", false).put("message", "Chưa có log để gửi")
-        val result = api.uploadDiagnosticLog(bundle)
-        if (result.optBoolean("uploaded", false)) diagnostics.clearAfterConfirmedUpload()
-        return result
-    }
-
-    fun skuCount() = database.skuCount()
-    suspend fun getOperationalConfig() = api.getOperationalConfig()
-    suspend fun saveOperationalConfig(config: OperationalConfig) = api.saveOperationalConfig(config)
-    suspend fun getConfig() = api.getConfig()
-    suspend fun saveConfig(config: AppConfig) = api.saveConfig(config)
-    suspend fun importSkus(items: List<SkuItem>) = api.importSkus(items)
-
-    suspend fun replaceCatalog(items: List<SkuItem>, sourceName: String): JSONObject {
-        val result = api.replaceCatalog(items, sourceName)
-        database.clearSkus()
-        database.setMetadata("catalog_revision", "0")
-        syncCatalog()
-        return result
-    }
-    suspend fun listUsers() = api.listUsers()
-    suspend fun updateUser(user: UserProfile, employeeCode: String, fullName: String, contractor: String, role: UserRole, active: Boolean, newPassword: String) =
-        api.updateUser(user.id, employeeCode, fullName, contractor, role, active, newPassword).also {
-            diagnostics.info("user_updated", mapOf("target_employee_code" to it.employeeCode, "target_role" to it.role.wire, "active" to it.active))
-        }
-    suspend fun importUsers(items: List<ImportUserRow>) = api.importUsers(items)
-    suspend fun syncGoogleSheet() = api.syncGoogleSheet()
-    suspend fun reportsSummary() = api.reportsSummary()
-    suspend fun issueHistory(limit: Int = 200): JSONArray = api.issueHistory(limit)
+    suspend fun listUsers()=api.listUsers()
+    suspend fun updateUser(user:UserProfile,employeeCode:String,fullName:String,contractor:String,role:UserRole,active:Boolean,newPassword:String)=api.updateUser(user.id,employeeCode,fullName,contractor,role,active,newPassword).also{diagnostics.info("user_updated",mapOf("target_employee_code" to it.employeeCode,"target_role" to it.role.wire,"active" to it.active))}
+    suspend fun importUsers(items:List<ImportUserRow>)=api.importUsers(items); suspend fun syncGoogleSheet()=api.syncGoogleSheet(); suspend fun reportsSummary()=api.reportsSummary(); suspend fun issueHistory(limit:Int=200):JSONArray=api.issueHistory(limit)
 }

@@ -7,6 +7,9 @@ on:
       - 'web-admin/**'
       - 'supabase/functions/**'
       - 'supabase/migrations/**'
+      - 'google-apps-script/**'
+      - 'firestore.rules'
+      - 'firebase.json'
       - 'docs/BUSINESS_RULES.md'
   push:
     branches: [main]
@@ -14,6 +17,9 @@ on:
       - 'web-admin/**'
       - 'supabase/functions/**'
       - 'supabase/migrations/**'
+      - 'google-apps-script/**'
+      - 'firestore.rules'
+      - 'firebase.json'
       - 'docs/BUSINESS_RULES.md'
 
 permissions:
@@ -26,7 +32,7 @@ concurrency:
 jobs:
   quality:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v7
@@ -35,7 +41,6 @@ jobs:
           package-manager-cache: false
       - uses: denoland/setup-deno@v2
         with:
-          # Match the Deno runtime documented for Supabase Edge Functions.
           deno-version: v1.46.3
       - name: Install pinned web dependencies
         run: npm --prefix web-admin install --ignore-scripts --no-audit --no-fund --no-package-lock
@@ -61,14 +66,45 @@ jobs:
             test "$css_gzip" -le 30720 || { echo "CSS gzip budget exceeded: $css_gzip > 30720" >&2; exit 1; }
           fi
           echo "WEB_BUDGET=PASS initial_js_gzip=$js_gzip"
-      - name: Type-check Edge Functions
-        run: deno check supabase/functions/_shared/fcm.ts supabase/functions/api/index.ts supabase/functions/web-api/index.ts supabase/functions/admin-ops/index.ts supabase/functions/staff-watch/index.ts
+      - name: Type-check all Edge Functions
+        run: |
+          deno check \
+            supabase/functions/_shared/fcm.ts \
+            supabase/functions/api/index.ts \
+            supabase/functions/web-api/index.ts \
+            supabase/functions/admin-ops/index.ts \
+            supabase/functions/staff-watch/index.ts \
+            supabase/functions/notification-worker/index.ts \
+            supabase/functions/sheet-worker/index.ts \
+            supabase/functions/fallback-token/index.ts \
+            supabase/functions/emergency-auth/index.ts \
+            supabase/functions/emergency-drain/index.ts \
+            supabase/functions/fallback-importer/index.ts \
+            supabase/functions/firebase-bootstrap/index.ts \
+            supabase/functions/backup-account-admin/index.ts
+      - name: Syntax-check Apps Script source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp google-apps-script/Code.gs "$RUNNER_TEMP/Code.js"
+          node --check "$RUNNER_TEMP/Code.js"
+          if grep -En '[0-9]_[0-9]' google-apps-script/Code.gs; then
+            echo 'Apps Script parser-incompatible numeric separator detected' >&2
+            exit 1
+          fi
+      - name: Validate Firebase config shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e "JSON.parse(require('fs').readFileSync('firebase.json','utf8'))"
+          test -s firestore.rules
+          grep -Fq "allow read, write: if false" firestore.rules
+          grep -Fq "FIREBASE_EMERGENCY" firestore.rules
       - name: Guard migrations and public source from secrets
         shell: bash
         run: |
           set -euo pipefail
-          # Match actual PEM/json secret material, not source code that intentionally parses PEM markers.
-          if grep -R -n -E --exclude='*.example' --exclude='BUSINESS_RULES.md' '^[[:space:]]*-----BEGIN (RSA )?PRIVATE KEY-----|"private_key"[[:space:]]*:[[:space:]]*"-----BEGIN|SUPABASE_SERVICE_ROLE_KEY[[:space:]]*=[[:space:]]*[^$[:space:]]|RELEASE_STORE_PASSWORD[[:space:]]*=[[:space:]]*[^$[:space:]]|SUPRA_CREDENTIAL_MASTER_KEY[[:space:]]*=[[:space:]]*[^$[:space:]]' supabase app web-admin docs; then
+          if grep -R -n -E --exclude='*.example' --exclude='BUSINESS_RULES.md' '^[[:space:]]*-----BEGIN (RSA )?PRIVATE KEY-----|"private_key"[[:space:]]*:[[:space:]]*"-----BEGIN|SUPABASE_SERVICE_ROLE_KEY[[:space:]]*=[[:space:]]*[^$[:space:]]|RELEASE_STORE_PASSWORD[[:space:]]*=[[:space:]]*[^$[:space:]]|SUPRA_CREDENTIAL_MASTER_KEY[[:space:]]*=[[:space:]]*[^$[:space:]]' supabase app web-admin google-apps-script docs; then
             echo 'Possible secret value or private key material detected' >&2
             exit 1
           fi

@@ -6,8 +6,10 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.BaseAdapter
 import android.widget.TextView
+import vn.pickpack1291.baohang.BaoHangApplication
 import vn.pickpack1291.baohang.R
 import vn.pickpack1291.baohang.data.StockIssue
+import vn.pickpack1291.baohang.data.UserRole
 import java.time.Duration
 import java.time.Instant
 
@@ -30,9 +32,13 @@ class IssueAdapter(private val context: Context) : BaseAdapter() {
         view.findViewById<TextView>(R.id.tvIssueSku).text = item.sku
         view.findViewById<TextView>(R.id.tvIssueProduct).text = item.productName
         view.findViewById<TextView>(R.id.tvIssueElapsed).text = elapsed(item.reportedAt)
-        val assignee = item.assignedName.ifBlank { "Chưa có người nhận" }
-        view.findViewById<TextView>(R.id.tvIssueMeta).text =
+        val role = (context.applicationContext as? BaoHangApplication)?.session?.effectiveRole ?: UserRole.PICKER
+        view.findViewById<TextView>(R.id.tvIssueMeta).text = if (role == UserRole.PICKER) {
+            item.status.label
+        } else {
+            val assignee = item.assignedName.ifBlank { "Chưa có người nhận" }
             "${item.status.label} • ${item.reportCount} lượt báo • $assignee"
+        }
         return view
     }
 

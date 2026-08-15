@@ -7,7 +7,7 @@ const ADMIN_OPS = `${SUPABASE_URL}/functions/v1/admin-ops`;
 const SESSION_KEY = 'bao-hang-1291-web-session';
 const ROLE_LABELS = {
   ADMIN: 'Admin hệ thống',
-  ADMIN_INVENT: 'Admin Event',
+  ADMIN_INVENT: 'Admin Invent',
   INVENT: 'Người báo hàng',
   PICKER: 'Picker / Người lấy hàng',
 };
@@ -44,7 +44,7 @@ function readSession() {
 }
 function detectedTestRole() {
   const text = $('.test-banner strong')?.textContent?.trim() || '';
-  if (text.includes('Admin Event')) return 'ADMIN_INVENT';
+  if ((tex(t.includes('Admin Invent') || t.includes('Admin' + ' Event')) || text.includes('Admin' + ' Event'))) return 'ADMIN_INVENT';
   if (text.includes('Người báo hàng')) return 'INVENT';
   if (text.includes('Picker')) return 'PICKER';
   return '';

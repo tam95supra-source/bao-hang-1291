@@ -1,0 +1,39 @@
+name: Firestore rules emulator
+
+on:
+  pull_request:
+    paths:
+      - 'firestore.rules'
+      - 'firebase-rules-tests/**'
+      - '.github/workflows/firestore-rules-test.yml'
+  push:
+    branches: [target-final-20260814-impl, main]
+    paths:
+      - 'firestore.rules'
+      - 'firebase-rules-tests/**'
+      - '.github/workflows/firestore-rules-test.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rules:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install pinned rules test dependencies
+        shell: bash
+        run: npm --prefix firebase-rules-tests install --ignore-scripts --no-audit --no-fund --no-package-lock
+      - name: Run Firestore rules on local emulator only
+        shell: bash
+        run: npx --yes firebase-tools@15.25.0 emulators:exec --only firestore --project demo-bao-hang-1291 "node firebase-rules-tests/firestore-rules.test.mjs"

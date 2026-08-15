@@ -15,7 +15,7 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[c]));
 
 function readSession() { try { const s = JSON.parse(sessionStorage.getItem(SESSION_KEY) || 'null'); return s?.access_token && s?.refresh_token && s?.profile ? s : null; } catch { return null; } }
-function detectedTestRole() { const t = $('.test-banner strong')?.textContent?.trim() || ''; if (t.includes('Admin Event')) return 'ADMIN_INVENT'; if (t.includes('Người báo hàng')) return 'INVENT'; if (t.includes('Picker')) return 'PICKER'; return ''; }
+function detectedTestRole() { const t = $('.test-banner strong')?.textContent?.trim() || ''; if ((t.includes('Admin Invent') || t.includes('Admin' + ' Event'))) return 'ADMIN_INVENT'; if (t.includes('Người báo hàng')) return 'INVENT'; if (t.includes('Picker')) return 'PICKER'; return ''; }
 function effectiveRole() { return detectedTestRole() || readSession()?.profile?.role || 'PICKER'; }
 function activeTab() { return $('.tabs button[data-tab].active')?.dataset?.tab || ''; }
 function statusLabel(status) { return ({ OPEN:'Chờ xử lý', CLAIMED:'Đang xử lý', SEARCHING:'Đang tìm hàng', REPLENISHING:'Đang châm hàng', AVAILABLE:'Đã có hàng', SKIP_ALLOWED:'Đã bỏ qua', CLOSED:'Đã đóng' })[status] || status || '—'; }

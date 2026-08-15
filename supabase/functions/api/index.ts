@@ -10,8 +10,8 @@ const MAX_LOG_BYTES = 2 * 1024 * 1024;
 const ACTIVE_STATUSES = ["OPEN", "CLAIMED", "SEARCHING", "REPLENISHING"];
 const SITE_ID = "1291";
 const PROTECTED_ADMIN_CODE = "6281280";
-const STAFF_SHEET_ID = "1FRROqCp1lmkuHc3lc4UBpVI5_ZrtiPI1thlEymv458E";
-const STAFF_SHEET_NAME = "DANH MỤC NHÂN SỰ";
+const STAFF_SHEET_ID = "1HLBzpxHLd8qoTJopOA7M_q0dDvO56G0Tb4curKZV7EM";
+const STAFF_SHEET_NAME = "Trang tính1";
 
 type Role = "ADMIN" | "ADMIN_INVENT" | "INVENT" | "PICKER";
 type Profile = { id: string; employee_code: string; full_name: string; contractor: string; role: Role; active: boolean; source_kind?: string; source_position?: string; protected_account?: boolean };
@@ -97,7 +97,7 @@ async function notifyUsers(userIds: string[], issue: Record<string, unknown>, st
   if (!unique.length) return;
   const issueVersion = Math.max(1, Number(issue.issue_version ?? 1));
   const titleMap: Record<string, string> = {
-    OPEN: `Báo thiếu • SKU ${issue.sku}`,
+    OPEN: `CÓ SKU CẦN XỬ LÝ • SKU ${issue.sku}`,
     CLAIMED: `Đã nhận xử lý • SKU ${issue.sku}`,
     AVAILABLE: `ĐÃ CÓ HÀNG • SKU ${issue.sku}`,
     SKIP_ALLOWED: `CHO PHÉP SKIP • SKU ${issue.sku}`,
@@ -212,6 +212,11 @@ async function issueRows(ids?: string[], statuses?: string[], limit = 250) {
   }));
 }
 
+function pickerIssue(issue: Record<string, any>) {
+  const { report_count: _count, assigned_name: _assignedName, assigned_id: _assignedId, latest_reporter_name: _reporter, ...safe } = issue;
+  return safe;
+}
+
 async function bootstrapAdmin(req: Request, body: Record<string, unknown>) {
   const expected = Deno.env.get("BOOTSTRAP_SECRET") ?? "";
   if (!expected || req.headers.get("x-bootstrap-secret") !== expected) throw new HttpError(403, "Bootstrap secret không đúng");
@@ -246,7 +251,7 @@ async function importUsers(context: Context, items: Record<string, unknown>[]) {
       if (code === PROTECTED_ADMIN_CODE) throw new Error("Tài khoản quản trị cao nhất được bảo vệ");
       const role = String(item.role ?? "PICKER").trim().toUpperCase() as Role;
       const allowed = context.effectiveRole === "ADMIN" ? new Set<Role>(["ADMIN_INVENT","INVENT","PICKER"]) : new Set<Role>(["PICKER"]);
-      if (!allowed.has(role)) throw new Error(context.effectiveRole === "ADMIN" ? "Admin hệ thống chỉ tạo thêm Admin Event, Người báo hàng hoặc Picker" : "Admin Event chỉ được tạo thêm Picker / Người lấy hàng");
+      if (!allowed.has(role)) throw new Error(context.effectiveRole === "ADMIN" ? "Admin hệ thống chỉ tạo thêm Admin Invent, Người báo hàng hoặc Picker" : "Admin Invent chỉ được tạo thêm Picker / Người lấy hàng");
       const { data: existing, error: existingError } = await admin.from("profiles").select("id,role,source_kind,protected_account").ilike("employee_code", code).maybeSingle();
       if (existingError) throw existingError;
       if (existing?.protected_account || existing?.role === "ADMIN") throw new Error("Tài khoản quản trị cao nhất được bảo vệ");
@@ -287,11 +292,11 @@ async function updateManagedUser(context: Context, body: Record<string, unknown>
   if(targetError||!target)throw new HttpError(404,"Không tìm thấy tài khoản");
   if(target.protected_account||target.employee_code===PROTECTED_ADMIN_CODE||target.role==="ADMIN")throw new HttpError(409,"ADMIN_PROTECTED");
   if(target.source_kind==="GSHEET")throw new HttpError(409,"SOURCE_MANAGED_USER");
-  if(context.effectiveRole==="ADMIN_INVENT"&&target.role!=="PICKER")throw new HttpError(403,"Admin Event chỉ được quản lý Picker tạo thêm ngoài danh sách nguồn");
+  if(context.effectiveRole==="ADMIN_INVENT"&&target.role!=="PICKER")throw new HttpError(403,"Admin Invent chỉ được quản lý Picker tạo thêm ngoài danh sách nguồn");
   const employeeCode=required(body.employee_code,"Mã nhân viên"),fullName=required(body.full_name,"Họ tên"),contractor=String(body.contractor??"").trim();
   const role=String(body.role??target.role).trim().toUpperCase() as Role,active=typeof body.active==="boolean"?body.active:Boolean(target.active),newPassword=String(body.new_password??"");
   if(!["ADMIN_INVENT","INVENT","PICKER"].includes(role))throw new HttpError(400,"Quyền không hợp lệ");
-  if(context.effectiveRole==="ADMIN_INVENT"&&role!=="PICKER")throw new HttpError(403,"Admin Event chỉ được quản lý Picker");
+  if(context.effectiveRole==="ADMIN_INVENT"&&role!=="PICKER")throw new HttpError(403,"Admin Invent chỉ được quản lý Picker");
   if(newPassword&&newPassword.length<8)throw new HttpError(400,"Mật khẩu mới cần ít nhất 8 ký tự");
   if(employeeCode===PROTECTED_ADMIN_CODE)throw new HttpError(409,"ADMIN_PROTECTED");
   if(employeeCode.toLowerCase()!==String(target.employee_code).toLowerCase()){
@@ -309,20 +314,31 @@ async function syncSheet() {
   const url = Deno.env.get("GOOGLE_SHEET_WEBHOOK_URL") ?? "";
   const secret = Deno.env.get("GOOGLE_SHEET_WEBHOOK_SECRET") ?? "";
   if (!url || !secret) throw new HttpError(503, "Chưa cấu hình Google Sheet webhook");
-  const { data: events, error } = await admin.from("sheet_export_queue").select("*").is("exported_at", null).order("id").limit(500);
+  const { data: waiting, error } = await admin.from("sheet_export_queue").select("*").is("sheet_ack_at", null).order("id").limit(500);
   if (error) throw error;
-  if (!events?.length) return { exported: 0, remaining: 0 };
+  const events = waiting ?? [];
+  if (!events.length) return { exported: 0, remaining: 0 };
   const response = await fetch(url, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ secret, events }),
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ secret, mode: "export", events }),
   });
   const responseText = await response.text();
-  if (!response.ok) throw new Error(`Google Sheet ${response.status}: ${responseText}`);
-  const sheetResult = JSON.parse(responseText) as { ok?: boolean; error?: string };
+  if (!response.ok) throw new Error(`Google Sheet ${response.status}: ${responseText.slice(0, 300)}`);
+  const sheetResult = JSON.parse(responseText) as { ok?: boolean; error?: string; ack_event_ids?: string[] };
   if (sheetResult.ok !== true) throw new Error(`Google Sheet từ chối đồng bộ: ${sheetResult.error ?? "Không rõ lỗi"}`);
-  const ids = events.map((event) => event.id);
-  await admin.from("sheet_export_queue").update({ exported_at: new Date().toISOString() }).in("id", ids);
-  const { count } = await admin.from("sheet_export_queue").select("id", { count: "exact", head: true }).is("exported_at", null);
-  return { exported: ids.length, remaining: count ?? 0 };
+  const requested = new Set(events.map((event: any) => String(event.event_id ?? "")).filter(Boolean));
+  const acked = Array.isArray(sheetResult.ack_event_ids)
+    ? [...new Set(sheetResult.ack_event_ids.map(String).filter((id) => requested.has(id)))]
+    : [];
+  if (!acked.length) throw new Error("Google Sheet chưa ACK event nào; queue được giữ nguyên");
+  const now = new Date().toISOString();
+  const { error: ackError } = await admin.from("sheet_export_queue")
+    .update({ exported_at: now, sheet_ack_at: now, reconciliation_status: "SHEET_ACKED" })
+    .in("event_id", acked);
+  if (ackError) throw ackError;
+  const { count, error: countError } = await admin.from("sheet_export_queue").select("id", { count: "exact", head: true }).is("sheet_ack_at", null);
+  if (countError) throw countError;
+  return { exported: acked.length, remaining: count ?? 0 };
 }
 
 async function resendPendingCritical() {
@@ -367,9 +383,8 @@ async function resendPendingCritical() {
 async function slaTick(req: Request) {
   const expected=Deno.env.get("CRON_SECRET")??"";if(!expected||req.headers.get("x-cron-secret")!==expected)throw new HttpError(403,"Cron secret không đúng");
   const {data:events,error}=await admin.rpc("process_sla");if(error)throw error;for(const event of events??[]){const issue=(await issueRows([event.issue_id]))[0];if(issue)await notifyUsers(await inventUserIds(),issue,issue.status,`SKU ${issue.sku} đã vượt mốc thời gian vận hành; cần kiểm tra và phản hồi.`);}
-  const {data:autoSkipped,error:autoSkipError}=await admin.rpc("auto_skip_overdue_service");if(autoSkipError)throw autoSkipError;for(const row of autoSkipped??[]){const issue=(await issueRows([row.issue_id]))[0];if(issue)await notifyUsers(await reporterIds(issue.id),issue,"SKIP_ALLOWED",`Không tìm thấy hàng để bổ sung cho SKU ${issue.sku} trong thời gian quy định. Bạn được phép SKIP SKU này và tiếp tục công việc.`,true);}
-  await resendPendingCritical();if(await staffSyncDue().catch(()=>false)){try{await syncStaffDirectory("AUTO",null);}catch(error){console.warn("Staff sync deferred",errorText(error));}}try{await syncSheet();}catch(error){console.warn("Sheet sync deferred",errorText(error));}
-  return {processed:events?.length??0,auto_skipped:autoSkipped?.length??0,critical_reminder_checked:true};
+  await resendPendingCritical();
+  return {processed:events?.length??0,auto_skipped:0,critical_reminder_checked:true};
 }
 
 async function cleanupDiagnosticLogs() {
@@ -469,9 +484,17 @@ async function syncStaffDirectory(triggerSource:"AUTO"|"MANUAL"|"DEPLOY",actorId
     await admin.from("profiles").update({role:"ADMIN",active:true,protected_account:true}).eq("employee_code",PROTECTED_ADMIN_CODE);const status=failed?"PARTIAL":"SUCCEEDED";await admin.from("staff_sync_runs").update({status,source_hash:sourceHash,source_rows:Math.max(0,rows.length-1),eligible_rows:byCode.size,created_count:created,updated_count:updated,deactivated_count:deactivated,failed_count:failed,error_summary:failures.slice(0,20).join("; ").slice(0,3000),finished_at:new Date().toISOString()}).eq("id",run.id);const {error:broadcastError}=await admin.rpc("broadcast_staff_change_service",{p_payload:{run_id:run.id,status,created,updated,deactivated}});if(broadcastError)console.warn("Staff realtime broadcast deferred",errorText(broadcastError));return {status,run_id:run.id,eligible_rows:byCode.size,created,updated,deactivated,failed,errors:failures.slice(0,20)};
   }catch(error){await admin.from("staff_sync_runs").update({status:"FAILED",failed_count:1,error_summary:errorText(error).slice(0,3000),finished_at:new Date().toISOString()}).eq("id",run.id);throw error;}
 }
+async function triggerDedicatedStaffWatch(){
+  const secret=Deno.env.get("CRON_SECRET")??"";
+  if(!secret)throw new HttpError(503,"Staff Watch chưa được cấu hình");
+  const response=await fetch(`${SUPABASE_URL}/functions/v1/staff-watch`,{method:"POST",headers:{"content-type":"application/json","x-cron-secret":secret},body:"{}"});
+  const text=await response.text();
+  if(!response.ok)throw new HttpError(502,`Staff Watch HTTP ${response.status}`);
+  try{return JSON.parse(text);}catch{throw new HttpError(502,"Staff Watch trả dữ liệu không hợp lệ");}
+}
 async function staffSyncStatus(context:Context){requireRole(context,["ADMIN","ADMIN_INVENT"]);const {data,error}=await admin.from("staff_sync_runs").select("*").order("started_at",{ascending:false}).limit(10);if(error)throw error;return {runs:data??[],source_sheet_id:STAFF_SHEET_ID,source_sheet_name:STAFF_SHEET_NAME};}
 async function replaceCatalog(context:Context,body:Record<string,unknown>){requireRole(context,["ADMIN","ADMIN_INVENT"]);const items=Array.isArray(body.items)?body.items as Record<string,unknown>[]:[];if(!items.length||items.length>10000)throw new HttpError(400,"File danh mục cần từ 1 đến 10.000 SKU");const clean=items.map(item=>({sku:required(item.sku,"SKU").trim(),product_name:required(item.product_name,"Tên sản phẩm").trim()}));const canonical=clean.slice().sort((a,b)=>a.sku.localeCompare(b.sku)).map(x=>`${x.sku}|${x.product_name}`).join("\n");const sourceSha=await sha256(canonical);const {data,error}=await admin.rpc("replace_sku_catalog_service",{p_items:clean,p_actor:context.userId,p_source_name:String(body.source_name??"Tồn Bin XLSX").slice(0,240),p_source_sha:sourceSha});if(error)throw error;return {...data,source_sha256:sourceSha};}
-async function deleteManagedUser(context:Context,body:Record<string,unknown>){requireRole(context,["ADMIN","ADMIN_INVENT"]);const id=required(body.id,"User ID");const {data:t,error}=await admin.from("profiles").select("id,employee_code,full_name,contractor,role,active,source_kind,protected_account").eq("id",id).single();if(error||!t)throw new HttpError(404,"Không tìm thấy tài khoản");if(t.protected_account||t.employee_code===PROTECTED_ADMIN_CODE||t.role==="ADMIN")throw new HttpError(409,"ADMIN_PROTECTED");if(t.source_kind==="GSHEET")throw new HttpError(409,"SOURCE_MANAGED_USER");if(context.effectiveRole==="ADMIN_INVENT"&&t.role!=="PICKER")throw new HttpError(403,"Admin Event chỉ được quản lý Picker tạo thêm");const {error:ue}=await admin.from("profiles").update({active:false,updated_at:new Date().toISOString()}).eq("id",id);if(ue)throw ue;await admin.from("sheet_export_queue").insert({event_type:"USER_UPSERT",payload:{...t,active:false,updated_at:new Date().toISOString()}});return {deleted:true,soft_deleted:true,id};}
+async function deleteManagedUser(context:Context,body:Record<string,unknown>){requireRole(context,["ADMIN","ADMIN_INVENT"]);const id=required(body.id,"User ID");const {data:t,error}=await admin.from("profiles").select("id,employee_code,full_name,contractor,role,active,source_kind,protected_account").eq("id",id).single();if(error||!t)throw new HttpError(404,"Không tìm thấy tài khoản");if(t.protected_account||t.employee_code===PROTECTED_ADMIN_CODE||t.role==="ADMIN")throw new HttpError(409,"ADMIN_PROTECTED");if(t.source_kind==="GSHEET")throw new HttpError(409,"SOURCE_MANAGED_USER");if(context.effectiveRole==="ADMIN_INVENT"&&t.role!=="PICKER")throw new HttpError(403,"Admin Invent chỉ được quản lý Picker tạo thêm");const {error:ue}=await admin.from("profiles").update({active:false,updated_at:new Date().toISOString()}).eq("id",id);if(ue)throw ue;await admin.from("sheet_export_queue").insert({event_type:"USER_UPSERT",payload:{...t,active:false,updated_at:new Date().toISOString()}});return {deleted:true,soft_deleted:true,id};}
 async function serviceMetrics(context:Context){requireRole(context,["ADMIN","ADMIN_INVENT"]);const [{data:usage,error},{data:lastStaff},{data:cfg}]=await Promise.all([admin.rpc("service_usage_snapshot"),admin.from("staff_sync_runs").select("status,finished_at,eligible_rows,failed_count").order("started_at",{ascending:false}).limit(1).maybeSingle(),admin.from("app_config").select("retention_days,diagnostic_log_retention_days,staff_auto_sync_enabled,staff_sync_interval_minutes,auto_skip_enabled,auto_skip_after_minutes").eq("singleton",true).single()]);if(error)throw error;return {usage,last_staff_sync:lastStaff??null,config:cfg??{},free_limits:{database_bytes:500*1024*1024,storage_bytes:1024*1024*1024,egress_bytes_month:5*1024*1024*1024,mau_month:50000,edge_invocations_month:500000,realtime_messages_month:2000000,realtime_peak_connections:200,active_projects_max:2},cost_policy:{billing_enabled:false,paid_services_allowed:false,guard:"Firebase deploy chặn nếu billingEnabled=true"}};}
 
 
@@ -505,9 +528,11 @@ async function route(req: Request) {
       const { data, error } = await admin.rpc("report_shortage_atomic", { p_sku: required(body.sku, "SKU"), p_reporter: context.userId, p_client_request_id: String(body.client_request_id ?? "") || null });
       if (error) throw error;
       const issue = data.issue;
-      const message = data.already_reported ? `SKU ${issue.sku} vừa có thêm lượt báo; tổng ${issue.report_count} lượt.` : `Picker ${context.profile.full_name} báo thiếu SKU ${issue.sku}.`;
-      if (!data.duplicate_request) await notifyUsers(await inventUserIds(), issue, "OPEN", message);
-      return data;
+      if (!data.duplicate_request && !data.already_reported) {
+        const message = `Picker ${context.profile.full_name} vừa báo thiếu SKU ${issue.sku}. Chọn NHẬN XỬ LÝ nếu bạn tiếp nhận SKU này.`;
+        await notifyUsers(await inventUserIds(), issue, "OPEN", message);
+      }
+      return context.effectiveRole === "PICKER" ? { ...data, issue: pickerIssue(issue) } : data;
     }
     case "active-issues": requireRole(context, ["ADMIN", "ADMIN_INVENT", "INVENT"]); return { issues: await issueRows(undefined, ACTIVE_STATUSES) };
     case "issue-board": {
@@ -524,7 +549,8 @@ async function route(req: Request) {
       const { data, error } = await admin.from("issue_reports").select("issue_id").eq("reporter_id", context.userId).order("reported_at", { ascending: false }).limit(200);
       if (error) throw error;
       const ids = [...new Set<string>((data ?? []).map((row: any) => String(row.issue_id)))];
-      return { issues: ids.length ? (await issueRows(ids)).reverse() : [] };
+      const issues = ids.length ? (await issueRows(ids)).reverse() : [];
+      return { issues: context.effectiveRole === "PICKER" ? issues.map((issue: any) => pickerIssue(issue)) : issues };
     }
     case "issue-detail": {
       const id = required(body.issue_id, "Issue ID");
@@ -534,7 +560,7 @@ async function route(req: Request) {
         const { count } = await admin.from("issue_reports").select("id", { count: "exact", head: true }).eq("issue_id", id).eq("reporter_id", context.userId);
         if (!(count ?? 0)) throw new HttpError(403, "Bạn không có quyền xem báo thiếu này");
       }
-      return { issue };
+      return { issue: context.effectiveRole === "PICKER" ? pickerIssue(issue) : issue };
     }
     case "claim-issue": {
       requireRole(context, ["ADMIN", "ADMIN_INVENT", "INVENT"]);
@@ -571,16 +597,33 @@ async function route(req: Request) {
       return { issue: data };
     }
     case "pending-alerts": {
-      const { data, error } = await admin.from("notification_events").select("id,issue_id,issue_version,status,title,message,critical,created_at,sent_at,fcm_accepted_at")
-        .eq("target_user_id", context.userId).eq("critical", true).is("acknowledged_at", null).order("created_at").limit(50);
+      const { data, error } = await admin.from("notification_events")
+        .select("id,issue_id,issue_version,status,title,message,critical,created_at,sent_at,fcm_accepted_at,displayed_at,acknowledged_at,expires_at")
+        .eq("target_user_id", context.userId)
+        .gt("expires_at", new Date().toISOString())
+        .order("created_at")
+        .limit(100);
       if (error) throw error;
-      const ids = [...new Set<string>((data ?? []).map((row: any) => String(row.issue_id ?? "")).filter(Boolean))];
+      const eligible = (data ?? []).filter((event: any) => {
+        if (event.status === "OPEN") {
+          return event.critical === false
+            && context.effectiveRole !== "PICKER"
+            && !event.displayed_at;
+        }
+        return ["AVAILABLE", "SKIP_ALLOWED"].includes(String(event.status))
+          && event.critical === true
+          && !event.acknowledged_at;
+      });
+      const ids = [...new Set<string>(eligible.map((row: any) => String(row.issue_id ?? "")).filter(Boolean))];
       const issues = ids.length ? await issueRows(ids) : [];
       const byId = new Map<string, any>(issues.map((issue: any) => [String(issue.id), issue]));
-      return { events: (data ?? []).filter((event) => {
+      return { events: eligible.filter((event: any) => {
         const issue = byId.get(event.issue_id);
         return issue?.status === event.status && Number(issue.issue_version) === Number(event.issue_version);
-      }).map((event) => ({ ...event, issue: byId.get(event.issue_id) })) };
+      }).map((event: any) => ({
+        ...event,
+        issue: event.status === "OPEN" ? byId.get(event.issue_id) : pickerIssue(byId.get(event.issue_id)),
+      })) };
     }
     case "mark-alert-received": {
       const id = required(body.event_id, "Event ID");
@@ -629,12 +672,11 @@ async function route(req: Request) {
       const values = {
         acknowledge_minutes: Number(body.acknowledge_minutes), reminder_minutes: Number(body.reminder_minutes),
         replenish_minutes: Number(body.replenish_minutes), picker_ack_reminder_minutes: Number(body.picker_ack_reminder_minutes ?? 3),
-        auto_skip_enabled: Boolean(body.auto_skip_enabled), auto_skip_after_minutes: Number(body.auto_skip_after_minutes ?? 120),
+        auto_skip_enabled: false, auto_skip_after_minutes: 0,
         updated_by: context.userId, updated_at: new Date().toISOString(),
       };
       if ([values.acknowledge_minutes, values.reminder_minutes, values.replenish_minutes].some((v) => !Number.isInteger(v) || v < 1 || v > 480)) throw new HttpError(400, "Cấu hình SLA phải từ 1 đến 480 phút");
       if (!Number.isInteger(values.picker_ack_reminder_minutes) || values.picker_ack_reminder_minutes < 1 || values.picker_ack_reminder_minutes > 60) throw new HttpError(400, "Nhắc Picker phải từ 1 đến 60 phút");
-      if (!Number.isInteger(values.auto_skip_after_minutes) || values.auto_skip_after_minutes < 15 || values.auto_skip_after_minutes > 4320) throw new HttpError(400, "Mốc tự động cho phép SKIP phải từ 15 phút đến 72 giờ");
       const { data, error } = await admin.from("app_config").update(values).eq("singleton", true).select("acknowledge_minutes,reminder_minutes,replenish_minutes,picker_ack_reminder_minutes,auto_skip_enabled,auto_skip_after_minutes").single();
       if (error) throw error;
       return data;
@@ -650,15 +692,13 @@ async function route(req: Request) {
       const values: Record<string, unknown> = {
         acknowledge_minutes: Number(body.acknowledge_minutes), reminder_minutes: Number(body.reminder_minutes), replenish_minutes: Number(body.replenish_minutes),
         picker_ack_reminder_minutes: Number(body.picker_ack_reminder_minutes ?? 3), diagnostic_log_retention_days: Number(body.diagnostic_log_retention_days ?? 14),
-        retention_days: Number(body.retention_days ?? 60), auto_skip_enabled: Boolean(body.auto_skip_enabled), auto_skip_after_minutes: Number(body.auto_skip_after_minutes ?? 120),
+        retention_days: 45, auto_skip_enabled: false, auto_skip_after_minutes: 0,
         staff_auto_sync_enabled: Boolean(body.staff_auto_sync_enabled ?? true), staff_sync_interval_minutes: Number(body.staff_sync_interval_minutes ?? 60),
         updated_by: context.userId, updated_at: new Date().toISOString(),
       };
       if ([values.acknowledge_minutes, values.reminder_minutes, values.replenish_minutes].some((v) => !Number.isInteger(v) || Number(v) < 1 || Number(v) > 480)) throw new HttpError(400, "Cấu hình SLA phải từ 1 đến 480 phút");
       if (!Number.isInteger(values.picker_ack_reminder_minutes) || Number(values.picker_ack_reminder_minutes) < 1 || Number(values.picker_ack_reminder_minutes) > 60) throw new HttpError(400, "Nhắc Picker phải từ 1 đến 60 phút");
       if (!Number.isInteger(values.diagnostic_log_retention_days) || Number(values.diagnostic_log_retention_days) < 1 || Number(values.diagnostic_log_retention_days) > 60) throw new HttpError(400, "Lưu log phải từ 1 đến 60 ngày");
-      if (!Number.isInteger(values.retention_days) || Number(values.retention_days) < 7 || Number(values.retention_days) > 365) throw new HttpError(400, "Retention nghiệp vụ phải từ 7 đến 365 ngày");
-      if (!Number.isInteger(values.auto_skip_after_minutes) || Number(values.auto_skip_after_minutes) < 15 || Number(values.auto_skip_after_minutes) > 4320) throw new HttpError(400, "Mốc tự động SKIP phải từ 15 phút đến 72 giờ");
       if (!Number.isInteger(values.staff_sync_interval_minutes) || Number(values.staff_sync_interval_minutes) < 15 || Number(values.staff_sync_interval_minutes) > 1440) throw new HttpError(400, "Chu kỳ đồng bộ nhân sự phải từ 15 phút đến 24 giờ");
       const { data, error } = await admin.from("app_config").update(values).eq("singleton", true).select().single();
       if (error) throw error;
@@ -701,7 +741,7 @@ async function route(req: Request) {
       requireRole(context, ["ADMIN", "ADMIN_INVENT"]);
       throw new HttpError(410, "Chức năng tồn kho chi tiết đã ngừng. Vui lòng dùng Danh mục SKU / Tên hàng ở phiên bản mới.");
     case "replace-catalog": return replaceCatalog(context, body);
-    case "staff-sync-now": requireRole(context,["ADMIN","ADMIN_INVENT"]); return syncStaffDirectory("MANUAL",context.userId);
+    case "staff-sync-now": requireRole(context,["ADMIN","ADMIN_INVENT"]); return triggerDedicatedStaffWatch();
     case "staff-sync-status": return staffSyncStatus(context);
     case "service-metrics": return serviceMetrics(context);
     case "delete-user": return deleteManagedUser(context, body);
@@ -729,7 +769,7 @@ async function route(req: Request) {
       for(const row of rows){byStatus[row.status]=(byStatus[row.status]??0)+1;skuCounts.set(row.sku,(skuCounts.get(row.sku)??0)+Number(row.report_count??1));if(row.resolved_at)durations.push((new Date(row.resolved_at).getTime()-new Date(row.first_reported_at).getTime())/60000);if(row.claimed_at)claimDurations.push((new Date(row.claimed_at).getTime()-new Date(row.first_reported_at).getTime())/60000);if(row.first_reported_at>=since24)hourly[new Date(row.first_reported_at).getHours()]+=Number(row.report_count??1);}
       const percentile=(v:number[],p:number)=>v.length?[...v].sort((a,b)=>a-b)[Math.min(v.length-1,Math.floor((v.length-1)*p))]:null;const topKeys=[...skuCounts.entries()].sort((a,b)=>b[1]-a[1]).slice(0,20).map(([sku])=>sku),skuNames=new Map<string,string>();if(topKeys.length){const {data:c}=await admin.from("sku_catalog").select("sku,product_name").in("sku",topKeys);(c??[]).forEach((r:any)=>skuNames.set(r.sku,r.product_name));}
       const {data:cfg}=await admin.from("app_config").select("acknowledge_minutes,auto_skip_enabled,auto_skip_after_minutes").eq("singleton",true).single();const overdueCutoff=new Date(now-Math.max(1,Number(cfg?.acknowledge_minutes??15))*60000).toISOString();const {count:overdue}=await admin.from("issues").select("id",{count:"exact",head:true}).in("status",ACTIVE_STATUSES).lte("first_reported_at",overdueCutoff);const {count:autoSkipCount}=await admin.from("issue_audit").select("id",{count:"exact",head:true}).eq("action","AUTO_SKIP").gte("created_at",since30);const last24=rows.filter((r:any)=>r.first_reported_at>=since24),resolved24=last24.filter((r:any)=>r.resolved_at);
-      return {days:30,issues:rows.length,reports:rows.reduce((sum,r)=>sum+Number(r.report_count??1),0),by_status:byStatus,active_now:rows.filter((r:any)=>ACTIVE_STATUSES.includes(r.status)).length,overdue_now:overdue??0,last_24h:{issues:last24.length,reports:last24.reduce((sum,r)=>sum+Number(r.report_count??1),0),resolved:resolved24.length,available:last24.filter((r:any)=>r.status==="AVAILABLE").length,skipped:last24.filter((r:any)=>r.status==="SKIP_ALLOWED").length},average_resolution_minutes:durations.length?Math.round(durations.reduce((a,b)=>a+b,0)/durations.length):null,median_resolution_minutes:percentile(durations,.5)==null?null:Math.round(percentile(durations,.5)!),p95_resolution_minutes:percentile(durations,.95)==null?null:Math.round(percentile(durations,.95)!),median_claim_minutes:percentile(claimDurations,.5)==null?null:Math.round(percentile(claimDurations,.5)!),p95_claim_minutes:percentile(claimDurations,.95)==null?null:Math.round(percentile(claimDurations,.95)!),recurrent_episodes:rows.filter((r:any)=>r.previous_issue_id).length,auto_skip_count_30d:autoSkipCount??0,auto_skip_enabled:Boolean(cfg?.auto_skip_enabled),auto_skip_after_minutes:Number(cfg?.auto_skip_after_minutes??120),top_skus:[...skuCounts.entries()].sort((a,b)=>b[1]-a[1]).slice(0,20).map(([sku,reports])=>({sku,product_name:skuNames.get(sku)??"",reports})),hourly_reports_24h:hourly};
+      return {days:30,issues:rows.length,reports:rows.reduce((sum,r)=>sum+Number(r.report_count??1),0),by_status:byStatus,active_now:rows.filter((r:any)=>ACTIVE_STATUSES.includes(r.status)).length,overdue_now:overdue??0,last_24h:{issues:last24.length,reports:last24.reduce((sum,r)=>sum+Number(r.report_count??1),0),resolved:resolved24.length,available:last24.filter((r:any)=>r.status==="AVAILABLE").length,skipped:last24.filter((r:any)=>r.status==="SKIP_ALLOWED").length},average_resolution_minutes:durations.length?Math.round(durations.reduce((a,b)=>a+b,0)/durations.length):null,median_resolution_minutes:percentile(durations,.5)==null?null:Math.round(percentile(durations,.5)!),p95_resolution_minutes:percentile(durations,.95)==null?null:Math.round(percentile(durations,.95)!),median_claim_minutes:percentile(claimDurations,.5)==null?null:Math.round(percentile(claimDurations,.5)!),p95_claim_minutes:percentile(claimDurations,.95)==null?null:Math.round(percentile(claimDurations,.95)!),recurrent_episodes:rows.filter((r:any)=>r.previous_issue_id).length,auto_skip_count_30d:0,auto_skip_enabled:false,auto_skip_after_minutes:0,top_skus:[...skuCounts.entries()].sort((a,b)=>b[1]-a[1]).slice(0,20).map(([sku,reports])=>({sku,product_name:skuNames.get(sku)??"",reports})),hourly_reports_24h:hourly};
     }
     case "issue-history": {
       requireRole(context, ["ADMIN", "ADMIN_INVENT"]);

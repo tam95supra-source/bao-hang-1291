@@ -8,7 +8,7 @@ Giữ nguyên enum database, chỉ chuẩn hóa nhãn hiển thị:
 
 - `PICKER` — **Picker / Người lấy hàng**: quét/tìm SKU, báo thiếu, xem báo của mình, ACK kết quả. Không claim/skip/châm bù/cấu hình.
 - `INVENT` — **Người báo hàng**: nhận issue và xử lý issue của mình. Không quản trị user/config/reassign.
-- `ADMIN_INVENT` — **Admin Event**: quản trị vận hành, reassign, báo cáo, SKU, log, quản lý `INVENT/PICKER`, SLA vận hành. Không quản lý `ADMIN/ADMIN_INVENT`, retention/security/release/credential.
+- `ADMIN_INVENT` — **Admin Invent**: quản trị vận hành, reassign, báo cáo, SKU, log, quản lý `INVENT/PICKER`, SLA vận hành. Không quản lý `ADMIN/ADMIN_INVENT`, retention/security/release/credential.
 - `ADMIN` — **Admin hệ thống**: toàn quyền hệ thống nhưng không bypass audit và vẫn bảo vệ ADMIN duy nhất.
 
 Tên legacy `INVENT_USER / INVENT_ADMIN` chỉ được chấp nhận ở lớp đọc/import tương thích cũ; không dùng làm enum mới.
@@ -92,7 +92,7 @@ Không phụ thuộc EXE/Excel/laptop chạy nền cho đường thường ngày
 ### Đồng bộ Supra
 
 - Chỉ server giữ/mã hóa credential; browser/APK/repo/log/Google Sheet/FCM không chứa raw credential.
-- Chỉ Admin cập nhật credential; Admin Event chỉ thấy status và chạy/retry job.
+- Chỉ Admin cập nhật credential; Admin Invent chỉ thấy status và chạy/retry job.
 - Chỉ một active job/site/source; duplicate `client_request_id` không tạo job khác.
 - Worker phải checkpoint/lease/resume; không publish partial.
 - Cùng hash với snapshot hiện hành → `NO_CHANGE`.

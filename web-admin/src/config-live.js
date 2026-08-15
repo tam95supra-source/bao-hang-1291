@@ -56,8 +56,6 @@ async function refreshVisibleConfig() {
       setValue('reminderMin', config.reminder_minutes);
       setValue('replenishMin', config.replenish_minutes);
       setValue('pickerAckMin', config.picker_ack_reminder_minutes);
-      setChecked('autoSkipEnabled', config.auto_skip_enabled);
-      setValue('autoSkipAfter', config.auto_skip_after_minutes);
     }
     if (document.getElementById('retentionDays')) {
       const config = await api('get-config', session.access_token);
@@ -65,8 +63,6 @@ async function refreshVisibleConfig() {
       setValue('logDays', config.diagnostic_log_retention_days);
       setChecked('staffAuto', config.staff_auto_sync_enabled);
       setValue('staffInterval', config.staff_sync_interval_minutes);
-      setChecked('cfgAutoSkip', config.auto_skip_enabled);
-      setValue('cfgAutoSkipAfter', config.auto_skip_after_minutes);
     }
     document.body.dataset.configRealtime = 'online';
   } catch {
