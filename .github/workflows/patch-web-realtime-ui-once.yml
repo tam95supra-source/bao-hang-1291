@@ -19,13 +19,17 @@ jobs:
           ref: target-final-20260814-impl
           fetch-depth: 0
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Patch realtime UI behavior
         run: python3 .github/scripts/patch_web_realtime_ui.py
 
       - name: Build web admin
         working-directory: web-admin
         run: |
-          npm ci
+          npm install --no-package-lock --no-audit --no-fund
           npm run build
 
       - name: Verify realtime UI guardrails
