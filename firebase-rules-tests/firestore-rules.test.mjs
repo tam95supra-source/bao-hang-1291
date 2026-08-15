@@ -171,7 +171,7 @@ try {
   await assertFails(getDoc(doc(drain, 'emergency_ops_state', 'seed')));
 
   const admin = businessDb('admin-test', 'ADMIN', 'device-admin-test');
-  await assertFails(getDoc(doc(admin, '__private_probe__', 'x')));
+  await assertFails(getDoc(doc(admin, 'private_probe', 'x')));
 
   console.log('FIRESTORE_RULES_EMULATOR=PASS');
 } finally {
