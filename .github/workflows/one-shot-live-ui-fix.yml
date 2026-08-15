@@ -39,6 +39,7 @@ jobs:
           grep -q '95% xử lý xong trong' web-admin/src/ops-console.js
           grep -q 'KHÔNG BỎ QUA — ĐÃ CÓ HÀNG' web-admin/src/ops-console.js
           grep -q 'ĐƯỢC PHÉP BỎ QUA' app/src/main/java/vn/pickpack1291/baohang/data/Models.kt
+          git diff --quiet -- .github/workflows/deploy-web-admin.yml
 
       - uses: actions/setup-java@v5
         with:
@@ -70,10 +71,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -f scripts/apply-live-ui-fix-20260816.py scripts/run-live-ui-fix-20260816.py .github/workflows/one-shot-live-ui-fix.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
+          git add app web-admin firebase.json
           git diff --cached --check
           git commit -m 'Fix SKU search realtime badges and wording'
           git push origin HEAD:${GITHUB_REF_NAME}
