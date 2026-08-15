@@ -1,5 +1,9 @@
 from pathlib import Path
 
+root = Path(__file__).resolve().parents[1]
+deploy_workflow = root / '.github/workflows/deploy-web-admin.yml'
+deploy_workflow_before = deploy_workflow.read_text(encoding='utf-8')
+
 path = Path(__file__).with_name('apply-live-ui-fix-20260816.py')
 source = path.read_text(encoding='utf-8')
 opening = '    """    fun searchSkus(query: String, limit: Int = 20): List<SkuItem> {\n'
@@ -12,7 +16,10 @@ code = compile(source, str(path), 'exec')
 namespace = {'__file__': str(path), '__name__': '__main__'}
 exec(code, namespace, namespace)
 
-root = Path(__file__).resolve().parents[1]
+# The product fix does not need to modify a permanent workflow. Restoring it also
+# keeps the one-shot bot push within ordinary contents permission.
+deploy_workflow.write_text(deploy_workflow_before, encoding='utf-8')
+
 ops_path = root / 'web-admin/src/ops-console.js'
 ops = ops_path.read_text(encoding='utf-8')
 replacements = {
