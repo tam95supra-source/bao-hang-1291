@@ -33,7 +33,9 @@ const state = {
   staffChannel: null,
   realtimeStatus: 'OFFLINE',
   fallbackTimer: null,
-  refreshTimer: null,
+  refreshTimers: new Map(),
+  liveRefresh: { issue: null, staff: null, catalog: null },
+  overviewCache: { admin: null, reports: null, service: null },
 };
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -71,8 +73,8 @@ function saveSession(session) {
 async function stopRealtime() {
   clearInterval(state.fallbackTimer);
   state.fallbackTimer = null;
-  clearTimeout(state.refreshTimer);
-  state.refreshTimer = null;
+  for (const timer of state.refreshTimers.values()) clearTimeout(timer);
+  state.refreshTimers.clear();
   const channels = [state.issueChannel, state.catalogChannel, state.staffChannel].filter(Boolean);
   state.issueChannel = null;
   state.catalogChannel = null;
@@ -149,6 +151,11 @@ function message(target, text, type = 'info') {
   el.hidden = !text;
 }
 function safeMessage(error) { return error instanceof Error ? error.message : String(error); }
+function setLiveHtml(element, html) {
+  if (!element || element.__liveHtml === html) return;
+  element.innerHTML = html;
+  element.__liveHtml = html;
+}
 
 function renderLogin(msg = '') {
   stopRealtime();
@@ -216,6 +223,7 @@ function renderApp() {
   startRealtime();
 }
 function renderTab() {
+  state.liveRefresh = { issue: null, staff: null, catalog: null };
   $$('[data-tab]').forEach((button) => button.classList.toggle('active', button.dataset.tab === state.activeTab));
   const handlers = {
     overview: renderOverview, events: renderEvents, picker: renderPicker, reports: renderReports,
@@ -224,14 +232,20 @@ function renderTab() {
   };
   handlers[state.activeTab]?.();
 }
+function runLiveRefresh(kind) {
+  if (document.hidden) return;
+  const refresh = state.liveRefresh?.[kind];
+  if (typeof refresh !== 'function') return;
+  Promise.resolve(refresh()).catch(() => {});
+}
 function scheduleLiveRefresh(kind) {
   if (document.hidden) return;
-  clearTimeout(state.refreshTimer);
-  state.refreshTimer = setTimeout(() => {
-    if (kind === 'catalog' && ['sku','overview','picker'].includes(state.activeTab)) renderTab();
-    if (kind === 'staff' && ['users','overview'].includes(state.activeTab)) renderTab();
-    if (kind === 'issue' && ['events','overview','picker'].includes(state.activeTab)) renderTab();
-  }, 1200);
+  const previous = state.refreshTimers.get(kind);
+  if (previous) clearTimeout(previous);
+  state.refreshTimers.set(kind, setTimeout(() => {
+    state.refreshTimers.delete(kind);
+    runLiveRefresh(kind);
+  }, 350));
 }
 function setRealtimeHealth(value, kind = '') {
   state.realtimeStatus = value;
@@ -256,7 +270,7 @@ async function startRealtime() {
   };
   if (role() === 'PICKER') {
     state.issueChannel = realtimeClient.channel(`user:1291:${state.session.profile.id}`, { config: { private: true } })
-      .on('broadcast', { event: 'picker_alert' }, () => scheduleLiveRefresh('issue'))
+      .on('broadcast', { event: 'picker_status_changed' }, () => scheduleLiveRefresh('issue'))
       .subscribe(subscribeStatus);
   } else {
     state.issueChannel = realtimeClient.channel('site:1291:issues', { config: { private: true } })
@@ -275,7 +289,7 @@ function ensureFallbackPolling() {
   if (state.fallbackTimer || document.hidden || !state.session) return;
   state.fallbackTimer = setInterval(() => {
     if (document.hidden) return;
-    if (['events','picker','sku','overview','users'].includes(state.activeTab)) renderTab();
+    for (const kind of ['issue', 'staff', 'catalog']) runLiveRefresh(kind);
   }, 30_000);
 }
 document.addEventListener('visibilitychange', () => {
@@ -288,10 +302,65 @@ window.addEventListener('hashchange', () => {
   if (tab && tab !== state.activeTab) { state.activeTab = tab; renderTab(); }
 });
 
-async function renderOverview(){
-  $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">LIVE</p><h2>Tổng quan vận hành kho</h2></div></div><div id="metrics" class="metrics"></div><div id="overviewStatus"></div>`;
-  try{const [d,r,svc]=await Promise.all([api('admin-summary'),api('reports-summary'),api('service-metrics')]);$('#metrics').innerHTML=[['Chờ nhận',d.open_issue_count],['Đang xử lý',d.claimed_issue_count],['SKU đang dùng',d.sku_count],['Nhân sự hoạt động',d.active_user_count],['Báo 24 giờ',r.last_24h?.reports],['Quá mốc phản hồi',r.overdue_now]].map(([l,v])=>`<article class="metric"><span>${l}</span><strong>${Number(v||0).toLocaleString('vi-VN')}</strong></article>`).join('');const db=Number(svc.usage?.database_bytes||0),lim=Number(svc.free_limits?.database_bytes||1),pct=Math.min(100,db/lim*100);$('#overviewStatus').innerHTML=`<div class="panel-grid"><article class="card"><h3>Hiệu suất 24 giờ</h3><p>Ticket phát sinh: <b>${Number(r.last_24h?.issues||0)}</b> · Đã xử lý: <b>${Number(r.last_24h?.resolved||0)}</b></p><p>Có hàng/châm bù: <b>${Number(r.last_24h?.available||0)}</b> · Cho SKIP: <b>${Number(r.last_24h?.skipped||0)}</b></p><p>Trung vị nhận: <b>${r.median_claim_minutes??'—'} phút</b> · Trung vị hoàn tất: <b>${r.median_resolution_minutes??'—'} phút</b></p></article><article class="card"><h3>Nhân sự nguồn</h3><p>${d.staff_sync?`${escapeHtml(d.staff_sync.status)} · ${formatTime(d.staff_sync.finished_at)} · ${Number(d.staff_sync.eligible_rows||0)} nhân sự`:'Chưa đồng bộ.'}</p></article><article class="card"><h3>Kiểm soát free tier</h3><p>Database: <b>${(db/1048576).toFixed(1)} MB / ${(lim/1048576).toFixed(0)} MB (${pct.toFixed(1)}%)</b></p><p>Thiết bị FCM: ${Number(svc.usage?.active_device_tokens||0)} · Log: ${(Number(svc.usage?.diagnostic_log_bytes||0)/1048576).toFixed(2)} MB · Sheet chờ: ${Number(svc.usage?.sheet_pending||0)}</p><p class="muted">Không tự bật Billing hoặc dịch vụ trả phí.</p></article></div>`;const sheet=$('[data-health="SHEET"]');if(sheet){$('em',sheet).textContent=d.pending_sheet_count?`${d.pending_sheet_count} CHỜ`:'OK';sheet.className=`health-chip ${d.pending_sheet_count?'warn':'good'}`;}const free=$('[data-health="FREE TIER"]');if(free){$('em',free).textContent=`DB ${pct.toFixed(1)}%`;free.className=`health-chip ${pct>=80?'warn':'good'}`;}}
-  catch(e){$('#metrics').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}
+function paintOverview() {
+  const d = state.overviewCache.admin;
+  const r = state.overviewCache.reports;
+  const svc = state.overviewCache.service;
+  if (!d || !r || !svc) return;
+
+  const metricsHtml = [
+    ['Chờ nhận', d.open_issue_count],
+    ['Đang xử lý', d.claimed_issue_count],
+    ['SKU đang dùng', d.sku_count],
+    ['Nhân sự hoạt động', d.active_user_count],
+    ['Báo 24 giờ', r.last_24h?.reports],
+    ['Quá mốc phản hồi', r.overdue_now],
+  ].map(([label, value]) => `<article class="metric"><span>${label}</span><strong>${Number(value || 0).toLocaleString('vi-VN')}</strong></article>`).join('');
+  setLiveHtml($('#metrics'), metricsHtml);
+
+  const db = Number(svc.usage?.database_bytes || 0);
+  const lim = Number(svc.free_limits?.database_bytes || 1);
+  const pct = Math.min(100, db / lim * 100);
+  const statusHtml = `<div class="panel-grid"><article class="card"><h3>Hiệu suất 24 giờ</h3><p>Ticket phát sinh: <b>${Number(r.last_24h?.issues || 0)}</b> · Đã xử lý: <b>${Number(r.last_24h?.resolved || 0)}</b></p><p>Có hàng/châm bù: <b>${Number(r.last_24h?.available || 0)}</b> · Cho SKIP: <b>${Number(r.last_24h?.skipped || 0)}</b></p><p>Trung vị nhận: <b>${r.median_claim_minutes ?? '—'} phút</b> · Trung vị hoàn tất: <b>${r.median_resolution_minutes ?? '—'} phút</b></p></article><article class="card"><h3>Nhân sự nguồn</h3><p>${d.staff_sync ? `${escapeHtml(d.staff_sync.status)} · ${formatTime(d.staff_sync.finished_at)} · ${Number(d.staff_sync.eligible_rows || 0)} nhân sự` : 'Chưa đồng bộ.'}</p></article><article class="card"><h3>Kiểm soát free tier</h3><p>Database: <b>${(db / 1048576).toFixed(1)} MB / ${(lim / 1048576).toFixed(0)} MB (${pct.toFixed(1)}%)</b></p><p>Thiết bị FCM: ${Number(svc.usage?.active_device_tokens || 0)} · Log: ${(Number(svc.usage?.diagnostic_log_bytes || 0) / 1048576).toFixed(2)} MB · Sheet chờ: ${Number(svc.usage?.sheet_pending || 0)}</p><p class="muted">Không tự bật Billing hoặc dịch vụ trả phí.</p></article></div>`;
+  setLiveHtml($('#overviewStatus'), statusHtml);
+
+  const sheet = $('[data-health="SHEET"]');
+  if (sheet) {
+    $('em', sheet).textContent = d.pending_sheet_count ? `${d.pending_sheet_count} CHỜ` : 'OK';
+    sheet.className = `health-chip ${d.pending_sheet_count ? 'warn' : 'good'}`;
+  }
+  const free = $('[data-health="FREE TIER"]');
+  if (free) {
+    $('em', free).textContent = `DB ${pct.toFixed(1)}%`;
+    free.className = `health-chip ${pct >= 80 ? 'warn' : 'good'}`;
+  }
+}
+async function refreshOverviewLive(kind = 'all') {
+  try {
+    const jobs = [];
+    if (kind === 'all' || ['issue', 'staff', 'catalog'].includes(kind)) {
+      jobs.push(api('admin-summary').then((value) => { state.overviewCache.admin = value; }));
+    }
+    if (kind === 'all' || kind === 'issue') {
+      jobs.push(api('reports-summary').then((value) => { state.overviewCache.reports = value; }));
+    }
+    if (kind === 'all') {
+      jobs.push(api('service-metrics').then((value) => { state.overviewCache.service = value; }));
+    }
+    await Promise.all(jobs);
+    paintOverview();
+  } catch (error) {
+    const target = $('#metrics');
+    if (target && !state.overviewCache.admin) setLiveHtml(target, `<div class="message" data-type="error">${escapeHtml(safeMessage(error))}</div>`);
+  }
+}
+async function renderOverview() {
+  $('#content').innerHTML = `<div class="heading"><div><p class="eyebrow">LIVE</p><h2>Tổng quan vận hành kho</h2></div></div><div id="metrics" class="metrics"></div><div id="overviewStatus"></div>`;
+  state.overviewCache = { admin: null, reports: null, service: null };
+  state.liveRefresh.issue = () => refreshOverviewLive('issue');
+  state.liveRefresh.staff = () => refreshOverviewLive('staff');
+  state.liveRefresh.catalog = () => refreshOverviewLive('catalog');
+  await refreshOverviewLive('all');
 }
 function formatAge(value) {
   if (!value) return 'CHƯA CÓ';
@@ -304,12 +373,43 @@ async function renderEvents() {
     <div class="subtabs"><button data-bucket="open" class="active">CHỜ NHẬN</button><button data-bucket="claimed">ĐANG XỬ LÝ${role()==='INVENT'?' CỦA TÔI':''}</button><button data-bucket="recent">ĐÃ XỬ LÝ GẦN ĐÂY</button></div><div id="board"></div>`;
   let board = null;
   let bucket = 'open';
+  const renderedSnapshots = new Map();
   const draw = () => {
+    const target = $('#board');
+    if (!target) return;
     const rows = board?.[bucket] || [];
-    $('#board').innerHTML = rows.length ? rows.map((issue) => issueCard(issue, bucket)).join('') : `<div class="card muted">Không có SKU ở nhóm này.</div>`;
-    $$('[data-claim]').forEach((b) => b.onclick = () => claimIssue(b.dataset.claim, load));
-    $$('[data-action]').forEach((b) => b.onclick = () => issueAction(b.dataset.issue, b.dataset.action, b.dataset.sku, load));
-    $$('[data-reassign]').forEach((b) => b.onclick = () => openReassign(b.dataset.reassign, b.dataset.sku, load));
+    if (!rows.length) {
+      renderedSnapshots.clear();
+      setLiveHtml(target, `<div class="card muted" data-empty-board>Không có SKU ở nhóm này.</div>`);
+    } else {
+      target.__liveHtml = null;
+      target.querySelector('[data-empty-board]')?.remove();
+      const desiredIds = new Set(rows.map((issue) => String(issue.id)));
+      $$('[data-issue-card]', target).forEach((node) => {
+        if (!desiredIds.has(node.dataset.issueCard)) {
+          renderedSnapshots.delete(node.dataset.issueCard);
+          node.remove();
+        }
+      });
+      rows.forEach((issue, index) => {
+        const id = String(issue.id);
+        const snapshot = `${bucket}:${JSON.stringify(issue)}`;
+        let node = $$('[data-issue-card]', target).find((item) => item.dataset.issueCard === id);
+        if (!node || renderedSnapshots.get(id) !== snapshot) {
+          const template = document.createElement('template');
+          template.innerHTML = issueCard(issue, bucket).trim();
+          const next = template.content.firstElementChild;
+          if (node) node.replaceWith(next); else target.append(next);
+          node = next;
+          renderedSnapshots.set(id, snapshot);
+        }
+        const currentAtIndex = target.children[index];
+        if (currentAtIndex !== node) target.insertBefore(node, currentAtIndex || null);
+      });
+    }
+    $$('[data-claim]', target).forEach((b) => b.onclick = () => claimIssue(b.dataset.claim, load));
+    $$('[data-action]', target).forEach((b) => b.onclick = () => issueAction(b.dataset.issue, b.dataset.action, b.dataset.sku, load));
+    $$('[data-reassign]', target).forEach((b) => b.onclick = () => openReassign(b.dataset.reassign, b.dataset.sku, load));
   };
   const load = async () => {
     try { board = await api('issue-board'); draw(); }
@@ -317,12 +417,13 @@ async function renderEvents() {
   };
   $('#refreshBoard').onclick = load;
   $$('[data-bucket]').forEach((b) => b.onclick = () => { bucket = b.dataset.bucket; $$('[data-bucket]').forEach((x) => x.classList.toggle('active', x === b)); draw(); });
+  state.liveRefresh.issue = load;
   load();
 }
 function issueCard(issue, bucket) {
   const recurrence = issue.recurrence_30m ? '<span class="badge warn">TÁI PHÁT ≤30 PHÚT</span>' : '';
   const assignment = issue.assigned_name ? ` · Xử lý: ${escapeHtml(issue.assigned_name)}` : '';
-  const header = `<article class="card issue"><div class="issue-top"><div><strong>SKU ${escapeHtml(issue.sku)}</strong><span>${Number(issue.report_count || 1)} lượt · v${Number(issue.issue_version || 1)}</span></div><time>${formatTime(issue.reported_at)}</time></div><p>${escapeHtml(issue.product_name)}</p><small>${escapeHtml(statusLabel(issue.status))}${assignment}</small>${recurrence}`;
+  const header = `<article class="card issue" data-issue-card="${escapeHtml(issue.id)}"><div class="issue-top"><div><strong>SKU ${escapeHtml(issue.sku)}</strong><span>${Number(issue.report_count || 1)} lượt · v${Number(issue.issue_version || 1)}</span></div><time>${formatTime(issue.reported_at)}</time></div><p>${escapeHtml(issue.product_name)}</p><small>${escapeHtml(statusLabel(issue.status))}${assignment}</small>${recurrence}`;
   if (bucket === 'open') {
     return `${header}<div class="actions"><button class="secondary" data-claim="${issue.id}">NHẬN XỬ LÝ</button>${elevated() ? `<button class="danger" data-action="NOT_FOUND" data-issue="${issue.id}" data-sku="${escapeHtml(issue.sku)}">CHO SKIP</button><button class="primary" data-action="AVAILABLE" data-issue="${issue.id}" data-sku="${escapeHtml(issue.sku)}">ĐÃ CÓ HÀNG</button>` : ''}</div></article>`;
   }
@@ -376,6 +477,8 @@ function renderPicker() {
   $('#skuSearch').addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(searchSku, 120); });
   $('#reportShortage').onclick = reportShortage;
   $('#refreshMine').onclick = loadMyIssues;
+  state.liveRefresh.issue = async () => { await Promise.all([loadMyIssues(), loadPendingAlerts()]); };
+  state.liveRefresh.catalog = async () => { if ($('#skuSearch')?.value.trim()) await searchSku(); };
   loadMyIssues();
   loadPendingAlerts();
   $('#skuSearch').focus();
@@ -435,12 +538,13 @@ async function renderReports(){
 
 async function renderSku(){
  const can=elevated();$('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">CATALOG</p><h2>Danh mục SKU / tên hàng</h2></div></div><article class="card"><p class="muted">Chỉ lưu <b>SKU và tên sản phẩm</b>; không lưu số tồn, bin, số lượng chờ xuất hoặc vị trí.</p>${can?`<input id="catalogFile" type="file" accept=".xlsx"><button id="replaceCatalog" class="primary">CẬP NHẬT TỪ FILE TỒN BIN</button><div id="catalogMsg" class="message" hidden></div>`:''}<label>Tìm SKU / tên hàng<input id="catalogSearch" placeholder="Nhập SKU hoặc tên sản phẩm"></label><button id="catalogSearchBtn" class="secondary">TÌM</button><div id="catalogRows"></div></article>`;
- const load=async()=>{try{const q=$('#catalogSearch').value.trim();if(!q){$('#catalogRows').innerHTML='<p class="muted">Nhập từ khóa để tra cứu.</p>';return;}const d=await api('search-skus',{query:q,limit:100});$('#catalogRows').innerHTML=`<div class="table-wrap"><table><thead><tr><th>SKU</th><th>Tên sản phẩm</th></tr></thead><tbody>${d.items.map(i=>`<tr><td><b>${escapeHtml(i.sku)}</b></td><td>${escapeHtml(i.product_name)}</td></tr>`).join('')}</tbody></table></div>`;}catch(e){$('#catalogRows').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}};$('#catalogSearchBtn').onclick=load;$('#catalogSearch').addEventListener('keydown',e=>{if(e.key==='Enter')load();});
+ const load=async()=>{try{const q=$('#catalogSearch').value.trim();if(!q){$('#catalogRows').innerHTML='<p class="muted">Nhập từ khóa để tra cứu.</p>';return;}const d=await api('search-skus',{query:q,limit:100});$('#catalogRows').innerHTML=`<div class="table-wrap"><table><thead><tr><th>SKU</th><th>Tên sản phẩm</th></tr></thead><tbody>${d.items.map(i=>`<tr><td><b>${escapeHtml(i.sku)}</b></td><td>${escapeHtml(i.product_name)}</td></tr>`).join('')}</tbody></table></div>`;}catch(e){$('#catalogRows').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}};$('#catalogSearchBtn').onclick=load;$('#catalogSearch').addEventListener('keydown',e=>{if(e.key==='Enter')load();});state.liveRefresh.catalog=load;
  if(can)$('#replaceCatalog').onclick=async()=>{const f=$('#catalogFile').files?.[0];if(!f)return message('#catalogMsg','Chọn file XLSX trước.','error');if(f.size>MAX_FILE_BYTES)return message('#catalogMsg','File vượt giới hạn 20 MB.','error');try{setBusy(true,'Đang đọc SKU và tên sản phẩm…');const X=await getExcelJS(),wb=new X.Workbook();await wb.xlsx.load(await f.arrayBuffer());const sh=wb.worksheets[0];if(!sh)throw new Error('File không có worksheet.');const h=new Map();sh.getRow(1).eachCell((c,col)=>h.set(normalize(c.text),col));const find=a=>a.map(normalize).map(x=>h.get(x)).find(Boolean),sc=find(['sku','mã sku','ma sku']),nc=find(['tên sku','ten sku','tên sản phẩm','ten san pham','tên hàng','ten hang','product name','sku name']);if(!sc||!nc)throw new Error('File phải có cột SKU và Tên SKU/Tên sản phẩm.');const m=new Map();for(let r=2;r<=sh.rowCount;r++){const sku=String(sh.getRow(r).getCell(sc).text||'').trim(),name=String(sh.getRow(r).getCell(nc).text||'').trim();if(!sku&&!name)continue;if(!sku||!name)throw new Error(`Dòng ${r}: thiếu SKU hoặc tên sản phẩm`);if(m.has(sku)&&m.get(sku)!==name)throw new Error(`SKU ${sku} có nhiều tên khác nhau`);m.set(sku,name);}if(!m.size)throw new Error('Không tìm thấy SKU hợp lệ.');const items=[...m].map(([sku,product_name])=>({sku,product_name})),res=await api('replace-catalog',{items,source_name:f.name});message('#catalogMsg',`Đã cập nhật ${Number(res.active_count||items.length).toLocaleString('vi-VN')} SKU · phiên ${res.revision}.`,'good');}catch(e){message('#catalogMsg',safeMessage(e),'error');}finally{setBusy(false);}};
 }
 async function renderUsers(){
  $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">STAFF</p><h2>Nhân sự & quyền</h2></div><button id="staffSync" class="secondary">ĐỒNG BỘ NGUỒN NGAY</button></div><div id="staffStatus"></div><div id="usersBody"></div>`;
  const load=async()=>{try{const [d,st]=await Promise.all([api('list-users'),api('staff-sync-status')]);state.managedUsers=d.users||[];const last=st.runs?.[0];$('#staffStatus').innerHTML=`<article class="card"><b>Nguồn DANH MỤC NHÂN SỰ</b><p>${last?`${escapeHtml(last.status)} · ${formatTime(last.finished_at)} · ${Number(last.eligible_rows||0)} nhân sự hợp lệ`:'Chưa đồng bộ.'}</p><p class="muted">Site 1291 / Kho HY1. Chuyên viên, Trưởng nhóm, Trưởng kho → Admin Invent; còn lại → Picker. 6281280 được bảo vệ tuyệt đối. Nhân sự mất khỏi nguồn chỉ ngừng hoạt động, lịch sử vẫn giữ.</p></article>`;$('#usersBody').innerHTML=`<div class="table-wrap"><table><thead><tr><th>User</th><th>Họ tên</th><th>Vị trí</th><th>Quyền</th><th>Nguồn</th><th>Trạng thái</th></tr></thead><tbody>${state.managedUsers.map(u=>`<tr><td><b>${escapeHtml(u.employee_code)}</b>${u.protected_account?' 🔒':''}</td><td>${escapeHtml(u.full_name)}</td><td>${escapeHtml(u.source_position||'—')}</td><td>${escapeHtml(ROLES[u.role]||u.role)}</td><td>${u.source_kind==='GSHEET'?'Google Sheet':'Tạo thêm'}</td><td>${u.active?'Hoạt động':'Ngừng'}</td></tr>`).join('')}</tbody></table></div><article class="card"><h3>Tạo thêm tài khoản ngoài danh sách nguồn</h3><p class="muted">${role()==='ADMIN_INVENT'?'Admin Invent chỉ được tạo thêm Picker.':'Admin hệ thống được tạo Admin Invent, Người báo hàng hoặc Picker.'} Nếu bỏ trống mật khẩu, server dùng mật khẩu mặc định lưu an toàn.</p><div class="form-grid"><label>Mã nhân viên<input id="newCode"></label><label>Họ tên<input id="newName"></label><label>Nhà thầu<input id="newContractor"></label><label>Quyền<select id="newRole">${(role()==='ADMIN'?['ADMIN_INVENT','INVENT','PICKER']:['PICKER']).map(r=>`<option value="${r}">${ROLES[r]}</option>`).join('')}</select></label><label>Mật khẩu riêng (không bắt buộc)<input id="newPassword" type="password" autocomplete="new-password"></label></div><button id="createExtraUser" class="primary">TẠO TÀI KHOẢN</button><div id="userMsg" class="message" hidden></div></article>`;$('#createExtraUser').onclick=async()=>{try{const item={employee_code:$('#newCode').value.trim(),full_name:$('#newName').value.trim(),contractor:$('#newContractor').value.trim(),role:$('#newRole').value,active:true,initial_password:$('#newPassword').value},r=await api('import-users',{items:[item]});if(r.failed)throw new Error(r.errors?.[0]||'Không tạo được tài khoản');message('#userMsg','Đã tạo tài khoản.','good');await load();}catch(e){message('#userMsg',safeMessage(e),'error');}};}catch(e){$('#usersBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}};
+ state.liveRefresh.staff=load;
  $('#staffSync').onclick=async()=>{try{setBusy(true,'Đang đồng bộ DANH MỤC NHÂN SỰ…');const r=await api('staff-sync-now');alert(`Đồng bộ ${r.status}: tạo ${r.created||0}, cập nhật ${r.updated||0}, ngừng ${r.deactivated||0}, lỗi ${r.failed||0}.`);await load();}catch(e){alert(safeMessage(e));}finally{setBusy(false);}};load();
 }
 async function editUser(id) {
