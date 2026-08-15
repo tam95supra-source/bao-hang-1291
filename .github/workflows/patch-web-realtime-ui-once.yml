@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   patch:
-    if: github.actor != 'github-actions[bot]'
+    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -20,256 +20,7 @@ jobs:
           fetch-depth: 0
 
       - name: Patch realtime UI behavior
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          path = Path('web-admin/src/main.js')
-          src = path.read_text(encoding='utf-8')
-          original = src
-
-          def replace_once(old, new, label):
-              global src
-              count = src.count(old)
-              if count != 1:
-                  raise SystemExit(f'{label}: expected exactly 1 match, got {count}')
-              src = src.replace(old, new, 1)
-
-          # State: per-kind debounce timers + active-tab live refresh callbacks + overview cache.
-          replace_once(
-              "  refreshTimer: null,\n};",
-              "  refreshTimers: new Map(),\n  liveRefresh: { issue: null, staff: null, catalog: null },\n  overviewCache: { admin: null, reports: null, service: null },\n};",
-              'state live refresh fields',
-          )
-
-          replace_once(
-              "  clearTimeout(state.refreshTimer);\n  state.refreshTimer = null;",
-              "  for (const timer of state.refreshTimers.values()) clearTimeout(timer);\n  state.refreshTimers.clear();",
-              'stop realtime timers',
-          )
-
-          replace_once(
-              "function safeMessage(error) { return error instanceof Error ? error.message : String(error); }",
-              "function safeMessage(error) { return error instanceof Error ? error.message : String(error); }\nfunction setLiveHtml(element, html) {\n  if (!element || element.__liveHtml === html) return;\n  element.innerHTML = html;\n  element.__liveHtml = html;\n}",
-              'stable html helper',
-          )
-
-          replace_once(
-              "function renderTab() {\n  $$('[data-tab]').forEach((button) => button.classList.toggle('active', button.dataset.tab === state.activeTab));",
-              "function renderTab() {\n  state.liveRefresh = { issue: null, staff: null, catalog: null };\n  $$('[data-tab]').forEach((button) => button.classList.toggle('active', button.dataset.tab === state.activeTab));",
-              'reset live refresh handlers on tab change',
-          )
-
-          schedule_pattern = re.compile(r"function scheduleLiveRefresh\(kind\) \{.*?\n\}\nfunction setRealtimeHealth", re.S)
-          schedule_replacement = '''function runLiveRefresh(kind) {
-  if (document.hidden) return;
-  const refresh = state.liveRefresh?.[kind];
-  if (typeof refresh !== 'function') return;
-  Promise.resolve(refresh()).catch(() => {});
-}
-function scheduleLiveRefresh(kind) {
-  if (document.hidden) return;
-  const previous = state.refreshTimers.get(kind);
-  if (previous) clearTimeout(previous);
-  state.refreshTimers.set(kind, setTimeout(() => {
-    state.refreshTimers.delete(kind);
-    runLiveRefresh(kind);
-  }, 350));
-}
-function setRealtimeHealth'''
-          src, count = schedule_pattern.subn(schedule_replacement, src, count=1)
-          if count != 1:
-              raise SystemExit(f'scheduleLiveRefresh: expected 1 match, got {count}')
-
-          replace_once(
-              ".on('broadcast', { event: 'picker_alert' }, () => scheduleLiveRefresh('issue'))",
-              ".on('broadcast', { event: 'picker_status_changed' }, () => scheduleLiveRefresh('issue'))",
-              'picker realtime event name',
-          )
-
-          fallback_pattern = re.compile(r"function ensureFallbackPolling\(\) \{.*?\n\}\ndocument\.addEventListener\('visibilitychange'", re.S)
-          fallback_replacement = '''function ensureFallbackPolling() {
-  if (state.fallbackTimer || document.hidden || !state.session) return;
-  state.fallbackTimer = setInterval(() => {
-    if (document.hidden) return;
-    for (const kind of ['issue', 'staff', 'catalog']) runLiveRefresh(kind);
-  }, 30_000);
-}
-document.addEventListener('visibilitychange' '''
-          src, count = fallback_pattern.subn(fallback_replacement, src, count=1)
-          if count != 1:
-              raise SystemExit(f'fallback polling: expected 1 match, got {count}')
-
-          # Overview: keep shell fixed; only refresh the metric/status regions. Reuse cache so
-          # issue events do not refetch service metrics, staff/catalog events only need summary.
-          overview_pattern = re.compile(r"async function renderOverview\(\)\{.*?\n\}\nfunction formatAge", re.S)
-          overview_replacement = r'''function paintOverview() {
-  const d = state.overviewCache.admin;
-  const r = state.overviewCache.reports;
-  const svc = state.overviewCache.service;
-  if (!d || !r || !svc) return;
-
-  const metricsHtml = [
-    ['Chờ nhận', d.open_issue_count],
-    ['Đang xử lý', d.claimed_issue_count],
-    ['SKU đang dùng', d.sku_count],
-    ['Nhân sự hoạt động', d.active_user_count],
-    ['Báo 24 giờ', r.last_24h?.reports],
-    ['Quá mốc phản hồi', r.overdue_now],
-  ].map(([label, value]) => `<article class="metric"><span>${label}</span><strong>${Number(value || 0).toLocaleString('vi-VN')}</strong></article>`).join('');
-  setLiveHtml($('#metrics'), metricsHtml);
-
-  const db = Number(svc.usage?.database_bytes || 0);
-  const lim = Number(svc.free_limits?.database_bytes || 1);
-  const pct = Math.min(100, db / lim * 100);
-  const statusHtml = `<div class="panel-grid"><article class="card"><h3>Hiệu suất 24 giờ</h3><p>Ticket phát sinh: <b>${Number(r.last_24h?.issues || 0)}</b> · Đã xử lý: <b>${Number(r.last_24h?.resolved || 0)}</b></p><p>Có hàng/châm bù: <b>${Number(r.last_24h?.available || 0)}</b> · Cho SKIP: <b>${Number(r.last_24h?.skipped || 0)}</b></p><p>Trung vị nhận: <b>${r.median_claim_minutes ?? '—'} phút</b> · Trung vị hoàn tất: <b>${r.median_resolution_minutes ?? '—'} phút</b></p></article><article class="card"><h3>Nhân sự nguồn</h3><p>${d.staff_sync ? `${escapeHtml(d.staff_sync.status)} · ${formatTime(d.staff_sync.finished_at)} · ${Number(d.staff_sync.eligible_rows || 0)} nhân sự` : 'Chưa đồng bộ.'}</p></article><article class="card"><h3>Kiểm soát free tier</h3><p>Database: <b>${(db / 1048576).toFixed(1)} MB / ${(lim / 1048576).toFixed(0)} MB (${pct.toFixed(1)}%)</b></p><p>Thiết bị FCM: ${Number(svc.usage?.active_device_tokens || 0)} · Log: ${(Number(svc.usage?.diagnostic_log_bytes || 0) / 1048576).toFixed(2)} MB · Sheet chờ: ${Number(svc.usage?.sheet_pending || 0)}</p><p class="muted">Không tự bật Billing hoặc dịch vụ trả phí.</p></article></div>`;
-  setLiveHtml($('#overviewStatus'), statusHtml);
-
-  const sheet = $('[data-health="SHEET"]');
-  if (sheet) {
-    $('em', sheet).textContent = d.pending_sheet_count ? `${d.pending_sheet_count} CHỜ` : 'OK';
-    sheet.className = `health-chip ${d.pending_sheet_count ? 'warn' : 'good'}`;
-  }
-  const free = $('[data-health="FREE TIER"]');
-  if (free) {
-    $('em', free).textContent = `DB ${pct.toFixed(1)}%`;
-    free.className = `health-chip ${pct >= 80 ? 'warn' : 'good'}`;
-  }
-}
-async function refreshOverviewLive(kind = 'all') {
-  try {
-    const jobs = [];
-    if (kind === 'all' || ['issue', 'staff', 'catalog'].includes(kind)) {
-      jobs.push(api('admin-summary').then((value) => { state.overviewCache.admin = value; }));
-    }
-    if (kind === 'all' || kind === 'issue') {
-      jobs.push(api('reports-summary').then((value) => { state.overviewCache.reports = value; }));
-    }
-    if (kind === 'all') {
-      jobs.push(api('service-metrics').then((value) => { state.overviewCache.service = value; }));
-    }
-    await Promise.all(jobs);
-    paintOverview();
-  } catch (error) {
-    const target = $('#metrics');
-    if (target && !state.overviewCache.admin) setLiveHtml(target, `<div class="message" data-type="error">${escapeHtml(safeMessage(error))}</div>`);
-  }
-}
-async function renderOverview() {
-  $('#content').innerHTML = `<div class="heading"><div><p class="eyebrow">LIVE</p><h2>Tổng quan vận hành kho</h2></div></div><div id="metrics" class="metrics"></div><div id="overviewStatus"></div>`;
-  state.overviewCache = { admin: null, reports: null, service: null };
-  state.liveRefresh.issue = () => refreshOverviewLive('issue');
-  state.liveRefresh.staff = () => refreshOverviewLive('staff');
-  state.liveRefresh.catalog = () => refreshOverviewLive('catalog');
-  await refreshOverviewLive('all');
-}
-function formatAge'''
-          src, count = overview_pattern.subn(overview_replacement, src, count=1)
-          if count != 1:
-              raise SystemExit(f'overview realtime refactor: expected 1 match, got {count}')
-
-          # Event board: reconcile cards by issue id + snapshot instead of replacing the whole board.
-          draw_pattern = re.compile(r"  const draw = \(\) => \{.*?\n  \};\n  const load = async", re.S)
-          draw_replacement = r'''  const renderedSnapshots = new Map();
-  const draw = () => {
-    const target = $('#board');
-    if (!target) return;
-    const rows = board?.[bucket] || [];
-    if (!rows.length) {
-      renderedSnapshots.clear();
-      setLiveHtml(target, `<div class="card muted" data-empty-board>Không có SKU ở nhóm này.</div>`);
-    } else {
-      target.__liveHtml = null;
-      target.querySelector('[data-empty-board]')?.remove();
-      const desiredIds = new Set(rows.map((issue) => String(issue.id)));
-      $$('[data-issue-card]', target).forEach((node) => {
-        if (!desiredIds.has(node.dataset.issueCard)) {
-          renderedSnapshots.delete(node.dataset.issueCard);
-          node.remove();
-        }
-      });
-      rows.forEach((issue, index) => {
-        const id = String(issue.id);
-        const snapshot = `${bucket}:${JSON.stringify(issue)}`;
-        let node = $$('[data-issue-card]', target).find((item) => item.dataset.issueCard === id);
-        if (!node || renderedSnapshots.get(id) !== snapshot) {
-          const template = document.createElement('template');
-          template.innerHTML = issueCard(issue, bucket).trim();
-          const next = template.content.firstElementChild;
-          if (node) node.replaceWith(next); else target.append(next);
-          node = next;
-          renderedSnapshots.set(id, snapshot);
-        }
-        const currentAtIndex = target.children[index];
-        if (currentAtIndex !== node) target.insertBefore(node, currentAtIndex || null);
-      });
-    }
-    $$('[data-claim]', target).forEach((b) => b.onclick = () => claimIssue(b.dataset.claim, load));
-    $$('[data-action]', target).forEach((b) => b.onclick = () => issueAction(b.dataset.issue, b.dataset.action, b.dataset.sku, load));
-    $$('[data-reassign]', target).forEach((b) => b.onclick = () => openReassign(b.dataset.reassign, b.dataset.sku, load));
-  };
-  const load = async'''
-          src, count = draw_pattern.subn(draw_replacement, src, count=1)
-          if count != 1:
-              raise SystemExit(f'event board reconciliation: expected 1 match, got {count}')
-
-          replace_once(
-              "  $('#refreshBoard').onclick = load;\n  $$('[data-bucket]').forEach((b) => b.onclick = () => { bucket = b.dataset.bucket; $$('[data-bucket]').forEach((x) => x.classList.toggle('active', x === b)); draw(); });\n  load();",
-              "  $('#refreshBoard').onclick = load;\n  $$('[data-bucket]').forEach((b) => b.onclick = () => { bucket = b.dataset.bucket; $$('[data-bucket]').forEach((x) => x.classList.toggle('active', x === b)); draw(); });\n  state.liveRefresh.issue = load;\n  load();",
-              'event board live handler',
-          )
-
-          replace_once(
-              "  const header = `<article class=\"card issue\"><div class=\"issue-top\">",
-              "  const header = `<article class=\"card issue\" data-issue-card=\"${escapeHtml(issue.id)}\"><div class=\"issue-top\">",
-              'issue card identity',
-          )
-
-          replace_once(
-              "  $('#refreshMine').onclick = loadMyIssues;\n  loadMyIssues();\n  loadPendingAlerts();",
-              "  $('#refreshMine').onclick = loadMyIssues;\n  state.liveRefresh.issue = async () => { await Promise.all([loadMyIssues(), loadPendingAlerts()]); };\n  state.liveRefresh.catalog = async () => { if ($('#skuSearch')?.value.trim()) await searchSku(); };\n  loadMyIssues();\n  loadPendingAlerts();",
-              'picker partial live handlers',
-          )
-
-          replace_once(
-              "$('#catalogSearch').addEventListener('keydown',e=>{if(e.key==='Enter')load();});",
-              "$('#catalogSearch').addEventListener('keydown',e=>{if(e.key==='Enter')load();});state.liveRefresh.catalog=load;",
-              'catalog partial live handler',
-          )
-
-          replace_once(
-              " $('#staffSync').onclick=async()=>",
-              " state.liveRefresh.staff=load;\n $('#staffSync').onclick=async()=>",
-              'staff partial live handler',
-          )
-
-          # Guardrails: the old full-tab realtime path and stale picker event must be gone.
-          forbidden = [
-              "picker_alert",
-              "if (kind === 'issue' && ['events','overview','picker'].includes(state.activeTab)) renderTab()",
-              "if (['events','picker','sku','overview','users'].includes(state.activeTab)) renderTab()",
-          ]
-          for token in forbidden:
-              if token in src:
-                  raise SystemExit(f'forbidden stale realtime path remains: {token}')
-
-          required = [
-              "picker_status_changed",
-              "state.liveRefresh.issue = load;",
-              "data-issue-card=",
-              "refreshOverviewLive('issue')",
-              "for (const kind of ['issue', 'staff', 'catalog']) runLiveRefresh(kind);",
-          ]
-          for token in required:
-              if token not in src:
-                  raise SystemExit(f'required realtime path missing: {token}')
-
-          if src == original:
-              raise SystemExit('no source changes produced')
-          path.write_text(src, encoding='utf-8')
-          PY
+        run: python3 .github/scripts/patch_web_realtime_ui.py
 
       - name: Build web admin
         working-directory: web-admin
@@ -277,20 +28,19 @@ function formatAge'''
           npm ci
           npm run build
 
-      - name: Verify no full-tab realtime refresh remains
-        shell: bash
+      - name: Verify realtime UI guardrails
         run: |
           grep -q "picker_status_changed" web-admin/src/main.js
           grep -q "state.liveRefresh.issue = load" web-admin/src/main.js
           grep -q "data-issue-card=" web-admin/src/main.js
           ! grep -q "picker_alert" web-admin/src/main.js
 
-      - name: Commit patch and remove one-shot workflow
-        shell: bash
+      - name: Commit patch and cleanup one-shot files
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add web-admin/src/main.js
+          git rm .github/scripts/patch_web_realtime_ui.py
           git rm .github/workflows/patch-web-realtime-ui-once.yml
           git commit -m "fix(web): update realtime UI in place"
           git push origin HEAD:target-final-20260814-impl
