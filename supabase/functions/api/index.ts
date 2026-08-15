@@ -597,16 +597,33 @@ async function route(req: Request) {
       return { issue: data };
     }
     case "pending-alerts": {
-      const { data, error } = await admin.from("notification_events").select("id,issue_id,issue_version,status,title,message,critical,created_at,sent_at,fcm_accepted_at")
-        .eq("target_user_id", context.userId).eq("critical", true).is("acknowledged_at", null).order("created_at").limit(50);
+      const { data, error } = await admin.from("notification_events")
+        .select("id,issue_id,issue_version,status,title,message,critical,created_at,sent_at,fcm_accepted_at,displayed_at,acknowledged_at,expires_at")
+        .eq("target_user_id", context.userId)
+        .gt("expires_at", new Date().toISOString())
+        .order("created_at")
+        .limit(100);
       if (error) throw error;
-      const ids = [...new Set<string>((data ?? []).map((row: any) => String(row.issue_id ?? "")).filter(Boolean))];
+      const eligible = (data ?? []).filter((event: any) => {
+        if (event.status === "OPEN") {
+          return event.critical === false
+            && context.effectiveRole !== "PICKER"
+            && !event.displayed_at;
+        }
+        return ["AVAILABLE", "SKIP_ALLOWED"].includes(String(event.status))
+          && event.critical === true
+          && !event.acknowledged_at;
+      });
+      const ids = [...new Set<string>(eligible.map((row: any) => String(row.issue_id ?? "")).filter(Boolean))];
       const issues = ids.length ? await issueRows(ids) : [];
       const byId = new Map<string, any>(issues.map((issue: any) => [String(issue.id), issue]));
-      return { events: (data ?? []).filter((event) => {
+      return { events: eligible.filter((event: any) => {
         const issue = byId.get(event.issue_id);
         return issue?.status === event.status && Number(issue.issue_version) === Number(event.issue_version);
-      }).map((event) => ({ ...event, issue: pickerIssue(byId.get(event.issue_id)) })) };
+      }).map((event: any) => ({
+        ...event,
+        issue: event.status === "OPEN" ? byId.get(event.issue_id) : pickerIssue(byId.get(event.issue_id)),
+      })) };
     }
     case "mark-alert-received": {
       const id = required(body.event_id, "Event ID");
