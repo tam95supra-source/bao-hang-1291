@@ -55,14 +55,24 @@ class OverlayAlertService : Service() {
         val sku = intent.getStringExtra(EXTRA_SKU).orEmpty()
         val product = intent.getStringExtra(EXTRA_PRODUCT).orEmpty()
         val status = IssueStatus.from(intent.getStringExtra(EXTRA_STATUS))
-        if (status !in setOf(IssueStatus.AVAILABLE, IssueStatus.SKIP_ALLOWED)) { dismiss(); return }
+        if (status !in setOf(IssueStatus.OPEN, IssueStatus.AVAILABLE, IssueStatus.SKIP_ALLOWED)) { dismiss(); return }
         val message = intent.getStringExtra(EXTRA_MESSAGE).orEmpty()
-        val critical = true
-        val canClaim = false
+        val critical = intent.getBooleanExtra(EXTRA_CRITICAL, status != IssueStatus.OPEN)
+        val canClaim = intent.getBooleanExtra(EXTRA_CAN_CLAIM, status == IssueStatus.OPEN)
         currentCritical = critical
         val view = LayoutInflater.from(this).inflate(R.layout.overlay_alert, null)
-        view.setBackgroundResource(if (status == IssueStatus.AVAILABLE) R.drawable.bg_overlay_available else R.drawable.bg_overlay_skip)
-        view.findViewById<TextView>(R.id.tvOverlayStatus).text = if (status == IssueStatus.AVAILABLE) "ĐÃ CÓ HÀNG • QUAY LẠI LẤY HÀNG" else "CHO PHÉP SKIP • TIẾP TỤC CÔNG VIỆC"
+        view.setBackgroundResource(
+            when (status) {
+                IssueStatus.AVAILABLE -> R.drawable.bg_overlay_available
+                IssueStatus.SKIP_ALLOWED -> R.drawable.bg_overlay_skip
+                else -> R.drawable.bg_card
+            }
+        )
+        view.findViewById<TextView>(R.id.tvOverlayStatus).text = when (status) {
+            IssueStatus.OPEN -> "CÓ SKU CẦN XỬ LÝ"
+            IssueStatus.AVAILABLE -> "ĐÃ CÓ HÀNG • QUAY LẠI LẤY HÀNG"
+            else -> "CHO PHÉP SKIP • TIẾP TỤC CÔNG VIỆC"
+        }
         view.findViewById<TextView>(R.id.tvOverlaySku).text = "SKU $sku"
         view.findViewById<TextView>(R.id.tvOverlayProduct).text = product
         view.findViewById<TextView>(R.id.tvOverlayMessage).text = message
@@ -70,6 +80,13 @@ class OverlayAlertService : Service() {
         val hint = view.findViewById<TextView>(R.id.tvOverlayDismissHint)
         ack.visibility = View.VISIBLE
         hint.visibility = View.VISIBLE
+
+        if (eventId.isNotBlank() && !eventId.startsWith("test-")) {
+            scope.launch {
+                runCatching { (application as BaoHangApplication).repository.markAlertDisplayed(eventId) }
+            }
+        }
+
         if (critical) {
             ack.text = "ĐÃ XÁC NHẬN"
             ack.setOnClickListener {
@@ -80,18 +97,20 @@ class OverlayAlertService : Service() {
                 dismiss()
             }
         } else if (canClaim) {
+            hint.text = "Cảnh báo chỉ hiển thị lần đầu của đợt SKU này."
             ack.text = "NHẬN XỬ LÝ"
             ack.setOnClickListener {
                 ack.isEnabled = false
                 ack.text = "ĐANG NHẬN…"
                 scope.launch {
                     runCatching {
-                        (application as BaoHangApplication).repository.updateIssue(issueId, "CLAIM")
+                        (application as BaoHangApplication).repository.claimIssue(issueId)
                     }.onSuccess {
                         Toast.makeText(this@OverlayAlertService, "Bạn đã nhận xử lý SKU $sku", Toast.LENGTH_LONG).show()
+                        NotificationManagerCompat.from(this@OverlayAlertService).cancel(eventId.hashCode())
                         dismiss()
                     }.onFailure {
-                        Toast.makeText(this@OverlayAlertService, it.message ?: "Không nhận được ticket", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this@OverlayAlertService, it.message ?: "Không nhận được SKU", Toast.LENGTH_LONG).show()
                         ack.isEnabled = true
                         ack.text = "NHẬN XỬ LÝ"
                     }
