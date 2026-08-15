@@ -7,17 +7,16 @@ on:
       - '.github/workflows/configure-firebase-zero-cost-once.yml'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  configure:
+  configure-auth:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v6
         with:
           ref: target-final-20260814-impl
-          fetch-depth: 0
 
       - name: Enforce zero-cost Firebase billing guard
         shell: bash
@@ -26,53 +25,13 @@ jobs:
         run: |
           set -euo pipefail
           node <<'NODE'
-          const crypto = require('crypto');
-          const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
-          if (!sa.client_email || !sa.private_key || sa.project_id !== 'bao-hang-1291') throw new Error('Firebase service account secret is incomplete or belongs to another project');
-          const enc = (v) => Buffer.from(typeof v === 'string' ? v : JSON.stringify(v)).toString('base64url');
-          async function token() {
-            const now = Math.floor(Date.now() / 1000);
-            const header = enc({ alg: 'RS256', typ: 'JWT' });
-            const claim = enc({ iss: sa.client_email, scope: 'https://www.googleapis.com/auth/cloud-platform', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 900 });
-            const unsigned = `${header}.${claim}`;
-            const signature = crypto.sign('RSA-SHA256', Buffer.from(unsigned), sa.private_key).toString('base64url');
-            const res = await fetch('https://oauth2.googleapis.com/token', { method:'POST', headers:{'content-type':'application/x-www-form-urlencoded'}, body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:`${unsigned}.${signature}`}) });
-            if (!res.ok) throw new Error(`OAuth token HTTP ${res.status}`);
-            return (await res.json()).access_token;
-          }
-          token().then(async access => {
-            const res = await fetch('https://cloudbilling.googleapis.com/v1/projects/bao-hang-1291/billingInfo', {headers:{Authorization:`Bearer ${access}`}});
-            if (!res.ok) throw new Error(`Cloud Billing read HTTP ${res.status}`);
-            const billing = await res.json();
-            if (billing.billingEnabled === true || String(billing.billingAccountName || '').trim()) throw new Error('COST_GUARD_STOP: Billing is attached');
-            console.log('COST_GUARD=PASS billingEnabled=false');
-          }).catch(e => { console.error(e.message); process.exitCode=3; });
+          const crypto=require('crypto');
+          const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');
+          if(!sa.client_email||!sa.private_key||sa.project_id!=='bao-hang-1291') throw new Error('Firebase service account secret mismatch');
+          const enc=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');
+          async function token(){const now=Math.floor(Date.now()/1000),h=enc({alg:'RS256',typ:'JWT'}),c=enc({iss:sa.client_email,scope:'https://www.googleapis.com/auth/cloud-platform',aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+900}),u=`${h}.${c}`,sig=crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url');const r=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:`${u}.${sig}`})});if(!r.ok)throw new Error(`OAuth ${r.status}`);return(await r.json()).access_token;}
+          (async()=>{const access=await token(),r=await fetch('https://cloudbilling.googleapis.com/v1/projects/bao-hang-1291/billingInfo',{headers:{Authorization:`Bearer ${access}`}});if(!r.ok)throw new Error(`Cloud Billing read HTTP ${r.status}`);const b=await r.json();if(b.billingEnabled===true||String(b.billingAccountName||'').trim())throw new Error('COST_GUARD_STOP: Billing attached');console.log('COST_GUARD=PASS billingEnabled=false');})().catch(e=>{console.error(e.message);process.exitCode=3});
           NODE
-
-      - name: Add declarative Email Password auth config
-        shell: bash
-        run: |
-          set -euo pipefail
-          node <<'NODE'
-          const fs = require('fs');
-          const path = 'firebase.json';
-          const cfg = JSON.parse(fs.readFileSync(path, 'utf8'));
-          cfg.auth = { providers: { emailPassword: true } };
-          fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + '\n');
-          NODE
-          git diff --check -- firebase.json
-
-      - name: Commit declarative Firebase auth config
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add firebase.json
-          if ! git diff --cached --quiet; then
-            git commit -m "config: declare Firebase email password auth"
-            git push origin HEAD:target-final-20260814-impl
-          fi
 
       - uses: actions/setup-node@v7
         with:
@@ -91,13 +50,9 @@ jobs:
           jq -e '.project_id == "bao-hang-1291" and .client_email and .private_key' "$SA_FILE" >/dev/null
           echo "GOOGLE_APPLICATION_CREDENTIALS=$SA_FILE" >> "$GITHUB_ENV"
 
-      - name: Publish Firestore rules
-        shell: bash
-        run: npx --yes firebase-tools@14.17.0 deploy --only firestore:rules --project bao-hang-1291 --non-interactive
-
       - name: Configure Firebase Email Password authentication
         shell: bash
-        run: npx --yes firebase-tools@14.17.0 deploy --only auth --project bao-hang-1291 --non-interactive
+        run: npx --yes firebase-tools@15.25.0 deploy --only auth --project bao-hang-1291 --non-interactive
 
       - name: Verify Auth config through Admin API
         shell: bash
@@ -106,11 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           node <<'NODE'
-          const crypto = require('crypto');
-          const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
-          const enc=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');
-          async function token(){const now=Math.floor(Date.now()/1000);const h=enc({alg:'RS256',typ:'JWT'});const c=enc({iss:sa.client_email,scope:'https://www.googleapis.com/auth/cloud-platform',aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+900});const u=`${h}.${c}`;const sig=crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url');const r=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:`${u}.${sig}`})});if(!r.ok)throw new Error(`OAuth ${r.status}`);return (await r.json()).access_token;}
-          (async()=>{const access=await token();const r=await fetch('https://identitytoolkit.googleapis.com/admin/v2/projects/bao-hang-1291/config',{headers:{Authorization:`Bearer ${access}`}});const text=await r.text();if(!r.ok)throw new Error(`AUTH_CONFIG_HTTP_${r.status}`);const cfg=JSON.parse(text);if(cfg?.signIn?.email?.enabled!==true || cfg?.signIn?.email?.passwordRequired!==true)throw new Error('AUTH_EMAIL_PASSWORD_NOT_ENABLED');console.log('AUTH_EMAIL_PASSWORD=PASS');})().catch(e=>{console.error(e.message);process.exitCode=4});
+          const crypto=require('crypto');const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');const enc=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');async function token(){const n=Math.floor(Date.now()/1000),h=enc({alg:'RS256',typ:'JWT'}),c=enc({iss:sa.client_email,scope:'https://www.googleapis.com/auth/cloud-platform',aud:'https://oauth2.googleapis.com/token',iat:n,exp:n+900}),u=`${h}.${c}`,s=crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url'),r=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:`${u}.${s}`})});if(!r.ok)throw new Error(`OAuth ${r.status}`);return(await r.json()).access_token}(async()=>{const a=await token(),r=await fetch('https://identitytoolkit.googleapis.com/admin/v2/projects/bao-hang-1291/config',{headers:{Authorization:`Bearer ${a}`}});if(!r.ok)throw new Error(`AUTH_CONFIG_HTTP_${r.status}`);const c=await r.json();if(c?.signIn?.email?.enabled!==true||c?.signIn?.email?.passwordRequired!==true)throw new Error('AUTH_EMAIL_PASSWORD_NOT_ENABLED');console.log('AUTH_EMAIL_PASSWORD=PASS');})().catch(e=>{console.error(e.message);process.exitCode=4});
           NODE
 
       - name: Cleanup credential
