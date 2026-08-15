@@ -88,6 +88,10 @@ jobs:
           set -euo pipefail
           cp google-apps-script/Code.gs "$RUNNER_TEMP/Code.js"
           node --check "$RUNNER_TEMP/Code.js"
+          if grep -En '[0-9]_[0-9]' google-apps-script/Code.gs; then
+            echo 'Apps Script parser-incompatible numeric separator detected' >&2
+            exit 1
+          fi
       - name: Validate Firebase config shape
         shell: bash
         run: |
