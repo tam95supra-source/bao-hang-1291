@@ -12,6 +12,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import vn.pickpack1291.baohang.BaoHangApplication
 import vn.pickpack1291.baohang.data.IssueStatus
+import vn.pickpack1291.baohang.data.UserRole
 import vn.pickpack1291.baohang.network.DirectRpcClient
 import java.time.Instant
 
@@ -39,23 +40,27 @@ class StockMessagingService : FirebaseMessagingService() {
         val status = data["status"].orEmpty().uppercase()
         val targetUserId = data["target_user_id"].orEmpty()
         val expiry = data["expiry"].orEmpty()
+        val isHandlerOpenAlert = status == "OPEN"
+        val handlerRoles = setOf(UserRole.INVENT, UserRole.ADMIN_INVENT, UserRole.ADMIN)
 
-        if (!app.session.isLoggedIn || issueId.isBlank() || incomingVersion < 1 || status !in setOf("AVAILABLE", "SKIP_ALLOWED")) {
-            app.diagnostics.info("picker_notification_suppressed", mapOf("status" to status, "reason" to "invalid_or_no_session"))
+        if (!app.session.isLoggedIn || issueId.isBlank() || incomingVersion < 1 || status !in setOf("OPEN", "AVAILABLE", "SKIP_ALLOWED")) {
+            app.diagnostics.info("stock_notification_suppressed", mapOf("status" to status, "reason" to "invalid_or_no_session"))
+            return
+        }
+        if (isHandlerOpenAlert && app.session.effectiveRole !in handlerRoles) {
+            app.diagnostics.info("handler_notification_suppressed", mapOf("status" to status, "reason" to "role_not_handler"))
             return
         }
         if (targetUserId.isNotBlank() && targetUserId != app.session.profile?.id) {
-            app.diagnostics.warn("picker_notification_wrong_target", mapOf("event_id" to eventId, "issue_id" to issueId))
+            app.diagnostics.warn("stock_notification_wrong_target", mapOf("event_id" to eventId, "issue_id" to issueId))
             return
         }
         if (expiry.isNotBlank() && runCatching { Instant.parse(expiry).isBefore(Instant.now()) }.getOrDefault(true)) {
-            app.diagnostics.info("picker_notification_expired", mapOf("event_id" to eventId, "issue_id" to issueId))
+            app.diagnostics.info("stock_notification_expired", mapOf("event_id" to eventId, "issue_id" to issueId))
             return
         }
 
-        // FCM is only a delivery hint. Before any heads-up/overlay is shown, confirm the
-        // authoritative row still has exactly this state+version. If the service cannot be
-        // verified now, do not show a possibly stale alert; pending-alert catch-up will recover it.
+        // FCM is a delivery hint only. Verify exact authority state/version before showing.
         val current = runBlocking(Dispatchers.IO) {
             withTimeoutOrNull(7_000L) {
                 runCatching { DirectRpcClient(app.session).issueDetail(issueId) }.getOrNull()
@@ -92,7 +97,8 @@ class StockMessagingService : FirebaseMessagingService() {
         if (app.isAppForeground && Settings.canDrawOverlays(this)) {
             val overlay = OverlayAlertService.intent(
                 this, eventId, issueId, sku, product, status, body,
-                true, false
+                critical = !isHandlerOpenAlert,
+                canClaim = isHandlerOpenAlert
             )
             runCatching { ContextCompat.startForegroundService(this, overlay) }
                 .onFailure {
