@@ -37,7 +37,11 @@ jobs:
         with:
           deno-version: v1.46.3
       - name: Apply guarded product patch
-        run: python3 ops/tmp_picker_patch.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i 's/re.subn(pattern, repl, text, count=1, flags=re.S)/re.subn(pattern, lambda _: repl, text, count=1, flags=re.S)/' ops/tmp_picker_patch.py
+          python3 ops/tmp_picker_patch.py
       - name: Validate expected product shape
         shell: bash
         run: |
