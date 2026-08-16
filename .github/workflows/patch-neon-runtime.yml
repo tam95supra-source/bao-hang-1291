@@ -1,0 +1,192 @@
+name: Patch Neon runtime compatibility
+
+on:
+  push:
+    branches: [migration/neon-cutover]
+    paths:
+      - '.github/workflows/patch-neon-runtime.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.repository == 'tam95supra-source/bao-hang-1291' && github.ref == 'refs/heads/migration/neon-cutover'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: migration/neon-cutover
+          fetch-depth: 0
+      - name: Guard target
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
+          test "$GITHUB_REF" = 'refs/heads/migration/neon-cutover'
+          ! grep -RInE 'ttwftrooaizxmjovkbaz|pick-pack-1291-primary|19a7c8e9-9fc0-4b04-a545-bcbe84b1bcb1' app/src web-admin/src google-apps-script app/build.gradle.kts web-admin/package.json
+      - name: Patch compatibility layer and worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          shim_path = Path('web-admin/src/supabase-shim.js')
+          shim = shim_path.read_text()
+
+          old = "  const raw = headerValue(init, 'x-test-role').trim().toUpperCase()"
+          new = "  const raw = (headerValue(init, 'x-admin-test-role') || headerValue(init, 'x-test-role')).trim().toUpperCase()"
+          if shim.count(old) != 1:
+              raise SystemExit(f'Unexpected test-role header marker count: {shim.count(old)}')
+          shim = shim.replace(old, new, 1)
+
+          marker = "    case 'withdraw-shortage': return ['api_withdraw_shortage_rpc', base({ p_issue_id: b.issue_id })]"
+          if shim.count(marker) != 1:
+              raise SystemExit(f'Unexpected withdraw mapping marker count: {shim.count(marker)}')
+          shim = shim.replace(marker, "    case 'restore-skipped': return ['api_restore_skipped_issue_rpc', base({ p_issue_id: b.issue_id, p_reason: b.reason || '' })]\n" + marker, 1)
+
+          old_block = """    const functionMatch = url.pathname.match(/^\\/functions\\/v1\\/(?:web-api|api|issue-withdraw)\\/([^/]+)$/)\n    if (functionMatch) {\n      const action = decodeURIComponent(functionMatch[1])\n      const body = parseBody(init)\n      if (['update-user', 'import-users', 'sync-google-sheet', 'staff-sync-now', 'upload-log', 'download-log', 'user-upsert', 'user-disable'].includes(action)) {\n        return worker(action, body, init)\n      }\n      const response = await neonRpc(action, body, init)\n      if (response) return response\n      return jsonResponse({ error: `MIGRATION_ACTION_UNSUPPORTED:${action}` }, 400)\n    }"""
+          new_block = """    const functionMatch = url.pathname.match(/^\\/functions\\/v1\\/(web-api|api|issue-withdraw)\\/([^/]+)$/)\n    if (functionMatch) {\n      const family = functionMatch[1]\n      let action = decodeURIComponent(functionMatch[2])\n      const body = parseBody(init)\n      if (family === 'issue-withdraw') {\n        action = ({ board:'withdrawn-board', search:'picker-search-digits', my:'picker-my-issues', withdraw:'withdraw-shortage' })[action] || action\n      }\n      if (['update-user', 'import-users', 'sync-google-sheet', 'staff-sync-now', 'upload-log', 'download-log', 'user-upsert', 'user-disable'].includes(action)) {\n        return worker(action, body, init)\n      }\n      const response = await neonRpc(action, body, init)\n      if (response) return response\n      return jsonResponse({ error: `MIGRATION_ACTION_UNSUPPORTED:${action}` }, 400)\n    }"""
+          if shim.count(old_block) != 1:
+              raise SystemExit(f'Unexpected function compatibility block count: {shim.count(old_block)}')
+          shim = shim.replace(old_block, new_block, 1)
+          shim_path.write_text(shim)
+
+          worker_path = Path('google-apps-script/DEPLOY_NEON.gs')
+          worker = worker_path.read_text()
+
+          old = """    if (action === 'upload-log') return json_(uploadLog_(body));\n    if (action === 'download-log') return json_(downloadLog_(body));\n    if (action === 'user-upsert') return json_(userUpsert_(body));\n    if (action === 'user-disable') return json_(userDisable_(body));"""
+          new = """    if (action === 'upload-log') return json_(uploadLog_(body));\n    if (action === 'download-log') return json_(downloadLog_(body));\n    if (action === 'user-upsert' || action === 'update-user') {\n      if (action === 'update-user') body.user = Object.assign({}, body);\n      return json_(userUpsert_(body));\n    }\n    if (action === 'import-users') return json_(importUsers_(body));\n    if (action === 'sync-google-sheet') {\n      requireUser_(String(body.id_token || ''), ['ADMIN','ADMIN_INVENT']);\n      return json_(workerTick_('SHEET_SYNC'));\n    }\n    if (action === 'user-disable') return json_(userDisable_(body));"""
+          if worker.count(old) != 1:
+              raise SystemExit(f'Unexpected doPost action block count: {worker.count(old)}')
+          worker = worker.replace(old, new, 1)
+
+          old = "    const schedule = neonRpc_('worker_schedule_rpc', {p_realtime_enabled: !!props.getProperty('RTDB_URL')}, token);"
+          new = "    const schedule = neonRpc_('worker_schedule_rpc', {p_realtime_enabled:true}, token);"
+          if worker.count(old) != 1:
+              raise SystemExit(f'Unexpected realtime schedule marker count: {worker.count(old)}')
+          worker = worker.replace(old, new, 1)
+
+          rt_pattern = re.compile(r"function drainRealtime_\(token\) \{.*?\n\}\n\nfunction maybeCleanup_", re.S)
+          rt_new = r'''function drainRealtime_(token) {
+  const events = neonRpc_('worker_realtime_batch_rpc', {p_limit:200}, token) || [];
+  let published = 0, failed = 0;
+  events.forEach(function(event) {
+    try {
+      publishFirestoreRealtime_(event);
+      const push = sendRealtimeDeltaToTokens_(event);
+      if (!push.accepted) throw new Error(push.error || 'REALTIME_FCM_FAILED');
+      neonRpc_('worker_realtime_result_rpc', {p_id:Number(event.id),p_published:true,p_error:''}, token);
+      published++;
+    } catch (error) {
+      failed++;
+      neonRpc_('worker_realtime_result_rpc', {p_id:Number(event.id),p_published:false,p_error:safeError_(error)}, token);
+    }
+  });
+  return {enabled:true,count:events.length,published:published,failed:failed};
+}
+
+function publishFirestoreRealtime_(event) {
+  const topic = String(event.topic || '');
+  if (['issues','catalog','staff','config'].indexOf(topic) < 0) throw new Error('FIRESTORE_TOPIC_INVALID');
+  const access = firebaseOAuthAccessToken_('https://www.googleapis.com/auth/datastore');
+  const created = new Date(event.created_at || Date.now());
+  const createdIso = isNaN(created.getTime()) ? new Date().toISOString() : created.toISOString();
+  const fields = {
+    event_type:{stringValue:String(event.event_type || '')},
+    topic:{stringValue:topic},
+    event_id:{integerValue:String(Number(event.id || 0))},
+    entity_id:{stringValue:String(event.entity_id || '')},
+    entity_version:{integerValue:String(Number(event.entity_version || 0))},
+    created_at:{timestampValue:createdIso},
+    payload_json:{stringValue:JSON.stringify(event.payload || {})}
+  };
+  const url='https://firestore.googleapis.com/v1/projects/'+BH_PROJECT+'/databases/(default)/documents/realtime/'+encodeURIComponent(topic);
+  const res=UrlFetchApp.fetch(url,{method:'patch',contentType:'application/json',headers:{Authorization:'Bearer '+access},payload:JSON.stringify({fields:fields}),muteHttpExceptions:true});
+  if(res.getResponseCode()<200||res.getResponseCode()>=300)throw new Error('FIRESTORE_'+res.getResponseCode()+': '+res.getContentText().slice(0,400));
+}
+
+function sendRealtimeDeltaToTokens_(event) {
+  const tokens = Array.isArray(event.device_tokens) ? event.device_tokens : [];
+  if (!tokens.length) return {accepted:true,invalidTokens:[],error:''};
+  const access = firebaseOAuthAccessToken_('https://www.googleapis.com/auth/firebase.messaging');
+  const invalid = [];
+  let success = 0, lastError = '';
+  tokens.forEach(function(token) {
+    const data={
+      event_type:'REALTIME_DELTA',
+      topic:String(event.topic || ''),
+      realtime_event_id:String(event.id || ''),
+      entity_id:String(event.entity_id || ''),
+      entity_version:String(event.entity_version || 0)
+    };
+    const body={message:{token:String(token),data:data,android:{priority:'high',ttl:'60s',collapse_key:'realtime-'+String(event.topic || 'all').slice(0,48)}}};
+    const url='https://fcm.googleapis.com/v1/projects/'+BH_PROJECT+'/messages:send';
+    const res=UrlFetchApp.fetch(url,{method:'post',contentType:'application/json',headers:{Authorization:'Bearer '+access},payload:JSON.stringify(body),muteHttpExceptions:true});
+    const code=res.getResponseCode();
+    if(code>=200&&code<300){success++;return;}
+    const text=res.getContentText();
+    lastError=('FCM_REALTIME '+code+' '+text).slice(0,500);
+    if(code===404||text.indexOf('UNREGISTERED')>=0||text.indexOf('registration-token-not-registered')>=0)invalid.push(String(token));
+  });
+  return {accepted:success>0||invalid.length===tokens.length,invalidTokens:invalid,error:lastError};
+}
+
+function maybeCleanup_'''
+          worker, count = rt_pattern.subn(rt_new, worker, count=1)
+          if count != 1:
+              raise SystemExit(f'Expected one RTDB drainRealtime block, got {count}')
+
+          user_marker = "function userUpsert_(body) {"
+          if worker.count(user_marker) != 1:
+              raise SystemExit(f'Unexpected userUpsert marker count: {worker.count(user_marker)}')
+          import_fn = r'''function importUsers_(body) {
+  requireUser_(String(body.id_token||''), ['ADMIN','ADMIN_INVENT']);
+  const items=Array.isArray(body.items)?body.items:[];
+  let imported=0;
+  const errors=[];
+  items.forEach(function(item){
+    try {
+      const request={id_token:String(body.id_token||''),user:Object.assign({},item)};
+      userUpsert_(request);
+      imported++;
+    } catch(error) {
+      errors.push({employee_code:String(item&&item.employee_code||''),error:safeError_(error)});
+    }
+  });
+  return {ok:errors.length===0,imported:imported,failed:errors.length,errors:errors};
+}
+
+'''
+          worker = worker.replace(user_marker, import_fn + user_marker, 1)
+
+          old = "  const password=String(item.new_password||item.initial_password||'');\n  if(isNew && password.length<6)throw new Error('PASSWORD_TOO_SHORT');"
+          new = "  const suppliedPassword=String(item.new_password||item.initial_password||'');\n  const password=isNew && !suppliedPassword ? requiredProp_('STAFF_DEFAULT_PASSWORD') : suppliedPassword;\n  if(isNew && password.length<6)throw new Error('PASSWORD_TOO_SHORT');"
+          if worker.count(old) != 1:
+              raise SystemExit(f'Unexpected password marker count: {worker.count(old)}')
+          worker = worker.replace(old, new, 1)
+
+          if 'RTDB_URL' in worker or 'RTDB_' in worker:
+              raise SystemExit('RTDB reference remains in Apps Script bundle')
+          if 'FIRESTORE_TOPIC_INVALID' not in worker or "event_type:'REALTIME_DELTA'" not in worker:
+              raise SystemExit('Firestore/FCM realtime replacement missing')
+          worker_path.write_text(worker)
+          PY
+          ! grep -RInE 'ttwftrooaizxmjovkbaz|pick-pack-1291-primary|19a7c8e9-9fc0-4b04-a545-bcbe84b1bcb1' app/src web-admin/src google-apps-script app/build.gradle.kts web-admin/package.json
+          ! grep -RInE 'RTDB_URL|RTDB_' google-apps-script/DEPLOY_NEON.gs
+          node --check google-apps-script/DEPLOY_NEON.gs
+          node --check web-admin/src/supabase-shim.js
+          git diff --check
+      - name: Commit runtime patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'bao-hang-1291-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add web-admin/src/supabase-shim.js google-apps-script/DEPLOY_NEON.gs
+          git diff --cached --quiet && { echo 'No patch required'; exit 0; }
+          git commit -m 'fix(migration): use Firestore FCM realtime worker'
+          git push origin HEAD:migration/neon-cutover
