@@ -42,3 +42,5 @@ jobs:
             tail -n 40 /tmp/gradle.log
           fi
           exit "$code"
+
+# rerun: Neon restore RPC patch verified on migration branch
