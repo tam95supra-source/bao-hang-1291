@@ -52,14 +52,8 @@ function bearer(init) {
 }
 
 function testRole(init) {
-  const raw = headerValue(init, 'x-test-role').trim().toUpperCase()
+  const raw = (headerValue(init, 'x-admin-test-role') || headerValue(init, 'x-test-role')).trim().toUpperCase()
   return ['ADMIN_INVENT', 'INVENT', 'PICKER'].includes(raw) ? raw : null
-}
-
-function employeeEmail(raw) {
-  const code = String(raw || '').trim().toLowerCase()
-  if (!/^[a-z0-9._-]+$/.test(code)) throw new Error('INVALID_EMPLOYEE_CODE')
-  return `${code}@bao-hang-1291.local`
 }
 
 async function supabaseLikeLogin(body) {
@@ -126,6 +120,7 @@ function mapRpc(action, body, init) {
     case 'claim-issue': return ['api_claim_issue_rpc', base({ p_issue_id: b.issue_id, p_client_request_id: b.client_request_id || crypto.randomUUID() })]
     case 'reassign-issue': return ['api_reassign_issue_rpc', base({ p_issue_id: b.issue_id, p_new_assignee_id: b.new_assignee_id, p_reason: b.reason || '', p_client_request_id: b.client_request_id || crypto.randomUUID() })]
     case 'update-issue': return ['api_update_issue_rpc', base({ p_issue_id: b.issue_id, p_action: b.action, p_client_request_id: b.client_request_id || crypto.randomUUID() })]
+    case 'restore-skipped': return ['api_restore_skipped_issue_rpc', base({ p_issue_id: b.issue_id, p_reason: b.reason || '' })]
     case 'withdraw-shortage': return ['api_withdraw_shortage_rpc', base({ p_issue_id: b.issue_id })]
     case 'pending-alerts': return ['api_pending_alerts_rpc', base()]
     case 'mark-alert-received': return ['api_mark_alert_received_rpc', base({ p_event_id: b.event_id })]
@@ -168,12 +163,11 @@ async function neonRpc(action, body, init) {
 async function worker(action, body, init) {
   if (!WORKER_URL) return jsonResponse({ ok: false, error: 'WORKER_NOT_CONFIGURED' }, 503)
   const token = bearer(init) || realtimeToken
-  const response = await originalFetch(WORKER_URL, {
+  return originalFetch(WORKER_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ action, id_token: token, ...body }),
   })
-  return response
 }
 
 async function compatibilityFetch(input, init = {}) {
@@ -199,10 +193,14 @@ async function compatibilityFetch(input, init = {}) {
       headers.delete('apikey')
       return originalFetch(target, { ...init, headers })
     }
-    const functionMatch = url.pathname.match(/^\/functions\/v1\/(?:web-api|api|issue-withdraw)\/([^/]+)$/)
+    const functionMatch = url.pathname.match(/^\/functions\/v1\/(web-api|api|issue-withdraw)\/([^/]+)$/)
     if (functionMatch) {
-      const action = decodeURIComponent(functionMatch[1])
+      const family = functionMatch[1]
+      let action = decodeURIComponent(functionMatch[2])
       const body = parseBody(init)
+      if (family === 'issue-withdraw') {
+        action = ({ board:'withdrawn-board', search:'picker-search-digits', my:'picker-my-issues', withdraw:'withdraw-shortage' })[action] || action
+      }
       if (['update-user', 'import-users', 'sync-google-sheet', 'staff-sync-now', 'upload-log', 'download-log', 'user-upsert', 'user-disable'].includes(action)) {
         return worker(action, body, init)
       }
@@ -248,7 +246,7 @@ class ChannelShim {
         if (!snapshot.exists()) return
         const event = snapshot.data() || {}
         this.handlers.forEach(({ filter, callback }) => {
-          if (!filter?.event || filter.event === event.event_type) callback({ payload: event.payload || event })
+          if (!filter?.event || filter.event === event.event_type) callback({ payload: event })
         })
       },
       () => statusCallback?.('CHANNEL_ERROR'),
