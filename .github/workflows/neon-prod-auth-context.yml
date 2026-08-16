@@ -1,0 +1,55 @@
+name: Neon production auth context diagnostic
+
+on:
+  push:
+    branches: [migration/neon-cutover]
+    paths: ['.github/workflows/neon-prod-auth-context.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      FIREBASE_PROJECT: bao-hang-1291
+      TEST_UID: 56b6ca48-8034-42a1-8b93-d494d8e40912
+      TEST_CODE: e2eprod0817
+      NEON_API: https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect sanitized JWT context inside Neon
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
+          test -n "${FIREBASE_SERVICE_ACCOUNT:-}"
+          api_key="$(jq -er '.client[0].api_key[0].current_key' app/google-services.json)"
+          email="${TEST_CODE}@bao-hang-1291.local"
+          password="$(openssl rand -base64 30 | tr -dc 'A-Za-z0-9' | head -c 28)Aa1"
+          echo "::add-mask::$password"
+          work="$RUNNER_TEMP/auth-context"; mkdir -p "$work"; chmod 700 "$work"
+          key_file="$work/key.pem"; jq -er '.private_key' <<<"$FIREBASE_SERVICE_ACCOUNT" > "$key_file"; chmod 600 "$key_file"
+          client_email="$(jq -er '.client_email' <<<"$FIREBASE_SERVICE_ACCOUNT")"
+          sa_project="$(jq -er '.project_id' <<<"$FIREBASE_SERVICE_ACCOUNT")"; test "$sa_project" = "$FIREBASE_PROJECT"
+          b64url(){ openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+          now="$(date +%s)"; exp="$((now+1800))"
+          h="$(printf '%s' '{"alg":"RS256","typ":"JWT"}'|b64url)"
+          p="$(jq -cn --arg iss "$client_email" --arg scope 'https://www.googleapis.com/auth/identitytoolkit' --arg aud 'https://oauth2.googleapis.com/token' --argjson iat "$now" --argjson exp "$exp" '{iss:$iss,scope:$scope,aud:$aud,iat:$iat,exp:$exp}'|b64url)"
+          u="$h.$p"; s="$(printf '%s' "$u"|openssl dgst -sha256 -sign "$key_file"|b64url)"
+          oauth="$(curl -fsS --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer' --data-urlencode "assertion=$u.$s" https://oauth2.googleapis.com/token)"
+          access="$(jq -er '.access_token'<<<"$oauth")"; echo "::add-mask::$access"
+          cleanup(){ curl -sS -X POST "https://identitytoolkit.googleapis.com/v1/projects/${FIREBASE_PROJECT}/accounts:batchDelete" -H "Authorization: Bearer $access" -H 'Content-Type: application/json' -d "$(jq -cn --arg uid "$TEST_UID" '{localIds:[$uid],force:true}')" >/dev/null 2>&1||true; rm -rf "$work"; }; trap cleanup EXIT
+          cleanup_user(){ curl -sS -X POST "https://identitytoolkit.googleapis.com/v1/projects/${FIREBASE_PROJECT}/accounts:batchDelete" -H "Authorization: Bearer $access" -H 'Content-Type: application/json' -d "$(jq -cn --arg uid "$TEST_UID" '{localIds:[$uid],force:true}')" >/dev/null||true; }
+          cleanup_user
+          curl -fsS -X POST "https://identitytoolkit.googleapis.com/v1/projects/${FIREBASE_PROJECT}/accounts?key=${api_key}" -H "Authorization: Bearer $access" -H 'Content-Type: application/json' -d "$(jq -cn --arg uid "$TEST_UID" --arg email "$email" --arg password "$password" '{localId:$uid,email:$email,password:$password,emailVerified:true}')" >/dev/null
+          claims='{"role":"authenticated","app_role":"PICKER","employee_code":"e2eprod0817"}'
+          curl -fsS -X POST "https://identitytoolkit.googleapis.com/v1/projects/${FIREBASE_PROJECT}/accounts:update?key=${api_key}" -H "Authorization: Bearer $access" -H 'Content-Type: application/json' -d "$(jq -cn --arg uid "$TEST_UID" --arg claims "$claims" '{localId:$uid,customAttributes:$claims,returnSecureToken:false}')" >/dev/null
+          login="$(curl -fsS -X POST "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${api_key}" -H 'Content-Type: application/json' -d "$(jq -cn --arg email "$email" --arg password "$password" '{email:$email,password:$password,returnSecureToken:true}')")"
+          token="$(jq -er '.idToken'<<<"$login")"; echo "::add-mask::$token"
+          code="$(curl -sS -o "$work/context.json" -w '%{http_code}' -X POST "$NEON_API/rpc/e2e_auth_context_20260817_rpc" -H "Authorization: Bearer $token" -H 'Content-Type: application/json' -d '{}')"
+          echo "HTTP=$code"
+          jq '{current_user,user_id,jwt_sub,jwt_role,jwt_aud,jwt_iss}' "$work/context.json"
+          test "$code" = 200
