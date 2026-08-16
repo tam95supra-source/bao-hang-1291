@@ -62,7 +62,7 @@ jobs:
           fi
           echo "WEB_BUDGET=PASS initial_js_gzip=$js_gzip"
       - name: Type-check Edge Functions
-        run: deno check supabase/functions/_shared/fcm.ts supabase/functions/api/index.ts supabase/functions/web-api/index.ts supabase/functions/admin-ops/index.ts supabase/functions/staff-watch/index.ts
+        run: deno check supabase/functions/_shared/fcm.ts supabase/functions/api/index.ts supabase/functions/web-api/index.ts supabase/functions/admin-ops/index.ts supabase/functions/staff-watch/index.ts supabase/functions/issue-withdraw/index.ts
       - name: Guard migrations and public source from secrets
         shell: bash
         run: |
