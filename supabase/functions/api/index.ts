@@ -37,6 +37,11 @@ function employeeEmail(code: string): string {
 function normalizeSearch(value: string): string {
   return value.normalize("NFD").replace(/\p{M}+/gu, "").toLowerCase().replace(/đ/g, "d").replace(/\s+/g, " ").trim();
 }
+function siteDayBounds(now = Date.now()) {
+  const localDate = new Date(now + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const startMs = new Date(`${localDate}T00:00:00+07:00`).getTime();
+  return { start: new Date(startMs).toISOString(), end: new Date(startMs + 24 * 60 * 60 * 1000).toISOString() };
+}
 function safeTestRole(raw: string | null): Role | null {
   const role = String(raw ?? "").trim().toUpperCase();
   return (["ADMIN_INVENT", "INVENT", "PICKER"] as string[]).includes(role) ? role as Role : null;
@@ -512,13 +517,33 @@ async function route(req: Request) {
     case "active-issues": requireRole(context, ["ADMIN", "ADMIN_INVENT", "INVENT"]); return { issues: await issueRows(undefined, ACTIVE_STATUSES) };
     case "issue-board": {
       requireRole(context, ["ADMIN", "ADMIN_INVENT", "INVENT"]);
-      const [open, claimed, recent] = await Promise.all([
-        issueRows(undefined, ["OPEN"], 250),
-        issueRows(undefined, ["CLAIMED", "SEARCHING", "REPLENISHING"], 250),
-        issueRows(undefined, ["AVAILABLE", "SKIP_ALLOWED"], 250),
+      const { start, end } = siteDayBounds();
+      let claimedCountQuery = admin.from("issues").select("id", { count: "exact", head: true }).in("status", ["CLAIMED", "SEARCHING", "REPLENISHING"]);
+      if (context.effectiveRole === "INVENT") claimedCountQuery = claimedCountQuery.eq("claimed_by", context.userId);
+      const [open, claimed, recentRefs, openCount, claimedCount, availableCount, skippedCount] = await Promise.all([
+        issueRows(undefined, ["OPEN"], 500),
+        issueRows(undefined, ["CLAIMED", "SEARCHING", "REPLENISHING"], 500),
+        admin.from("issues").select("id,status,resolved_at").in("status", ["AVAILABLE", "SKIP_ALLOWED"]).gte("resolved_at", start).lt("resolved_at", end).order("resolved_at", { ascending: false }).limit(1000),
+        admin.from("issues").select("id", { count: "exact", head: true }).eq("status", "OPEN"),
+        claimedCountQuery,
+        admin.from("issues").select("id", { count: "exact", head: true }).eq("status", "AVAILABLE").gte("resolved_at", start).lt("resolved_at", end),
+        admin.from("issues").select("id", { count: "exact", head: true }).eq("status", "SKIP_ALLOWED").gte("resolved_at", start).lt("resolved_at", end),
       ]);
+      for (const result of [recentRefs, openCount, claimedCount, availableCount, skippedCount]) if (result.error) throw result.error;
+      const recentIds = (recentRefs.data ?? []).map((row: any) => String(row.id));
+      const recentRows = recentIds.length ? await issueRows(recentIds, undefined, 1000) : [];
+      const byId = new Map(recentRows.map((row: any) => [String(row.id), row]));
+      const recent = recentIds.map((id: string) => byId.get(id)).filter(Boolean);
       const mine = context.effectiveRole === "INVENT" ? claimed.filter((issue: any) => issue.assigned_id === context.userId) : claimed;
-      return { open, claimed: mine, recent: recent.reverse(), skipped: recent.filter((i: any) => i.status === "SKIP_ALLOWED").reverse(), available: recent.filter((i: any) => i.status === "AVAILABLE").reverse() };
+      return {
+        open,
+        claimed: mine,
+        recent,
+        skipped: recent.filter((i: any) => i.status === "SKIP_ALLOWED"),
+        available: recent.filter((i: any) => i.status === "AVAILABLE"),
+        counts: { open: openCount.count ?? open.length, claimed: claimedCount.count ?? mine.length, available: availableCount.count ?? 0, skipped: skippedCount.count ?? 0 },
+        scope: { active: "CURRENT", resolved: "TODAY", day_start: start, day_end: end },
+      };
     }
     case "my-issues": {
       const { data, error } = await admin.from("issue_reports").select("issue_id").eq("reporter_id", context.userId).order("reported_at", { ascending: false }).limit(200);

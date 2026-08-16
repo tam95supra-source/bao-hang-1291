@@ -10,6 +10,7 @@ import vn.pickpack1291.baohang.data.AppConfig
 import vn.pickpack1291.baohang.data.AuthSession
 import vn.pickpack1291.baohang.data.ImportUserRow
 import vn.pickpack1291.baohang.data.IssueBoard
+import vn.pickpack1291.baohang.data.IssueStatus
 import vn.pickpack1291.baohang.data.OperationalConfig
 import vn.pickpack1291.baohang.data.PendingAlert
 import vn.pickpack1291.baohang.data.ReportResult
@@ -106,12 +107,22 @@ class ApiClient(
 
     suspend fun issueBoard(): IssueBoard {
         val response = invoke("issue-board", JSONObject())
-        val withdrawn = runCatching { invokeWithdraw("board", JSONObject()).optJSONArray("withdrawn").toStockIssues() }.getOrDefault(emptyList())
+        val withdrawalResponse = runCatching { invokeWithdraw("board", JSONObject()) }.getOrDefault(JSONObject())
+        val open = response.optJSONArray("open").toStockIssues()
+        val claimed = response.optJSONArray("claimed").toStockIssues()
+        val recent = response.optJSONArray("recent").toStockIssues()
+        val withdrawn = withdrawalResponse.optJSONArray("withdrawn").toStockIssues()
+        val counts = response.optJSONObject("counts") ?: JSONObject()
         return IssueBoard(
-            open = response.optJSONArray("open").toStockIssues(),
-            claimed = response.optJSONArray("claimed").toStockIssues(),
-            recent = response.optJSONArray("recent").toStockIssues(),
-            withdrawn = withdrawn
+            open = open,
+            claimed = claimed,
+            recent = recent,
+            withdrawn = withdrawn,
+            openCount = counts.optInt("open", open.size),
+            claimedCount = counts.optInt("claimed", claimed.size),
+            availableCount = counts.optInt("available", recent.count { it.status == IssueStatus.AVAILABLE }),
+            skippedCount = counts.optInt("skipped", recent.count { it.status == IssueStatus.SKIP_ALLOWED }),
+            withdrawnCount = withdrawalResponse.optInt("count", withdrawn.size)
         )
     }
 

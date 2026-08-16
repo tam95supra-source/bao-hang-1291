@@ -6,7 +6,9 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.text.Editable
+import android.text.InputFilter
 import android.text.InputType
 import android.text.TextWatcher
 import android.view.Gravity
@@ -277,7 +279,7 @@ class MainActivity : AppCompatActivity() {
         val tabButtons = mutableListOf<Button>()
         val tabBadges = mutableListOf<TextView>()
         fun updateTabs() {
-            val counts = board?.let { listOf(it.open.size, it.claimed.size, it.available.size, it.skipped.size, it.withdrawn.size) } ?: listOf(0, 0, 0, 0, 0)
+            val counts = board?.let { listOf(it.openCount, it.claimedCount, it.availableCount, it.skippedCount, it.withdrawnCount) } ?: listOf(0, 0, 0, 0, 0)
             tabButtons.forEachIndexed { index, tab ->
                 val active = index == selected
                 tab.setBackgroundResource(if (active) R.drawable.bg_button_primary else R.drawable.bg_button_secondary)
@@ -302,11 +304,11 @@ class MainActivity : AppCompatActivity() {
             if (list.isEmpty()) boardContainer.addView(infoBox("Không có SKU trong nhóm này."))
             list.forEach { issue -> boardContainer.addView(issueCard(issue, selected) { inventRefresh?.invoke() }) }
             status.text = when (selected) {
-                1 -> "${list.size} SKU đang xử lý${if (app.session.effectiveRole == UserRole.INVENT) " của tôi" else ""}"
-                2 -> "${list.size} SKU đã có hàng"
-                3 -> "${list.size} SKU đã được cho SKIP"
-                4 -> "${list.size} lượt Người lấy hàng đã thu hồi SKU"
-                else -> "${list.size} SKU đang chờ xử lý"
+                1 -> "${data.claimedCount} SKU đang xử lý${if (app.session.effectiveRole == UserRole.INVENT) " của tôi" else ""} • hiện tại"
+                2 -> "${data.availableCount} SKU đã có hàng hôm nay"
+                3 -> "${data.skippedCount} SKU đã được cho SKIP hôm nay"
+                4 -> "${data.withdrawnCount} lượt Người lấy hàng đã thu hồi SKU hôm nay"
+                else -> "${data.openCount} SKU đang chờ xử lý • hiện tại"
             }
             updateTabs()
         }
@@ -491,65 +493,92 @@ class MainActivity : AppCompatActivity() {
     private fun showPicker() {
         val content = page("Báo thiếu hàng", SCREEN_PICKER)
         content.addView(text("Nhập hoặc quét mã SKU", 14, true).apply { setPadding(0, 0, 0, dp(5)) })
-        val input = AutoCompleteTextView(this).apply {
+        val input = EditText(this).apply {
             hint = "Nhập ít nhất 3 số của SKU"
-            threshold = 3
             inputType = InputType.TYPE_CLASS_NUMBER
+            filters = arrayOf(InputFilter.LengthFilter(8))
             setSingleLine(true)
         }
-        val suggestionsAdapter = ArrayAdapter<SkuItem>(this, android.R.layout.simple_dropdown_item_1line, mutableListOf())
-        input.setAdapter(suggestionsAdapter)
+        val suggestionsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val selected = infoBox("Chưa chọn SKU")
         val reportButton = button("Báo thiếu", ButtonTone.DANGER) {}
         reportButton.isEnabled = false
         val recent = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         var chosen: SkuItem? = null
+        var internalTextChange = false
         content.addView(input)
+        content.addView(suggestionsBox)
         content.addView(selected)
         content.addView(reportButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)).apply { setMargins(0, dp(4), 0, dp(2)) })
         addDiagnosticsButton(content)
         content.addView(section("Báo gần đây"))
         content.addView(recent)
+
+        fun clearSelection() {
+            chosen = null
+            selected.text = "Chưa chọn SKU"
+            reportButton.isEnabled = false
+        }
         fun select(item: SkuItem) {
             chosen = item
             selected.text = "SKU ${item.sku}\n${item.productName}"
             reportButton.isEnabled = true
             searchJob?.cancel()
-            suggestionsAdapter.clear()
-            input.dismissDropDown()
-            input.setText("", false)
+            suggestionsBox.removeAllViews()
+            internalTextChange = true
+            input.setText(item.sku)
+            input.setSelection(item.sku.length)
+            internalTextChange = false
+        }
+        fun renderSuggestions(items: List<SkuItem>, requested: String) {
+            if (input.text.toString() != requested || !input.hasFocus()) return
+            suggestionsBox.removeAllViews()
+            if (items.isEmpty()) {
+                suggestionsBox.addView(text("Không có SKU chứa chuỗi $requested", 12, false).apply {
+                    setTextColor(getColor(R.color.text_secondary))
+                    setPadding(dp(4), dp(7), dp(4), dp(7))
+                })
+                return
+            }
+            items.take(12).forEach { item ->
+                suggestionsBox.addView(
+                    button("${item.sku}  •  ${item.productName}", ButtonTone.SECONDARY) { select(item) },
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        setMargins(0, dp(2), 0, dp(2))
+                    }
+                )
+            }
         }
         fun suggestions(query: String) {
             searchJob?.cancel()
             val requested = query.trim()
-            if (!requested.matches(Regex("\\d{3,}"))) { suggestionsAdapter.clear(); input.dismissDropDown(); return }
+            if (!requested.matches(Regex("\\d{3,8}"))) { suggestionsBox.removeAllViews(); return }
             searchJob = lifecycleScope.launch {
-                delay(180)
+                val localCount = withContext(Dispatchers.IO) { app.repository.skuCount() }
                 val local = withContext(Dispatchers.IO) { app.repository.searchSkuDigits(requested) }
-                val items = if (local.isNotEmpty()) local else runCatching { app.repository.searchSkuDigitsOnline(requested) }.getOrDefault(emptyList())
-                if (input.text.toString().trim() != requested || !input.hasFocus()) return@launch
-                suggestionsAdapter.clear()
-                suggestionsAdapter.addAll(items)
-                suggestionsAdapter.notifyDataSetChanged()
-                if (items.isNotEmpty()) input.showDropDown() else input.dismissDropDown()
+                val items = if (local.isNotEmpty() || localCount > 0) local
+                    else runCatching { app.repository.searchSkuDigitsOnline(requested) }.getOrDefault(emptyList())
+                renderSuggestions(items, requested)
             }
         }
         input.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(v: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(v: CharSequence?, start: Int, before: Int, count: Int) {
+                if (internalTextChange) return
                 val raw = v?.toString().orEmpty()
-                val digits = raw.filter(Char::isDigit)
+                val digits = raw.filter(Char::isDigit).take(8)
                 if (raw != digits) {
-                    input.setText(digits, false)
+                    internalTextChange = true
+                    input.setText(digits)
                     input.setSelection(digits.length)
-                    return
+                    internalTextChange = false
                 }
+                clearSelection()
                 searchJob?.cancel()
-                if (digits.length < 3) { suggestionsAdapter.clear(); input.dismissDropDown() } else suggestions(digits)
+                if (digits.length < 3) suggestionsBox.removeAllViews() else suggestions(digits)
             }
             override fun afterTextChanged(v: Editable?) = Unit
         })
-        input.setOnItemClickListener { parent, _, position, _ -> (parent.getItemAtPosition(position) as? SkuItem)?.let(::select) }
         reportButton.setOnClickListener {
             val item = chosen ?: return@setOnClickListener
             lifecycleScope.launch {
@@ -557,8 +586,11 @@ class MainActivity : AppCompatActivity() {
                 runCatching { app.repository.reportShortage(item.sku) }
                     .onSuccess {
                         toast("Đã ghi nhận báo thiếu SKU ${item.sku}")
-                        chosen = null
-                        selected.text = "Chưa chọn SKU"
+                        clearSelection()
+                        internalTextChange = true
+                        input.setText("")
+                        internalTextChange = false
+                        suggestionsBox.removeAllViews()
                         loadMyIssues(recent)
                         input.requestFocus()
                     }
@@ -587,8 +619,20 @@ class MainActivity : AppCompatActivity() {
                         row.addView(text(issue.productName, 13, false).apply { setPadding(0, dp(2), 0, dp(2)) })
                         val time = if (issue.status == IssueStatus.WITHDRAWN && issue.withdrawnAt.isNotBlank()) "Thu hồi lúc ${shortTime(issue.withdrawnAt)}" else "Báo lúc ${shortTime(issue.reportedAt)}"
                         row.addView(text(time, 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
-                        if (issue.canWithdraw) {
-                            row.addView(button("Thu hồi báo thiếu", ButtonTone.DANGER) { confirmWithdrawIssue(issue, target) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { setMargins(0, dp(6), 0, 0) })
+                        val remainingMs = issue.withdrawRemainingMs.coerceIn(0L, 30_000L)
+                        if (issue.canWithdraw && remainingMs > 0L) {
+                            val expiresAtElapsed = SystemClock.elapsedRealtime() + remainingMs
+                            lateinit var withdrawButton: Button
+                            withdrawButton = button("Thu hồi báo thiếu", ButtonTone.DANGER) {
+                                if (SystemClock.elapsedRealtime() >= expiresAtElapsed) {
+                                    withdrawButton.visibility = View.GONE
+                                    toast("Đã quá 30 giây nên không thể thu hồi SKU ${issue.sku}")
+                                } else confirmWithdrawIssue(issue, target, expiresAtElapsed, withdrawButton)
+                            }
+                            withdrawButton.postDelayed({
+                                if (SystemClock.elapsedRealtime() >= expiresAtElapsed) withdrawButton.visibility = View.GONE
+                            }, remainingMs + 25L)
+                            row.addView(withdrawButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { setMargins(0, dp(6), 0, 0) })
                         }
                         target.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(4), 0, dp(4)) })
                     }
@@ -596,16 +640,27 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun confirmWithdrawIssue(issue: StockIssue, target: LinearLayout) {
+    private fun confirmWithdrawIssue(issue: StockIssue, target: LinearLayout, expiresAtElapsed: Long, withdrawButton: Button) {
+        if (SystemClock.elapsedRealtime() >= expiresAtElapsed) {
+            withdrawButton.visibility = View.GONE
+            toast("Đã quá 30 giây nên không thể thu hồi SKU ${issue.sku}")
+            return
+        }
         AlertDialog.Builder(this)
             .setTitle("Thu hồi báo thiếu?")
             .setMessage("Thu hồi báo thiếu SKU ${issue.sku}? Thao tác chỉ hợp lệ trong 30 giây kể từ lúc báo.")
             .setNegativeButton("Không", null)
             .setPositiveButton("Có") { _, _ ->
+                if (SystemClock.elapsedRealtime() >= expiresAtElapsed) {
+                    withdrawButton.visibility = View.GONE
+                    toast("Đã quá 30 giây nên không thể thu hồi SKU ${issue.sku}")
+                    return@setPositiveButton
+                }
                 lifecycleScope.launch {
+                    withdrawButton.isEnabled = false
                     runCatching { app.repository.withdrawShortage(issue.id) }
                         .onSuccess { toast("Đã thu hồi SKU ${issue.sku}"); loadMyIssues(target) }
-                        .onFailure { toast(it.message ?: "Không thể thu hồi SKU") }
+                        .onFailure { toast(it.message ?: "Không thể thu hồi SKU"); loadMyIssues(target) }
                 }
             }.show()
     }
