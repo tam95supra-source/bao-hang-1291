@@ -42,6 +42,15 @@ jobs:
           set -euo pipefail
           sed -i 's/re.subn(pattern, repl, text, count=1, flags=re.S)/re.subn(pattern, lambda _: repl, text, count=1, flags=re.S)/' ops/tmp_picker_patch.py
           python3 ops/tmp_picker_patch.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('app/src/main/java/vn/pickpack1291/baohang/data/AppDatabase.kt')
+          s=p.read_text()
+          old='if (!digits.matches(Regex("\\d{3,}"))) return emptyList()'
+          new='if (digits.length < 3 || !digits.all(Char::isDigit)) return emptyList()'
+          if s.count(old) != 1: raise SystemExit(f'digit guard repair expected 1 match, got {s.count(old)}')
+          p.write_text(s.replace(old,new,1))
+          PY
       - name: Validate expected product shape
         shell: bash
         run: |
