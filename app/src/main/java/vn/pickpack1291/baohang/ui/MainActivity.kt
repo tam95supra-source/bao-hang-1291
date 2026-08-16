@@ -50,9 +50,6 @@ import vn.pickpack1291.baohang.data.UserRole
 import vn.pickpack1291.baohang.importer.XlsxImporter
 import vn.pickpack1291.baohang.realtime.RealtimeClient
 import vn.pickpack1291.baohang.update.AppUpdater
-import java.net.HttpURLConnection
-import java.net.URI
-import java.nio.charset.StandardCharsets
 
 class MainActivity : AppCompatActivity() {
     private val app by lazy { application as BaoHangApplication }
@@ -457,30 +454,8 @@ class MainActivity : AppCompatActivity() {
             }.show()
     }
 
-    private suspend fun restoreSkippedIssue(issueId: String): StockIssue = withContext(Dispatchers.IO) {
-        app.api.refreshSessionIfNeeded()
-        val baseUrl = BuildConfig.SUPABASE_URL.trimEnd('/')
-        val connection = URI("$baseUrl/functions/v1/admin-ops/restore-skipped").toURL().openConnection() as HttpURLConnection
-        try {
-            connection.requestMethod = "POST"
-            connection.connectTimeout = 15_000
-            connection.readTimeout = 30_000
-            connection.doOutput = true
-            connection.setRequestProperty("Accept", "application/json")
-            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            connection.setRequestProperty("apikey", BuildConfig.SUPABASE_ANON_KEY)
-            connection.setRequestProperty("Authorization", "Bearer ${app.session.accessToken}")
-            app.session.adminTestRole?.let { connection.setRequestProperty("x-admin-test-role", it.wire) }
-            val payload = JSONObject().put("issue_id", issueId).put("reason", "Đã tìm thấy hàng sau khi cho phép bỏ qua")
-            connection.outputStream.use { it.write(payload.toString().toByteArray(StandardCharsets.UTF_8)) }
-            val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val raw = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
-            val json = runCatching { JSONObject(raw) }.getOrElse { JSONObject().put("error", raw) }
-            if (code !in 200..299) throw IllegalStateException(json.optString("error", "Lỗi máy chủ $code"))
-            StockIssue.fromJson(json.getJSONObject("issue"))
-        } finally { connection.disconnect() }
-    }
+    private suspend fun restoreSkippedIssue(issueId: String): StockIssue =
+        app.api.restoreSkippedIssue(issueId)
 
     private fun reassignIssue(issue: StockIssue, refresh: () -> Unit) {
         lifecycleScope.launch {

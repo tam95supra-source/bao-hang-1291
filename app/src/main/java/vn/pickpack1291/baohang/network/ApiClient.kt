@@ -180,6 +180,19 @@ class ApiClient(
         return issue
     }
 
+    suspend fun restoreSkippedIssue(issueId: String): StockIssue {
+        val issue = StockIssue.fromJson(
+            invoke(
+                "restore-skipped",
+                JSONObject()
+                    .put("issue_id", issueId)
+                    .put("reason", "Đã tìm thấy hàng sau khi cho phép bỏ qua")
+            ).getJSONObject("issue")
+        )
+        kickWorkerBestEffort("restore_skipped")
+        return issue
+    }
+
     suspend fun pendingAlerts(): List<PendingAlert> {
         val array = invoke("pending-alerts", JSONObject()).optJSONArray("events") ?: JSONArray()
         return buildList { for (i in 0 until array.length()) add(PendingAlert.fromJson(array.getJSONObject(i))) }
@@ -332,6 +345,9 @@ class ApiClient(
                 .put("p_issue_id", payload.getString("issue_id"))
                 .put("p_action", payload.getString("action"))
                 .put("p_client_request_id", payload.optString("client_request_id", UUID.randomUUID().toString()))
+            "restore-skipped" -> "api_restore_skipped_issue_rpc" to base()
+                .put("p_issue_id", payload.getString("issue_id"))
+                .put("p_reason", payload.optString("reason"))
             "withdraw-shortage" -> "api_withdraw_shortage_rpc" to base().put("p_issue_id", payload.getString("issue_id"))
             "pending-alerts" -> "api_pending_alerts_rpc" to base()
             "mark-alert-received" -> "api_mark_alert_received_rpc" to base().put("p_event_id", payload.getString("event_id"))
