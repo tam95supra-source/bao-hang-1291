@@ -26,8 +26,12 @@ jobs:
           test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
           test "$GITHUB_REF" = 'refs/heads/migration/neon-cutover'
           ! grep -RInE 'ttwftrooaizxmjovkbaz|pick-pack-1291-primary|19a7c8e9-9fc0-4b04-a545-bcbe84b1bcb1' app/src web-admin/src google-apps-script app/build.gradle.kts web-admin/package.json
-      - name: Apply idempotent runtime patch
-        run: python scripts/patch_neon_runtime.py
+      - name: Apply idempotent runtime patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/patch_neon_runtime.py
+          python scripts/patch_neon_web_log.py
       - name: Validate patched sources
         shell: bash
         run: |
@@ -43,7 +47,7 @@ jobs:
           set -euo pipefail
           git config user.name 'bao-hang-1291-bot'
           git config user.email 'actions@users.noreply.github.com'
-          git add web-admin/src/supabase-shim.js google-apps-script/DEPLOY_NEON.gs
+          git add web-admin/src/supabase-shim.js web-admin/src/main.js google-apps-script/DEPLOY_NEON.gs
           git diff --cached --quiet && { echo 'No patch required'; exit 0; }
-          git commit -m 'fix(migration): use Firestore FCM realtime worker'
+          git commit -m 'fix(migration): complete Neon web worker runtime'
           git push origin HEAD:migration/neon-cutover
