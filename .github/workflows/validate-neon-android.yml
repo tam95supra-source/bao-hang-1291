@@ -40,3 +40,5 @@ jobs:
           fi
       - name: Unit tests and debug compile
         run: gradle --no-daemon testDebugUnitTest assembleDebug
+
+# full validation rerun after Neon restore compile PASS
