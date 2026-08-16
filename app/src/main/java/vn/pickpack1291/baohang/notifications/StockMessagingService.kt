@@ -10,7 +10,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import vn.pickpack1291.baohang.BaoHangApplication
 import vn.pickpack1291.baohang.data.IssueStatus
-import vn.pickpack1291.baohang.data.UserRole
+import vn.pickpack1291.baohang.realtime.RealtimeSignalBus
 
 class StockMessagingService : FirebaseMessagingService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -26,6 +26,21 @@ class StockMessagingService : FirebaseMessagingService() {
         super.onMessageReceived(message)
         val app = application as BaoHangApplication
         val data = message.data
+
+        if (data["event_type"] == "REALTIME_DELTA") {
+            val topic = data["topic"].orEmpty()
+            val published = RealtimeSignalBus.publish(topic)
+            app.diagnostics.info(
+                "fcm_realtime_delta",
+                mapOf(
+                    "topic" to topic,
+                    "event_id" to data["realtime_event_id"].orEmpty(),
+                    "published_to_foreground" to published
+                )
+            )
+            return
+        }
+
         val eventId = data["event_id"].orEmpty().ifBlank { message.messageId.orEmpty() }
         val issueId = data["issue_id"].orEmpty()
         val incomingVersion = data["issue_version"]?.toLongOrNull() ?: 1L
