@@ -51,6 +51,15 @@ jobs:
           if s.count(old) != 1: raise SystemExit(f'digit guard repair expected 1 match, got {s.count(old)}')
           p.write_text(s.replace(old,new,1))
           PY
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('supabase/functions/issue-withdraw/index.ts')
+          s=p.read_text()
+          old='const base=baseIssue(raw);delete base.report_count;issues.push({...base,status:withdrawn?"WITHDRAWN":raw.status,reported_at:source.reported_at,withdrawn_at:withdrawn?g.latest.withdrawn_at:null,withdraw_allowed_until:deadline,can_withdraw:Boolean(g.active)&&now<=new Date(deadline).getTime()});'
+          new='const base=baseIssue(raw);issues.push({id:base.id,sku:base.sku,product_name:base.product_name,status:withdrawn?"WITHDRAWN":raw.status,reported_at:source.reported_at,updated_at:base.updated_at,issue_version:base.issue_version,assigned_id:base.assigned_id,withdrawn_at:withdrawn?g.latest.withdrawn_at:null,withdraw_allowed_until:deadline,can_withdraw:Boolean(g.active)&&now<=new Date(deadline).getTime()});'
+          if s.count(old) != 1: raise SystemExit(f'picker response repair expected 1 match, got {s.count(old)}')
+          p.write_text(s.replace(old,new,1))
+          PY
       - name: Validate expected product shape
         shell: bash
         run: |
