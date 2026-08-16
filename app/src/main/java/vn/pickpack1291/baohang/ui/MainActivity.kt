@@ -121,6 +121,7 @@ class MainActivity : AppCompatActivity() {
         ViewCompat.requestApplyInsets(rootMain)
         container = findViewById(R.id.contentContainer)
         findViewById<TextView>(R.id.btnBack).setOnClickListener { navigateBack() }
+        findViewById<TextView>(R.id.btnLog).setOnClickListener { showDiagnosticsDialog() }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() { if (isRoleRoot()) finish() else renderForRole() }
         })
@@ -179,7 +180,7 @@ class MainActivity : AppCompatActivity() {
         val profile = app.session.profile ?: return
         val effective = app.session.effectiveRole
         val mode = if (profile.role == UserRole.ADMIN && effective != UserRole.ADMIN) " • KIỂM THỬ ${effective.label}" else ""
-        findViewById<TextView>(R.id.tvHeaderUser).text = "${profile.employeeCode} • ${profile.fullName} • ${effective.label}$mode"
+        findViewById<TextView>(R.id.tvHeaderUser).text = "${profile.fullName} • ${effective.label}$mode"
         app.diagnostics.info("ui_role_render", mapOf("actual_role" to profile.role.wire, "effective_role" to effective.wire))
         when (effective) {
             UserRole.ADMIN -> showAdmin()
@@ -202,7 +203,7 @@ class MainActivity : AppCompatActivity() {
         }
         scroll.addView(content, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         container.addView(scroll, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-        content.addView(text(title, 23, true).apply { setPadding(0, 0, 0, dp(10)) })
+        if (title.isNotBlank()) content.addView(text(title, 23, true).apply { setPadding(0, 0, 0, dp(10)) })
         if (app.session.profile?.role == UserRole.ADMIN && app.session.adminTestRole != null) {
             content.addView(infoBox("Đang kiểm thử với quyền ${app.session.effectiveRole.label}. Mọi quyền API được giới hạn tương ứng."))
             content.addView(button("Thoát chế độ kiểm thử", ButtonTone.SECONDARY) {
@@ -213,6 +214,28 @@ class MainActivity : AppCompatActivity() {
         return content
     }
 
+    private fun fixedPage(screen: String, title: String = ""): LinearLayout {
+        currentScreen = screen
+        if (screen != SCREEN_INVENT) inventRefresh = null
+        if (screen != SCREEN_PICKER) pickerRefresh = null
+        container.removeAllViews()
+        updateBackButton()
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+        }
+        container.addView(root, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        if (title.isNotBlank()) root.addView(text(title, 21, true).apply { setPadding(0, 0, 0, dp(6)) })
+        if (app.session.profile?.role == UserRole.ADMIN && app.session.adminTestRole != null) {
+            root.addView(infoBox("Đang kiểm thử với quyền ${app.session.effectiveRole.label}. Mọi quyền API được giới hạn tương ứng."))
+            root.addView(button("Thoát chế độ kiểm thử", ButtonTone.SECONDARY) {
+                app.repository.setAdminTestRole(null)
+                renderForRole()
+            })
+        }
+        return root
+    }
+
     private fun addMaintenanceActions(content: LinearLayout) {
         content.addView(section("Hỗ trợ hệ thống"))
         if (BuildConfig.UPDATE_MANIFEST_URL.isNotBlank()) {
@@ -220,7 +243,6 @@ class MainActivity : AppCompatActivity() {
                 AppUpdater(this, app.diagnostics).check(showUpToDate = true)
             })
         }
-        addDiagnosticsButton(content)
     }
 
     private fun showAdmin() {
@@ -265,21 +287,30 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showInventBoard() {
-        val content = page("Xử lý báo hàng", SCREEN_INVENT)
-        val status = text("Đang tải dữ liệu…", 13, false).apply { setTextColor(getColor(R.color.text_secondary)) }
+        val isInvent = app.session.effectiveRole == UserRole.INVENT
+        val root = fixedPage(SCREEN_INVENT, if (isInvent) "" else "Xử lý báo hàng")
+        val listScroll = ScrollView(this).apply { isFillViewport = true }
+        val boardContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.BOTTOM
+        }
+        listScroll.addView(boardContainer, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(listScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        root.addView(text("Lịch sử chỉ lưu trữ trong ngày, cần nhiều hơn vui lòng liên hệ admin", 11, false).apply {
+            setTextColor(getColor(R.color.text_secondary))
+            setPadding(dp(2), dp(6), dp(2), dp(4))
+        })
         val tabs = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val boardContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        content.addView(status)
-        content.addView(tabs)
-        addDiagnosticsButton(content)
-        content.addView(boardContainer)
+        root.addView(tabs)
 
         var board: IssueBoard? = null
-        var selected = inventSelectedTab.coerceIn(0, 4)
+        var selected = inventSelectedTab.coerceIn(0, 3)
         val tabButtons = mutableListOf<Button>()
         val tabBadges = mutableListOf<TextView>()
+
         fun updateTabs() {
-            val counts = board?.let { listOf(it.openCount, it.claimedCount, it.availableCount, it.skippedCount, it.withdrawnCount) } ?: listOf(0, 0, 0, 0, 0)
+            val counts = board?.let { listOf(it.claimedCount, it.availableCount, it.skippedCount, it.withdrawnCount) } ?: listOf(0, 0, 0, 0)
             tabButtons.forEachIndexed { index, tab ->
                 val active = index == selected
                 tab.setBackgroundResource(if (active) R.drawable.bg_button_primary else R.drawable.bg_button_secondary)
@@ -291,28 +322,30 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+
         fun draw() {
             val data = board ?: return
-            val list = when (selected) {
-                1 -> data.claimed
-                2 -> data.available
-                3 -> data.skipped
-                4 -> data.withdrawn
-                else -> data.open
+            val raw = when (selected) {
+                1 -> data.available
+                2 -> data.skipped
+                3 -> data.withdrawn
+                else -> data.claimed
+            }
+            val ordered = raw.sortedByDescending { issue ->
+                when (selected) {
+                    3 -> issue.withdrawnAt.ifBlank { issue.updatedAt }
+                    1, 2 -> issue.updatedAt
+                    else -> issue.reportedAt
+                }
             }
             boardContainer.removeAllViews()
-            if (list.isEmpty()) boardContainer.addView(infoBox("Không có SKU trong nhóm này."))
-            list.forEach { issue -> boardContainer.addView(issueCard(issue, selected) { inventRefresh?.invoke() }) }
-            status.text = when (selected) {
-                1 -> "${data.claimedCount} SKU đang xử lý${if (app.session.effectiveRole == UserRole.INVENT) " của tôi" else ""} • hiện tại"
-                2 -> "${data.availableCount} SKU đã có hàng hôm nay"
-                3 -> "${data.skippedCount} SKU đã được cho SKIP hôm nay"
-                4 -> "${data.withdrawnCount} lượt Người lấy hàng đã thu hồi SKU hôm nay"
-                else -> "${data.openCount} SKU đang chờ xử lý • hiện tại"
-            }
+            if (ordered.isEmpty()) boardContainer.addView(infoBox("Không có SKU trong nhóm này."))
+            ordered.forEach { issue -> boardContainer.addView(issueCard(issue, selected) { inventRefresh?.invoke() }) }
             updateTabs()
+            listScroll.post { listScroll.fullScroll(View.FOCUS_DOWN) }
         }
-        val labels = listOf("Chờ xử lý", "Đang xử lý", "Đã có hàng", "Đã bỏ qua", "Người lấy hàng thu hồi SKU")
+
+        val labels = listOf("Đang xử lý", "Đã có hàng", "Đã bỏ qua", "Picker thu hồi SKU")
         labels.chunked(2).forEachIndexed { rowIndex, rowLabels ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
             rowLabels.forEachIndexed { columnIndex, label ->
@@ -342,19 +375,16 @@ class MainActivity : AppCompatActivity() {
             }
             tabs.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
-        tabs.setPadding(0, dp(3), 0, dp(7))
+        tabs.setPadding(0, dp(2), 0, 0)
         updateTabs()
-        inventRefresh = { loadInventBoard(status) { board = it; draw() } }
-        inventRefresh?.invoke()
-    }
-
-    private fun loadInventBoard(status: TextView, onLoaded: (IssueBoard) -> Unit) {
-        status.text = "Đang tải dữ liệu…"
-        lifecycleScope.launch {
-            runCatching { app.repository.loadIssueBoard() }
-                .onSuccess(onLoaded)
-                .onFailure { status.text = "Không tải được dữ liệu: ${it.message}"; app.diagnostics.error("issue_board_load_failed", it) }
+        inventRefresh = {
+            lifecycleScope.launch {
+                runCatching { app.repository.loadIssueBoard() }
+                    .onSuccess { board = it; draw() }
+                    .onFailure { toast("Không tải được dữ liệu: ${it.message}"); app.diagnostics.error("issue_board_load_failed", it) }
+            }
         }
+        inventRefresh?.invoke()
     }
 
     private fun issueCard(issue: StockIssue, bucket: Int, refresh: () -> Unit): View {
@@ -364,38 +394,27 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(13), dp(11), dp(13), dp(11))
             setBackgroundResource(R.drawable.bg_card)
         }
-        card.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(5), 0, dp(5)) }
+        card.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(4), 0, dp(4)) }
         val recurrent = if (issue.recurrence30m) " • BÁO LẠI TRONG 30 PHÚT" else ""
         card.addView(text("SKU ${issue.sku}", 18, true))
-        card.addView(text(issue.productName, 14, false).apply { setPadding(0, dp(2), 0, dp(4)) })
-        val issueSummary = if (bucket == 4) "${issue.status.label} • v${issue.issueVersion}" else "${issue.status.label} • ${issue.reportCount} lượt • v${issue.issueVersion}$recurrent"
-        card.addView(text(issueSummary, 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
-        if (bucket == 4) {
-            card.addView(text("Người lấy hàng: ${issue.latestReporterName.ifBlank { "—" }} • Thu hồi lúc ${shortTime(issue.withdrawnAt)}", 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
+        card.addView(text(issue.productName, 14, true).apply { setPadding(0, dp(2), 0, dp(4)) })
+        val summary = if (bucket == 3) "${issue.status.label} • v${issue.issueVersion}" else "${issue.status.label} • ${issue.reportCount} lượt • v${issue.issueVersion}$recurrent"
+        card.addView(text(summary, 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
+        if (bucket == 3) {
+            card.addView(text("Picker: ${issue.latestReporterName.ifBlank { "—" }} • Thu hồi lúc ${shortTime(issue.withdrawnAt)}", 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
             card.addView(text(if (issue.latestMessage.isNotBlank()) issue.latestMessage else "Đã ghi nhận thu hồi báo thiếu.", 12, false).apply { setPadding(0, dp(4), 0, 0) })
+        } else if (bucket in 1..2) {
+            val actor = issue.handledByName.ifBlank { issue.assignedName }
+            card.addView(text("Thao tác: ${actor.ifBlank { "—" }} • ${shortTime(issue.updatedAt)}", 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
+        } else {
+            card.addView(text("Báo lúc ${shortTime(issue.reportedAt)}", 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
         }
-        card.addView(text("Báo lúc ${shortTime(issue.reportedAt)}${if (issue.assignedName.isNotBlank()) " • Xử lý: ${issue.assignedName}" else ""}", 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
         if (bucket == 0) {
-            card.addView(button("Nhận xử lý", ButtonTone.PRIMARY) {
-                lifecycleScope.launch {
-                    runCatching { app.repository.claimIssue(issue.id) }
-                        .onSuccess { toast("Đã nhận xử lý SKU ${issue.sku}"); refresh() }
-                        .onFailure { toast(it.message ?: "Không nhận được SKU") }
-                }
-            })
-            if (elevated) {
-                val direct = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-                direct.addView(button("Có hàng", ButtonTone.SUCCESS) { confirmIssueUpdate(issue, "AVAILABLE", refresh) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(0, dp(5), dp(2), 0) })
-                direct.addView(button("Cho SKIP", ButtonTone.DANGER) { confirmIssueUpdate(issue, "NOT_FOUND", refresh) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(dp(2), dp(5), 0, 0) })
-                card.addView(direct)
-            }
-        } else if (bucket == 1) {
             val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             actions.addView(button("Có hàng", ButtonTone.SUCCESS) { confirmIssueUpdate(issue, "AVAILABLE", refresh) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(0, dp(5), dp(2), 0) })
             actions.addView(button("Cho SKIP", ButtonTone.DANGER) { confirmIssueUpdate(issue, "NOT_FOUND", refresh) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(dp(2), dp(5), 0, 0) })
             card.addView(actions)
-            if (elevated) card.addView(button("Điều phối lại") { reassignIssue(issue, refresh) })
-        } else if (bucket == 3) {
+        } else if (bucket == 2) {
             val canRestore = elevated || (app.session.effectiveRole == UserRole.INVENT && issue.assignedId == app.session.profile?.id)
             if (canRestore) card.addView(button("Báo lại đã có hàng", ButtonTone.SUCCESS) { confirmRestoreSkipped(issue, refresh) })
         }
@@ -491,28 +510,34 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showPicker() {
-        val content = page("Báo thiếu hàng", SCREEN_PICKER)
-        content.addView(text("Nhập hoặc quét mã SKU", 14, true).apply { setPadding(0, 0, 0, dp(5)) })
+        val root = fixedPage(SCREEN_PICKER, "Báo thiếu hàng")
+        root.addView(text("Báo gần đây", 14, true).apply { setPadding(0, 0, 0, dp(4)) })
+        val historyScroll = ScrollView(this).apply { isFillViewport = true }
+        val recent = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.BOTTOM
+        }
+        historyScroll.addView(recent, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(historyScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        val suggestionsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val selected = infoBox("Chưa chọn SKU")
         val input = EditText(this).apply {
             hint = "Nhập ít nhất 3 số của SKU"
             inputType = InputType.TYPE_CLASS_NUMBER
             filters = arrayOf(InputFilter.LengthFilter(8))
             setSingleLine(true)
         }
-        val suggestionsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val selected = infoBox("Chưa chọn SKU")
         val reportButton = button("Báo thiếu", ButtonTone.DANGER) {}
         reportButton.isEnabled = false
-        val recent = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         var chosen: SkuItem? = null
         var internalTextChange = false
-        content.addView(input)
-        content.addView(suggestionsBox)
-        content.addView(selected)
-        content.addView(reportButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)).apply { setMargins(0, dp(4), 0, dp(2)) })
-        addDiagnosticsButton(content)
-        content.addView(section("Báo gần đây"))
-        content.addView(recent)
+
+        root.addView(suggestionsBox)
+        root.addView(selected)
+        root.addView(text("Nhập hoặc quét mã SKU", 12, true).apply { setPadding(dp(2), dp(3), 0, dp(2)) })
+        root.addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)))
+        root.addView(reportButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply { setMargins(0, dp(3), 0, 0) })
 
         fun clearSelection() {
             chosen = null
@@ -536,17 +561,20 @@ class MainActivity : AppCompatActivity() {
             if (items.isEmpty()) {
                 suggestionsBox.addView(text("Không có SKU chứa chuỗi $requested", 12, false).apply {
                     setTextColor(getColor(R.color.text_secondary))
-                    setPadding(dp(4), dp(7), dp(4), dp(7))
+                    setPadding(dp(4), dp(6), dp(4), dp(6))
+                    gravity = Gravity.START
+                    textAlignment = View.TEXT_ALIGNMENT_VIEW_START
                 })
                 return
             }
-            items.take(12).forEach { item ->
-                suggestionsBox.addView(
-                    button("${item.sku}  •  ${item.productName}", ButtonTone.SECONDARY) { select(item) },
-                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                        setMargins(0, dp(2), 0, dp(2))
-                    }
-                )
+            items.take(7).forEach { item ->
+                val suggestion = button("${item.sku}  •  ${item.productName}", ButtonTone.SECONDARY) { select(item) }.apply {
+                    gravity = Gravity.START or Gravity.CENTER_VERTICAL
+                    textAlignment = View.TEXT_ALIGNMENT_VIEW_START
+                }
+                suggestionsBox.addView(suggestion, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    setMargins(0, dp(1), 0, dp(1))
+                })
             }
         }
         fun suggestions(query: String) {
@@ -608,15 +636,19 @@ class MainActivity : AppCompatActivity() {
             runCatching { app.repository.loadMyIssues() }
                 .onSuccess { issues ->
                     target.removeAllViews()
+                    target.gravity = Gravity.BOTTOM
                     if (issues.isEmpty()) target.addView(infoBox("Chưa có báo thiếu."))
-                    issues.take(50).forEach { issue ->
+                    val ordered = issues.sortedByDescending { issue ->
+                        if (issue.status == IssueStatus.WITHDRAWN) issue.withdrawnAt.ifBlank { issue.reportedAt } else issue.reportedAt
+                    }
+                    ordered.take(50).forEach { issue ->
                         val row = LinearLayout(this@MainActivity).apply {
                             orientation = LinearLayout.VERTICAL
                             setPadding(dp(12), dp(10), dp(12), dp(10))
                             setBackgroundResource(R.drawable.bg_card)
                         }
                         row.addView(text("${issue.status.label} • SKU ${issue.sku}", 16, true))
-                        row.addView(text(issue.productName, 13, false).apply { setPadding(0, dp(2), 0, dp(2)) })
+                        row.addView(text(issue.productName, 13, true).apply { setPadding(0, dp(2), 0, dp(2)) })
                         val time = if (issue.status == IssueStatus.WITHDRAWN && issue.withdrawnAt.isNotBlank()) "Thu hồi lúc ${shortTime(issue.withdrawnAt)}" else "Báo lúc ${shortTime(issue.reportedAt)}"
                         row.addView(text(time, 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
                         val remainingMs = issue.withdrawRemainingMs.coerceIn(0L, 30_000L)
@@ -634,8 +666,9 @@ class MainActivity : AppCompatActivity() {
                             }, remainingMs + 25L)
                             row.addView(withdrawButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { setMargins(0, dp(6), 0, 0) })
                         }
-                        target.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(4), 0, dp(4)) })
+                        target.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(3), 0, dp(3)) })
                     }
+                    (target.parent as? ScrollView)?.post { (target.parent as? ScrollView)?.fullScroll(View.FOCUS_DOWN) }
                 }.onFailure { target.removeAllViews(); target.addView(infoBox("Không tải được lịch sử: ${it.message}")) }
         }
     }
@@ -888,20 +921,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun addDiagnosticsButton(content: LinearLayout) {
-        content.addView(button("Gửi nhật ký chẩn đoán", ButtonTone.SECONDARY) {
-            AlertDialog.Builder(this)
-                .setTitle("Gửi nhật ký chẩn đoán?")
-                .setMessage("Gửi dữ liệu chẩn đoán của ứng dụng để kiểm tra lỗi?")
-                .setNegativeButton("Không", null)
-                .setPositiveButton("Có") { _, _ ->
-                    lifecycleScope.launch {
-                        runCatching { app.repository.sendDiagnosticLog() }
-                            .onSuccess { toast(if (it.optBoolean("uploaded")) "Đã gửi dữ liệu chẩn đoán" else it.optString("message", "Chưa có dữ liệu chẩn đoán")) }
-                            .onFailure { toast(it.message ?: "Không gửi được dữ liệu chẩn đoán") }
-                    }
-                }.show()
-        })
+    private fun showDiagnosticsDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("Gửi log?")
+            .setMessage("Gửi dữ liệu chẩn đoán của ứng dụng để kiểm tra lỗi?")
+            .setNegativeButton("Không", null)
+            .setPositiveButton("Có") { _, _ ->
+                lifecycleScope.launch {
+                    runCatching { app.repository.sendDiagnosticLog() }
+                        .onSuccess { toast(if (it.optBoolean("uploaded")) "Đã gửi log" else it.optString("message", "Chưa có dữ liệu chẩn đoán")) }
+                        .onFailure { toast(it.message ?: "Không gửi được log") }
+                }
+            }.show()
     }
 
     private fun importSkuFile(uri: Uri) {

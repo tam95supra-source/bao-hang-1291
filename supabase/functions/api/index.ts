@@ -177,17 +177,30 @@ async function issueRows(ids?: string[], statuses?: string[], limit = 250) {
   }
   const issueIds = rows.map((row) => row.id);
   const latestReporter = new Map<string, string>();
+  const handledBy = new Map<string, string>();
   if (issueIds.length) {
     const { data: reports } = await admin.from("issue_reports").select("issue_id,reporter_id,reported_at")
       .in("issue_id", issueIds).order("reported_at", { ascending: false }).limit(2000);
     const reporterProfileIds = [...new Set((reports ?? []).map((row) => row.reporter_id))];
-    const reporterNames = new Map<string, string>();
     if (reporterProfileIds.length) {
       const { data: ps } = await admin.from("profiles").select("id,full_name").in("id", reporterProfileIds);
-      (ps ?? []).forEach((p) => reporterNames.set(p.id, p.full_name));
+      (ps ?? []).forEach((p) => names.set(p.id, p.full_name));
     }
     (reports ?? []).forEach((r) => {
-      if (!latestReporter.has(r.issue_id)) latestReporter.set(r.issue_id, reporterNames.get(r.reporter_id) ?? "");
+      if (!latestReporter.has(r.issue_id)) latestReporter.set(r.issue_id, names.get(r.reporter_id) ?? "");
+    });
+    const { data: audits, error: auditError } = await admin.from("issue_audit")
+      .select("issue_id,actor_id,action,created_at").in("issue_id", issueIds).order("created_at", { ascending: false }).limit(2000);
+    if (auditError) throw auditError;
+    const resultActions = new Set(["AVAILABLE", "NOT_FOUND", "RESTORE_AVAILABLE", "RESTORE_SKIPPED"]);
+    const resultAudits = (audits ?? []).filter((row: any) => resultActions.has(String(row.action ?? "").toUpperCase()));
+    const actorIds = [...new Set(resultAudits.map((row: any) => row.actor_id).filter(Boolean))];
+    if (actorIds.length) {
+      const { data: ps } = await admin.from("profiles").select("id,full_name").in("id", actorIds);
+      (ps ?? []).forEach((profile) => names.set(profile.id, profile.full_name));
+    }
+    resultAudits.forEach((row: any) => {
+      if (!handledBy.has(row.issue_id)) handledBy.set(row.issue_id, names.get(row.actor_id) ?? "");
     });
   }
   const previousIds = [...new Set(rows.map((row) => row.previous_issue_id).filter(Boolean))];
@@ -214,6 +227,7 @@ async function issueRows(ids?: string[], statuses?: string[], limit = 250) {
     assigned_id: row.claimed_by ?? null,
     latest_reporter_name: latestReporter.get(row.id) ?? "",
     latest_message: "",
+    handled_by_name: handledBy.get(row.id) ?? "",
   }));
 }
 
@@ -518,30 +532,25 @@ async function route(req: Request) {
     case "issue-board": {
       requireRole(context, ["ADMIN", "ADMIN_INVENT", "INVENT"]);
       const { start, end } = siteDayBounds();
-      let claimedCountQuery = admin.from("issues").select("id", { count: "exact", head: true }).in("status", ["CLAIMED", "SEARCHING", "REPLENISHING"]);
-      if (context.effectiveRole === "INVENT") claimedCountQuery = claimedCountQuery.eq("claimed_by", context.userId);
-      const [open, claimed, recentRefs, openCount, claimedCount, availableCount, skippedCount] = await Promise.all([
-        issueRows(undefined, ["OPEN"], 500),
-        issueRows(undefined, ["CLAIMED", "SEARCHING", "REPLENISHING"], 500),
+      const [active, recentRefs, activeCount, availableCount, skippedCount] = await Promise.all([
+        issueRows(undefined, ACTIVE_STATUSES, 1000),
         admin.from("issues").select("id,status,resolved_at").in("status", ["AVAILABLE", "SKIP_ALLOWED"]).gte("resolved_at", start).lt("resolved_at", end).order("resolved_at", { ascending: false }).limit(1000),
-        admin.from("issues").select("id", { count: "exact", head: true }).eq("status", "OPEN"),
-        claimedCountQuery,
+        admin.from("issues").select("id", { count: "exact", head: true }).in("status", ACTIVE_STATUSES),
         admin.from("issues").select("id", { count: "exact", head: true }).eq("status", "AVAILABLE").gte("resolved_at", start).lt("resolved_at", end),
         admin.from("issues").select("id", { count: "exact", head: true }).eq("status", "SKIP_ALLOWED").gte("resolved_at", start).lt("resolved_at", end),
       ]);
-      for (const result of [recentRefs, openCount, claimedCount, availableCount, skippedCount]) if (result.error) throw result.error;
+      for (const result of [recentRefs, activeCount, availableCount, skippedCount]) if (result.error) throw result.error;
       const recentIds = (recentRefs.data ?? []).map((row: any) => String(row.id));
       const recentRows = recentIds.length ? await issueRows(recentIds, undefined, 1000) : [];
       const byId = new Map(recentRows.map((row: any) => [String(row.id), row]));
       const recent = recentIds.map((id: string) => byId.get(id)).filter(Boolean);
-      const mine = context.effectiveRole === "INVENT" ? claimed.filter((issue: any) => issue.assigned_id === context.userId) : claimed;
       return {
-        open,
-        claimed: mine,
+        open: [],
+        claimed: active,
         recent,
         skipped: recent.filter((i: any) => i.status === "SKIP_ALLOWED"),
         available: recent.filter((i: any) => i.status === "AVAILABLE"),
-        counts: { open: openCount.count ?? open.length, claimed: claimedCount.count ?? mine.length, available: availableCount.count ?? 0, skipped: skippedCount.count ?? 0 },
+        counts: { open: 0, claimed: activeCount.count ?? active.length, available: availableCount.count ?? 0, skipped: skippedCount.count ?? 0 },
         scope: { active: "CURRENT", resolved: "TODAY", day_start: start, day_end: end },
       };
     }
@@ -583,7 +592,16 @@ async function route(req: Request) {
       requireRole(context, ["ADMIN", "ADMIN_INVENT", "INVENT"]);
       const actionValue = required(body.action, "Hành động").toUpperCase();
       if (!["AVAILABLE", "NOT_FOUND"].includes(actionValue) && !(actionValue === "CLOSE" && context.effectiveRole === "ADMIN")) throw new HttpError(400, "Hành động không hợp lệ");
-      const { data, error } = await admin.rpc("update_issue_atomic", { p_issue_id: required(body.issue_id, "Issue ID"), p_actor: context.userId, p_action: actionValue });
+      const issueId = required(body.issue_id, "Issue ID");
+      if (context.effectiveRole === "INVENT" && ["AVAILABLE", "NOT_FOUND"].includes(actionValue)) {
+        const { data: current, error: currentError } = await admin.from("issues").select("status,claimed_by").eq("id", issueId).single();
+        if (currentError) throw currentError;
+        if (ACTIVE_STATUSES.includes(String(current.status)) && !current.claimed_by) {
+          const { error: claimError } = await admin.rpc("update_issue_atomic", { p_issue_id: issueId, p_actor: context.userId, p_action: "CLAIM" });
+          if (claimError) throw claimError;
+        }
+      }
+      const { data, error } = await admin.rpc("update_issue_atomic", { p_issue_id: issueId, p_actor: context.userId, p_action: actionValue });
       if (error) throw error;
       if (["AVAILABLE", "SKIP_ALLOWED"].includes(data.status)) {
         await admin.from("notification_events").update({ acknowledged_at: new Date().toISOString() }).eq("issue_id", data.id).eq("critical", true).is("acknowledged_at", null);

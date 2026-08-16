@@ -27,7 +27,7 @@ enum class UserRole(val wire: String, val label: String) {
 }
 
 enum class IssueStatus(val wire: String, val label: String, val criticalForPicker: Boolean = false) {
-    OPEN("OPEN", "CHỜ XỬ LÝ"),
+    OPEN("OPEN", "ĐANG XỬ LÝ"),
     CLAIMED("CLAIMED", "ĐANG XỬ LÝ"),
     SEARCHING("SEARCHING", "ĐANG XỬ LÝ"),
     REPLENISHING("REPLENISHING", "ĐANG XỬ LÝ"),
@@ -37,7 +37,7 @@ enum class IssueStatus(val wire: String, val label: String, val criticalForPicke
     WITHDRAWN("WITHDRAWN", "ĐÃ THU HỒI");
 
     val isOpenBucket: Boolean get() = this in setOf(OPEN, CLAIMED, SEARCHING, REPLENISHING)
-    val isClaimedBucket: Boolean get() = this in setOf(CLAIMED, SEARCHING, REPLENISHING)
+    val isClaimedBucket: Boolean get() = this in setOf(OPEN, CLAIMED, SEARCHING, REPLENISHING)
 
     companion object {
         fun from(value: String?): IssueStatus = entries.firstOrNull { it.wire.equals(value, ignoreCase = true) } ?: OPEN
@@ -92,6 +92,7 @@ data class StockIssue(
     val assignedName: String = "",
     val latestReporterName: String = "",
     val latestMessage: String = "",
+    val handledByName: String = "",
     val assignedId: String? = null,
     val issueVersion: Long = 1,
     val previousIssueId: String? = null,
@@ -113,6 +114,7 @@ data class StockIssue(
             assignedName = json.optString("assigned_name"),
             latestReporterName = json.optString("latest_reporter_name"),
             latestMessage = json.optString("latest_message"),
+            handledByName = json.optString("handled_by_name"),
             assignedId = json.optString("assigned_id").ifBlank { null },
             issueVersion = json.optLong("issue_version", 1),
             previousIssueId = json.optString("previous_issue_id").ifBlank { null },

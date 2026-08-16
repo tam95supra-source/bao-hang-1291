@@ -34,7 +34,7 @@ const state = {
   realtimeStatus: 'OFFLINE',
   fallbackTimer: null,
   refreshTimer: null,
-  issueBucket: 'open',
+  issueBucket: 'claimed',
 };
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -167,6 +167,7 @@ function renderLogin(msg = '') {
     <label>Mật khẩu<input id="password" type="password" required autocomplete="current-password"></label>
     <button class="primary wide">ĐĂNG NHẬP</button></form><div id="loginMessage" class="message" hidden></div>
     <p class="security">Quyền được kiểm tra tại server. Web không chứa service-role key, thông tin xác thực máy chủ hoặc private key.</p>
+    <p class="security">Copyright 2026 - SUPRA DC HƯNG YÊN - tamnv2 - Chuyên viên Pick Pack 1291</p>
   </section></main>`;
   if (msg) message('#loginMessage', msg, 'error');
   $('#loginForm').addEventListener('submit', handleLogin);
@@ -210,7 +211,7 @@ function renderApp() {
   document.body.innerHTML = `<div class="app-shell">
     <header class="topbar"><div><p class="eyebrow">BÁO HÀNG 1291</p><h1>Web nghiệp vụ</h1><div class="health-row" id="healthRow">
       ${healthChip('SERVICE','HOẠT ĐỘNG','good','DỊCH VỤ')}${healthChip('REALTIME','ĐANG KẾT NỐI','','CẬP NHẬT')}${healthChip('SHEET','—','','BÁO CÁO')}${healthChip('FREE TIER','ĐANG GIÁM SÁT','','CHI PHÍ')}
-    </div></div><div class="user"><strong>${escapeHtml(profile.full_name)}</strong><span>${escapeHtml(profile.employee_code)} · ${escapeHtml(ROLES[currentRole] || currentRole)}</span><button id="logout" class="ghost">Đăng xuất</button></div></header>
+    </div></div><div class="user"><strong>${escapeHtml(profile.full_name)}</strong><span>${escapeHtml(ROLES[currentRole] || currentRole)}</span><button id="logout" class="ghost">Đăng xuất</button></div></header>
     ${state.testRole ? `<div class="test-banner">ĐANG KIỂM THỬ QUYỀN: <strong>${escapeHtml(ROLES[state.testRole])}</strong> · API cũng bị hạ quyền tương ứng. <button id="exitTest">Thoát kiểm thử</button></div>` : ''}
     ${actualRole() === 'ADMIN' && !state.testRole ? `<div class="test-tools"><span>Kiểm thử giao diện + quyền server:</span><button data-test="ADMIN_INVENT">Admin Event</button><button data-test="INVENT">Người báo hàng</button><button data-test="PICKER">Người lấy hàng</button></div>` : ''}
     <nav class="tabs">${tabs.map(([id,label]) => `<button data-tab="${id}" class="${id === state.activeTab ? 'active' : ''}">${label}</button>`).join('')}</nav>
@@ -304,8 +305,8 @@ function formatAge(value) {
 }
 
 async function renderEvents() {
-  const buckets = [['open','CHỜ NHẬN'],['claimed',`ĐANG XỬ LÝ${role()==='INVENT'?' CỦA TÔI':''}`],['recent','ĐÃ XỬ LÝ GẦN ĐÂY'],['withdrawn','NGƯỜI LẤY HÀNG THU HỒI SKU']];
-  if (!buckets.some(([id]) => id === state.issueBucket)) state.issueBucket = 'open';
+  const buckets = [['claimed','ĐANG XỬ LÝ'],['recent','ĐÃ XỬ LÝ GẦN ĐÂY'],['withdrawn','PICKER THU HỒI SKU']];
+  if (!buckets.some(([id]) => id === state.issueBucket)) state.issueBucket = 'claimed';
   $('#content').innerHTML = `<div class="heading"><div><p class="eyebrow">BÁO HÀNG</p><h2>Xử lý báo hàng</h2></div><button id="refreshBoard" class="secondary">Làm mới</button></div>
     <div class="subtabs">${buckets.map(([id,label])=>`<button data-bucket="${id}" class="${id===state.issueBucket?'active':''}">${label}</button>`).join('')}</div><div id="board"></div>`;
   let board = null;
