@@ -24,6 +24,7 @@ val productionSignerSha256 = if (productionSignerFile.isFile) {
 val requestedOtaChannel = (project.findProperty("OTA_CHANNEL") as String?)?.trim()?.lowercase() ?: "stable"
 require(requestedOtaChannel in setOf("stable", "beta")) { "OTA_CHANNEL must be stable or beta" }
 val otaManifestUrl = "https://raw.githubusercontent.com/tam95supra-source/bao-hang-1291/main/ota/$requestedOtaChannel/release-manifest.json"
+val appsScriptWorkerUrl = secret("APPS_SCRIPT_WORKER_URL").ifBlank { secret("GOOGLE_SHEET_WEBHOOK_URL") }
 
 android {
     namespace = "vn.pickpack1291.baohang"
@@ -39,11 +40,11 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
 
-        // All three values below are public client configuration, not server secrets.
+        // Client-visible configuration only. Server secrets remain outside APK/source.
         // Authorization is enforced by Firebase Auth, Neon JWT verification and RLS/RPC grants.
         buildConfigField("String", "NEON_DATA_API", "\"${secret("NEON_DATA_API", "https://ep-flat-feather-azdi44be.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1")}\"")
         buildConfigField("String", "FIREBASE_WEB_API_KEY", "\"${secret("FIREBASE_WEB_API_KEY", "AIzaSyB-n368fntzxsuuLlvte9NXhcuX0DDbTXM")}\"")
-        buildConfigField("String", "APPS_SCRIPT_WORKER_URL", "\"${secret("APPS_SCRIPT_WORKER_URL", "")}\"")
+        buildConfigField("String", "APPS_SCRIPT_WORKER_URL", "\"$appsScriptWorkerUrl\"")
         buildConfigField("String", "OTA_CHANNEL", "\"$requestedOtaChannel\"")
         buildConfigField("String", "UPDATE_MANIFEST_URL", "\"${secret("UPDATE_MANIFEST_URL", otaManifestUrl)}\"")
         buildConfigField("String", "PRODUCTION_SIGNER_SHA256", "\"$productionSignerSha256\"")
