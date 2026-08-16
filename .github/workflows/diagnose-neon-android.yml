@@ -1,0 +1,44 @@
+name: Diagnose Neon Android compile
+
+on:
+  push:
+    branches: [migration/neon-cutover]
+    paths:
+      - 'app/**'
+      - '.github/workflows/diagnose-neon-android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+          cache-disabled: true
+      - name: Fail closed on PICK PACK service identifiers
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -RInE 'ttwftrooaizxmjovkbaz|pick-pack-1291-primary|19a7c8e9-9fc0-4b04-a545-bcbe84b1bcb1' app/src app/build.gradle.kts
+      - name: Compile Kotlin with concise error output
+        shell: bash
+        run: |
+          set +e
+          gradle --no-daemon :app:compileDebugKotlin > /tmp/gradle.log 2>&1
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            grep -nE '(^| )(e:|error:|FAILURE:|What went wrong|Execution failed|Unresolved reference|Type mismatch|Cannot infer|No value passed)' /tmp/gradle.log | tail -n 120 || tail -n 160 /tmp/gradle.log
+          else
+            tail -n 40 /tmp/gradle.log
+          fi
+          exit "$code"
