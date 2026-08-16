@@ -33,7 +33,8 @@ jobs:
         run: |
           set -euo pipefail
           ! grep -RInE 'RTDB_URL|RTDB_' google-apps-script/DEPLOY_NEON.gs
-          node --check google-apps-script/DEPLOY_NEON.gs
+          cp google-apps-script/DEPLOY_NEON.gs /tmp/DEPLOY_NEON.js
+          node --check /tmp/DEPLOY_NEON.js
           node --check web-admin/src/supabase-shim.js
           git diff --check
       - name: Commit patch
