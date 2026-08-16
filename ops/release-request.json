@@ -1,8 +1,8 @@
 {
   "action": "publish",
   "channel": "beta",
-  "versionName": "1.6.2",
-  "versionCode": 10,
+  "versionName": "1.6.3",
+  "versionCode": 11,
   "mandatory": false,
-  "releaseNotes": "Beta 1.6.2: Người báo hàng giữ nguyên nhóm đang xem khi Realtime/làm mới; Picker bỏ số lượt báo và chỉ tìm SKU bằng chuỗi số từ 3 chữ số, khớp ở mọi vị trí của mã SKU, không tìm theo tên; Gửi nhật ký có xác nhận Có/Không và đặt phía trên danh sách; căn giao diện tránh sát thanh hệ thống điện thoại/PDA; Picker được thu hồi lượt báo mới nhất trong 30 giây theo giờ server, quá 30 giây bị chặn, trạng thái Đã thu hồi đồng bộ đến nhóm Người lấy hàng thu hồi SKU và cảnh báo Người báo hàng/Admin; Người báo hàng bỏ mục tìm SKU; nút xử lý đổi thành Có hàng và Cho SKIP, bố trí ngang cân nhau."
+  "releaseNotes": "Beta 1.6.3: sửa logic tìm/gợi ý SKU của Picker theo chuỗi số 3–8 ký tự ở bất kỳ vị trí nào của mã, ưu tiên tìm từ cache máy và bỏ cơ chế lọc ngầm/debounce gây chậm; chuẩn hóa số đếm vận hành trên app và web: Chờ xử lý/Đang xử lý là số hiện tại, Có hàng/Cho SKIP/Thu hồi là số phát sinh hôm nay theo giờ kho Việt Nam, count lấy trực tiếp từ backend; Web bổ sung nhóm Đã thu hồi; nút Thu hồi dùng thời gian còn lại do server tính, tự ẩn khi hết 30 giây và kiểm lại ngay lúc bấm/xác nhận, server vẫn chặn cuối cùng nếu quá hạn."
 }
