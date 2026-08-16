@@ -39,10 +39,11 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
 
-        // Supabase URL and publishable key are intentionally client-visible configuration.
-        // Authorization remains enforced by Supabase Auth, Edge Function checks and RLS/grants.
-        buildConfigField("String", "SUPABASE_URL", "\"${secret("SUPABASE_URL", "https://oedasgcdjppjwidhlqdr.supabase.co")}\"")
-        buildConfigField("String", "SUPABASE_ANON_KEY", "\"${secret("SUPABASE_ANON_KEY", "sb_publishable_LGgDehtHMSyeJ1XyJDvQiQ_cdlqIKq7")}\"")
+        // All three values below are public client configuration, not server secrets.
+        // Authorization is enforced by Firebase Auth, Neon JWT verification and RLS/RPC grants.
+        buildConfigField("String", "NEON_DATA_API", "\"${secret("NEON_DATA_API", "https://ep-flat-feather-azdi44be.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1")}\"")
+        buildConfigField("String", "FIREBASE_WEB_API_KEY", "\"${secret("FIREBASE_WEB_API_KEY", "AIzaSyB-n368fntzxsuuLlvte9NXhcuX0DDbTXM")}\"")
+        buildConfigField("String", "APPS_SCRIPT_WORKER_URL", "\"${secret("APPS_SCRIPT_WORKER_URL", "")}\"")
         buildConfigField("String", "OTA_CHANNEL", "\"$requestedOtaChannel\"")
         buildConfigField("String", "UPDATE_MANIFEST_URL", "\"${secret("UPDATE_MANIFEST_URL", otaManifestUrl)}\"")
         buildConfigField("String", "PRODUCTION_SIGNER_SHA256", "\"$productionSignerSha256\"")
