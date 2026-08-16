@@ -1,11 +1,11 @@
 {
   "channel": "beta",
-  "versionCode": 9,
-  "versionName": "1.6.1",
-  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.1/bao-hang-1291-beta-1.6.1.apk",
-  "sha256": "a790fe2dbe7d8e40877ead39348250426cc225209fced627e38fa54661a09310",
+  "versionCode": 10,
+  "versionName": "1.6.2",
+  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.2/bao-hang-1291-beta-1.6.2.apk",
+  "sha256": "877627a8f502b50ed0d5099b889d37a5d89699dd172c49f8dfd2e119f1239db1",
   "mandatory": false,
-  "releaseNotes": "Beta 1.6.1: tối ưu tìm SKU để giảm giật/lag khi nhập hoặc quét; thêm số lượng dạng thông báo ở góc 4 trạng thái Chờ xử lý, Đang xử lý, Đã có hàng, Đã bỏ qua; giảm kết nối Realtime không đúng quyền; thay các thuật ngữ kỹ thuật khó hiểu bằng từ nghiệp vụ dễ hiểu. Web đã sửa Realtime App → Web để tự cập nhật không cần F5.",
+  "releaseNotes": "Beta 1.6.2: Người báo hàng giữ nguyên nhóm đang xem khi Realtime/làm mới; Picker bỏ số lượt báo và chỉ tìm SKU bằng chuỗi số từ 3 chữ số, khớp ở mọi vị trí của mã SKU, không tìm theo tên; Gửi nhật ký có xác nhận Có/Không và đặt phía trên danh sách; căn giao diện tránh sát thanh hệ thống điện thoại/PDA; Picker được thu hồi lượt báo mới nhất trong 30 giây theo giờ server, quá 30 giây bị chặn, trạng thái Đã thu hồi đồng bộ đến nhóm Người lấy hàng thu hồi SKU và cảnh báo Người báo hàng/Admin; Người báo hàng bỏ mục tìm SKU; nút xử lý đổi thành Có hàng và Cho SKIP, bố trí ngang cân nhau.",
   "signerSha256": "2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0",
-  "sourceSha": "5cb501a088b690d9e0728af77b5c7bda5bc6947a"
+  "sourceSha": "8cfae9a39ecb915ac264c1537f2aac593bbc6e29"
 }
