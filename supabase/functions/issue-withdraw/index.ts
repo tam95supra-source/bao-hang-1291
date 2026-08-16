@@ -24,6 +24,7 @@ function cors(req:Request){
 function json(req:Request, body:unknown, status=200){return new Response(JSON.stringify(body),{status,headers:{...cors(req),"content-type":"application/json; charset=utf-8","cache-control":"no-store","x-content-type-options":"nosniff"}});}
 function safeTestRole(raw:string|null):Role|null{const r=String(raw??"").trim().toUpperCase();return (["ADMIN_INVENT","INVENT","PICKER"] as string[]).includes(r)?r as Role:null;}
 function requireRole(context:Context, roles:Role[]){if(!roles.includes(context.effectiveRole))throw new HttpError(403,"Bạn không có quyền thực hiện thao tác này");}
+function siteDayBounds(now=Date.now()){const localDate=new Date(now+7*60*60*1000).toISOString().slice(0,10);const startMs=new Date(`${localDate}T00:00:00+07:00`).getTime();return {start:new Date(startMs).toISOString(),end:new Date(startMs+24*60*60*1000).toISOString()};}
 async function authenticated(req:Request):Promise<Context>{
   const authorization=req.headers.get("authorization")??"";
   if(!authorization.startsWith("Bearer "))throw new HttpError(401,"Phiên đăng nhập không hợp lệ");
@@ -69,8 +70,8 @@ Deno.serve(async(req:Request)=>{
     const body=await req.json().catch(()=>({})) as Record<string,unknown>;
     const context=await authenticated(req);
     if(action==="search"){
-      requireRole(context,["PICKER"]);const q=String(body.query??"").trim();if(!/^\d{3,}$/.test(q))return json(req,{items:[]});
-      const limit=Math.min(20,Math.max(1,Number(body.limit??20)));const {data,error}=await admin.from("sku_catalog").select("sku,product_name").eq("active",true).ilike("sku",`%${q}%`).order("sku").limit(limit);if(error)throw error;return json(req,{items:data??[]});
+      requireRole(context,["PICKER"]);const q=String(body.query??"").trim();if(!/^\d{3,8}$/.test(q))return json(req,{items:[]});
+      const limit=Math.min(20,Math.max(1,Number(body.limit??20)));const fetchLimit=Math.min(200,Math.max(50,limit*5));const {data,error}=await admin.from("sku_catalog").select("sku,product_name").eq("active",true).ilike("sku",`%${q}%`).order("sku").limit(fetchLimit);if(error)throw error;const ranked=(data??[]).sort((a:any,b:any)=>{const rank=(sku:string)=>sku===q?[0,0]:sku.startsWith(q)?[1,0]:[2,Math.max(0,sku.indexOf(q))];const ar=rank(String(a.sku)),br=rank(String(b.sku));return ar[0]-br[0]||ar[1]-br[1]||String(a.sku).localeCompare(String(b.sku));});return json(req,{items:ranked.slice(0,limit)});
     }
     if(action==="my"){
       requireRole(context,["PICKER"]);
@@ -78,16 +79,16 @@ Deno.serve(async(req:Request)=>{
       const latestByIssue=new Map<string,any>();
       for(const report of reports??[]){const id=String(report.issue_id);if(!latestByIssue.has(id))latestByIssue.set(id,report);}
       const byIssue=await issueMap([...latestByIssue.keys()]);const now=Date.now();const issues:any[]=[];
-      for(const [id,source] of latestByIssue){const raw=byIssue.get(id);if(!raw)continue;const deadline=new Date(new Date(source.reported_at).getTime()+30000).toISOString();const withdrawn=Boolean(source.withdrawn_at);const base=baseIssue(raw);issues.push({id:base.id,sku:base.sku,product_name:base.product_name,status:withdrawn?"WITHDRAWN":raw.status,reported_at:source.reported_at,updated_at:base.updated_at,issue_version:base.issue_version,assigned_id:base.assigned_id,withdrawn_at:withdrawn?source.withdrawn_at:null,withdraw_allowed_until:deadline,can_withdraw:!withdrawn&&now<=new Date(deadline).getTime()});}
+      for(const [id,source] of latestByIssue){const raw=byIssue.get(id);if(!raw)continue;const deadlineMs=new Date(source.reported_at).getTime()+30000;const deadline=new Date(deadlineMs).toISOString();const withdrawn=Boolean(source.withdrawn_at);const remainingMs=withdrawn?0:Math.max(0,deadlineMs-now);const base=baseIssue(raw);issues.push({id:base.id,sku:base.sku,product_name:base.product_name,status:withdrawn?"WITHDRAWN":raw.status,reported_at:source.reported_at,updated_at:base.updated_at,issue_version:base.issue_version,assigned_id:base.assigned_id,withdrawn_at:withdrawn?source.withdrawn_at:null,withdraw_allowed_until:deadline,withdraw_remaining_ms:remainingMs,can_withdraw:!withdrawn&&remainingMs>0});}
       issues.sort((a,b)=>new Date(b.reported_at).getTime()-new Date(a.reported_at).getTime());return json(req,{issues:issues.slice(0,200)});
     }
     if(action==="board"){
-      requireRole(context,["ADMIN","ADMIN_INVENT","INVENT"]);
-      const {data:reports,error}=await admin.from("issue_reports").select("id,issue_id,reporter_id,reported_at,withdrawn_at").not("withdrawn_at","is",null).order("withdrawn_at",{ascending:false}).limit(200);if(error)throw error;
+      requireRole(context,["ADMIN","ADMIN_INVENT","INVENT"]);const {start,end}=siteDayBounds();
+      const {data:reports,error,count}=await admin.from("issue_reports").select("id,issue_id,reporter_id,reported_at,withdrawn_at",{count:"exact"}).not("withdrawn_at","is",null).gte("withdrawn_at",start).lt("withdrawn_at",end).order("withdrawn_at",{ascending:false}).limit(500);if(error)throw error;
       const byIssue=await issueMap([...new Set((reports??[]).map((r:any)=>String(r.issue_id)))]);const reporterIds=[...new Set((reports??[]).map((r:any)=>String(r.reporter_id)))];const names=new Map<string,string>();
       if(reporterIds.length){const {data:profiles,error:pe}=await admin.from("profiles").select("id,full_name").in("id",reporterIds);if(pe)throw pe;(profiles??[]).forEach((p:any)=>names.set(String(p.id),String(p.full_name??"")));}
       const withdrawn=(reports??[]).flatMap((report:any)=>{const raw=byIssue.get(String(report.issue_id));if(!raw)return[];const message=raw.status==="CLOSED"?"Không còn lượt báo nào chưa thu hồi; đợt xử lý đã đóng.":"SKU vẫn còn nhu cầu xử lý từ lượt báo khác.";return [{...baseIssue(raw),status:"WITHDRAWN",reported_at:report.reported_at,updated_at:report.withdrawn_at,withdrawn_at:report.withdrawn_at,latest_reporter_name:names.get(String(report.reporter_id))??"",latest_message:message,can_withdraw:false}];});
-      return json(req,{withdrawn});
+      return json(req,{withdrawn,count:count??withdrawn.length,scope:"TODAY",day_start:start,day_end:end});
     }
     if(action==="withdraw"){
       requireRole(context,["PICKER"]);const issueId=String(body.issue_id??"").trim();if(!/^[0-9a-f-]{36}$/i.test(issueId))throw new HttpError(400,"Mã báo thiếu không hợp lệ");

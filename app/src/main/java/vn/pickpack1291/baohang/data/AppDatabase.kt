@@ -133,13 +133,14 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
 
     fun searchSkuDigits(query: String, limit: Int = 20): List<SkuItem> {
         val digits = query.trim()
-        if (digits.length < 3 || !digits.all(Char::isDigit)) return emptyList()
+        if (digits.length !in 3..8 || !digits.all(Char::isDigit)) return emptyList()
         val cursor = readableDatabase.rawQuery(
             """SELECT sku, product_name FROM sku_catalog
-               WHERE sku LIKE ?
-               ORDER BY CASE WHEN sku=? THEN 0 WHEN sku LIKE ? THEN 1 ELSE 2 END, sku
+               WHERE instr(sku, ?) > 0
+               ORDER BY CASE WHEN sku=? THEN 0 WHEN sku LIKE ? THEN 1 ELSE 2 END,
+                        instr(sku, ?), sku
                LIMIT ?""",
-            arrayOf("%$digits%", digits, "$digits%", limit.toString())
+            arrayOf(digits, digits, "$digits%", digits, limit.coerceIn(1, 50).toString())
         )
         return cursor.use { buildList { while (it.moveToNext()) add(SkuItem(it.getString(0), it.getString(1))) } }
     }

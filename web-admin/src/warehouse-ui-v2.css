@@ -50,7 +50,7 @@
 }
 .wv2-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
   margin-bottom: 16px;
 }
@@ -111,6 +111,7 @@
 .wv2-issue[data-state="claimed"]::before { background: #f79009; }
 .wv2-issue[data-state="available"]::before { background: #12b76a; }
 .wv2-issue[data-state="skipped"]::before { background: #98a2b3; }
+.wv2-issue[data-state="withdrawn"]::before { background: #d92d20; }
 .wv2-issue-head {
   display: flex;
   justify-content: space-between;

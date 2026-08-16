@@ -98,6 +98,7 @@ data class StockIssue(
     val recurrence30m: Boolean = false,
     val withdrawnAt: String = "",
     val withdrawAllowedUntil: String = "",
+    val withdrawRemainingMs: Long = 0L,
     val canWithdraw: Boolean = false
 ) {
     companion object {
@@ -118,6 +119,7 @@ data class StockIssue(
             recurrence30m = json.optBoolean("recurrence_30m", false),
             withdrawnAt = json.optString("withdrawn_at"),
             withdrawAllowedUntil = json.optString("withdraw_allowed_until"),
+            withdrawRemainingMs = json.optLong("withdraw_remaining_ms", 0L).coerceAtLeast(0L),
             canWithdraw = json.optBoolean("can_withdraw", false)
         )
     }
@@ -127,7 +129,12 @@ data class IssueBoard(
     val open: List<StockIssue>,
     val claimed: List<StockIssue>,
     val recent: List<StockIssue>,
-    val withdrawn: List<StockIssue> = emptyList()
+    val withdrawn: List<StockIssue> = emptyList(),
+    val openCount: Int = open.size,
+    val claimedCount: Int = claimed.size,
+    val availableCount: Int = recent.count { it.status == IssueStatus.AVAILABLE },
+    val skippedCount: Int = recent.count { it.status == IssueStatus.SKIP_ALLOWED },
+    val withdrawnCount: Int = withdrawn.size
 ) {
     val skipped: List<StockIssue> get() = recent.filter { it.status == IssueStatus.SKIP_ALLOWED }
     val available: List<StockIssue> get() = recent.filter { it.status == IssueStatus.AVAILABLE }
