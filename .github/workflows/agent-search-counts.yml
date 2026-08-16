@@ -62,9 +62,28 @@ jobs:
           fi
           python3 - <<'PY'
           from pathlib import Path
+          main = Path('app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt')
+          s = main.read_text()
+          anchor = 'import android.widget.Button\n'
+          needed = 'import android.widget.ArrayAdapter\nimport android.widget.AutoCompleteTextView\n'
+          if 'import android.widget.ArrayAdapter\n' not in s:
+              if s.count(anchor) != 1: raise SystemExit('MainActivity import anchor mismatch')
+              s = s.replace(anchor, needed + anchor, 1)
+          main.write_text(s)
+          api = Path('app/src/main/java/vn/pickpack1291/baohang/network/ApiClient.kt')
+          s = api.read_text()
+          anchor = 'import vn.pickpack1291.baohang.data.IssueBoard\n'
+          if 'import vn.pickpack1291.baohang.data.IssueStatus\n' not in s:
+              if s.count(anchor) != 1: raise SystemExit('ApiClient import anchor mismatch')
+              s = s.replace(anchor, anchor + 'import vn.pickpack1291.baohang.data.IssueStatus\n', 1)
+          api.write_text(s)
+          PY
+          python3 - <<'PY'
+          from pathlib import Path
           checks = {
-              'app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt': ['InputFilter.LengthFilter(8)', 'withdrawRemainingMs', 'SystemClock.elapsedRealtime()', 'Không có SKU chứa chuỗi', 'data.availableCount'],
+              'app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt': ['InputFilter.LengthFilter(8)', 'withdrawRemainingMs', 'SystemClock.elapsedRealtime()', 'Không có SKU chứa chuỗi', 'data.availableCount', 'import android.widget.AutoCompleteTextView'],
               'app/src/main/java/vn/pickpack1291/baohang/data/AppDatabase.kt': ['instr(sku, ?) > 0', 'digits.length !in 3..8'],
+              'app/src/main/java/vn/pickpack1291/baohang/network/ApiClient.kt': ['import vn.pickpack1291.baohang.data.IssueStatus'],
               'supabase/functions/api/index.ts': ['resolved: "TODAY"', 'siteDayBounds', 'availableCount.count'],
               'supabase/functions/issue-withdraw/index.ts': ['withdraw_remaining_ms', 'scope:"TODAY"', 'fetchLimit'],
               'web-admin/src/warehouse-ui-v2.js': ["withdrawApi('board')", 'Đã thu hồi', 'Có hàng/SKIP/Thu hồi = hôm nay'],
@@ -77,6 +96,8 @@ jobs:
                       raise SystemExit(f'shape check failed: {path}: {needle}')
           print('PATCH_SHAPE=PASS')
           PY
+      - name: Android compile gate
+        run: gradle --no-daemon compileDebugKotlin
       - name: Android unit test and debug build
         run: gradle --no-daemon testDebugUnitTest assembleDebug
       - name: Web production build
