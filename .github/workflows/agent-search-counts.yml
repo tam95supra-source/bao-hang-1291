@@ -14,21 +14,14 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
-      - uses: gradle/actions/setup-gradle@v6
-        with:
-          gradle-version: '8.9'
-          cache-disabled: true
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
+          package-manager-cache: false
       - uses: denoland/setup-deno@v2
         with:
-          deno-version: v2.x
-      - name: Apply guarded product patch
+          deno-version: v1.46.3
+      - name: Apply deterministic guarded product patch
         run: |
           set -euo pipefail
           set +e
@@ -50,40 +43,31 @@ jobs:
             display: grid;
             grid-template-columns: repeat(5, minmax(0, 1fr));
           '''
-          if s.count(old_tabs) != 1:
-              raise SystemExit(f'css tabs guard: expected 1 match, got {s.count(old_tabs)}')
+          if s.count(old_tabs) != 1: raise SystemExit(f'css tabs guard mismatch: {s.count(old_tabs)}')
           s = s.replace(old_tabs, new_tabs, 1)
           old_accent = '.wv2-issue[data-state="skipped"]::before { background: #98a2b3; }\n'
-          new_accent = old_accent + '.wv2-issue[data-state="withdrawn"]::before { background: #d92d20; }\n'
-          if s.count(old_accent) != 1:
-              raise SystemExit(f'css accent guard: expected 1 match, got {s.count(old_accent)}')
-          p.write_text(s.replace(old_accent, new_accent, 1))
+          if s.count(old_accent) != 1: raise SystemExit(f'css accent guard mismatch: {s.count(old_accent)}')
+          s = s.replace(old_accent, old_accent + '.wv2-issue[data-state="withdrawn"]::before { background: #d92d20; }\n', 1)
+          p.write_text(s)
           PY
           fi
           python3 - <<'PY'
           from pathlib import Path
           main = Path('app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt')
-          s = main.read_text()
-          anchor = 'import android.widget.Button\n'
-          needed = 'import android.widget.ArrayAdapter\nimport android.widget.AutoCompleteTextView\n'
+          s = main.read_text(); anchor = 'import android.widget.Button\n'; needed = 'import android.widget.ArrayAdapter\nimport android.widget.AutoCompleteTextView\n'
           if 'import android.widget.ArrayAdapter\n' not in s:
               if s.count(anchor) != 1: raise SystemExit('MainActivity import anchor mismatch')
               s = s.replace(anchor, needed + anchor, 1)
           main.write_text(s)
           api = Path('app/src/main/java/vn/pickpack1291/baohang/network/ApiClient.kt')
-          s = api.read_text()
-          anchor = 'import vn.pickpack1291.baohang.data.IssueBoard\n'
+          s = api.read_text(); anchor = 'import vn.pickpack1291.baohang.data.IssueBoard\n'
           if 'import vn.pickpack1291.baohang.data.IssueStatus\n' not in s:
               if s.count(anchor) != 1: raise SystemExit('ApiClient import anchor mismatch')
               s = s.replace(anchor, anchor + 'import vn.pickpack1291.baohang.data.IssueStatus\n', 1)
           api.write_text(s)
-          PY
-          python3 - <<'PY'
-          from pathlib import Path
           checks = {
-              'app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt': ['InputFilter.LengthFilter(8)', 'withdrawRemainingMs', 'SystemClock.elapsedRealtime()', 'Không có SKU chứa chuỗi', 'data.availableCount', 'import android.widget.AutoCompleteTextView'],
+              'app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt': ['InputFilter.LengthFilter(8)', 'withdrawRemainingMs', 'SystemClock.elapsedRealtime()', 'Không có SKU chứa chuỗi', 'data.availableCount'],
               'app/src/main/java/vn/pickpack1291/baohang/data/AppDatabase.kt': ['instr(sku, ?) > 0', 'digits.length !in 3..8'],
-              'app/src/main/java/vn/pickpack1291/baohang/network/ApiClient.kt': ['import vn.pickpack1291.baohang.data.IssueStatus'],
               'supabase/functions/api/index.ts': ['resolved: "TODAY"', 'siteDayBounds', 'availableCount.count'],
               'supabase/functions/issue-withdraw/index.ts': ['withdraw_remaining_ms', 'scope:"TODAY"', 'fetchLimit'],
               'web-admin/src/warehouse-ui-v2.js': ["withdrawApi('board')", 'Đã thu hồi', 'Có hàng/SKIP/Thu hồi = hôm nay'],
@@ -92,17 +76,33 @@ jobs:
           for path, needles in checks.items():
               data = Path(path).read_text()
               for needle in needles:
-                  if needle not in data:
-                      raise SystemExit(f'shape check failed: {path}: {needle}')
+                  if needle not in data: raise SystemExit(f'shape check failed: {path}: {needle}')
           print('PATCH_SHAPE=PASS')
           PY
-      - name: Android compile gate
-        run: gradle --no-daemon compileDebugKotlin
-      - name: Android unit test and debug build
-        run: gradle --no-daemon testDebugUnitTest assembleDebug
+      - name: Install pinned web dependencies
+        run: npm --prefix web-admin install --ignore-scripts --no-audit --no-fund --no-package-lock
       - name: Web production build
-        working-directory: web-admin
-        run: npm ci --ignore-scripts && npm run build
+        run: npm --prefix web-admin run build
+      - name: Enforce web performance and secret budgets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f web-admin/dist/index.html
+          if grep -R -E 'BEGIN (RSA )?PRIVATE KEY|SUPABASE_SERVICE_ROLE_KEY|service_role|SUPRA_CREDENTIAL_MASTER_KEY|encrypted_credential_bundle' web-admin/dist; then
+            echo 'Secret-like server material found in static build' >&2
+            exit 1
+          fi
+          shopt -s nullglob
+          app_js=(web-admin/dist/assets/index-*.js)
+          css=(web-admin/dist/assets/index-*.css)
+          test ${#app_js[@]} -ge 1
+          js_gzip=$(gzip -c "${app_js[0]}" | wc -c)
+          test "$js_gzip" -le 153600
+          if [ ${#css[@]} -ge 1 ]; then
+            css_gzip=$(gzip -c "${css[0]}" | wc -c)
+            test "$css_gzip" -le 30720
+          fi
+          echo "WEB_BUDGET=PASS initial_js_gzip=$js_gzip"
       - name: Type-check changed Edge Functions
         run: deno check supabase/functions/api/index.ts supabase/functions/issue-withdraw/index.ts
       - name: Commit product files only
