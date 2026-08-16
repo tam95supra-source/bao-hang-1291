@@ -1,0 +1,42 @@
+name: Validate Neon migration bundle
+
+on:
+  push:
+    branches:
+      - migration/neon-cutover
+    paths:
+      - 'google-apps-script/DEPLOY_NEON.gs'
+      - '.github/workflows/validate-neon-migration.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail closed on PICK PACK identifiers
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -Ein 'PICK-PACK-1291|pick-pack-1291|ttwftrooaizxmjovkbaz|19a7c8e9-9fc0-4b04-a545-bcbe84b1bcb1' google-apps-script/DEPLOY_NEON.gs; then
+            echo 'Forbidden PICK PACK identifier found'
+            exit 1
+          fi
+      - name: Reject embedded private keys
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -Fq -- '-----BEGIN PRIVATE KEY-----' google-apps-script/DEPLOY_NEON.gs; then
+            echo 'Private key material must never be committed'
+            exit 1
+          fi
+      - name: JavaScript syntax check
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp google-apps-script/DEPLOY_NEON.gs /tmp/DEPLOY_NEON.js
+          node --check /tmp/DEPLOY_NEON.js
