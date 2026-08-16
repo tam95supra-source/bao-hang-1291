@@ -42,17 +42,22 @@ jobs:
           from pathlib import Path
           p = Path('web-admin/src/warehouse-ui-v2.css')
           s = p.read_text()
-          old = '''.wv2-tabs {
+          old_tabs = '''.wv2-tabs {
             display: grid;
             grid-template-columns: repeat(4, minmax(0, 1fr));
           '''
-          new = '''.wv2-tabs {
+          new_tabs = '''.wv2-tabs {
             display: grid;
             grid-template-columns: repeat(5, minmax(0, 1fr));
           '''
-          if s.count(old) != 1:
-              raise SystemExit(f'css targeted guard: expected 1 match, got {s.count(old)}')
-          p.write_text(s.replace(old, new, 1))
+          if s.count(old_tabs) != 1:
+              raise SystemExit(f'css tabs guard: expected 1 match, got {s.count(old_tabs)}')
+          s = s.replace(old_tabs, new_tabs, 1)
+          old_accent = '.wv2-issue[data-state="skipped"]::before { background: #98a2b3; }\n'
+          new_accent = old_accent + '.wv2-issue[data-state="withdrawn"]::before { background: #d92d20; }\n'
+          if s.count(old_accent) != 1:
+              raise SystemExit(f'css accent guard: expected 1 match, got {s.count(old_accent)}')
+          p.write_text(s.replace(old_accent, new_accent, 1))
           PY
           fi
           python3 - <<'PY'
