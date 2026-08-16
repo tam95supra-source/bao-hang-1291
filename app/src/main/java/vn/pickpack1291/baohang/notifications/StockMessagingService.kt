@@ -32,11 +32,18 @@ class StockMessagingService : FirebaseMessagingService() {
         val sku = data["sku"].orEmpty()
         val product = data["product_name"].orEmpty()
         val status = data["status"].orEmpty()
+        val body = data["message"].orEmpty().ifBlank { message.notification?.body.orEmpty() }
+        if (status == "WITHDRAWN") {
+            if (app.session.isLoggedIn && app.session.effectiveRole.canProcessIssues) {
+                NotificationHelper.alert(this, sku, status, body, eventId)
+                app.diagnostics.info("withdrawal_notification_displayed", mapOf("event_id" to eventId, "issue_id" to issueId, "sku" to sku))
+            }
+            return
+        }
         if (status !in setOf("AVAILABLE", "SKIP_ALLOWED")) {
             app.diagnostics.info("picker_notification_suppressed", mapOf("status" to status))
             return
         }
-        val body = data["message"].orEmpty().ifBlank { message.notification?.body.orEmpty() }
 
         // Notification is a hint, never the source of truth. A locally cached newer issue
         // version is enough to prove this FCM is stale and must not cover newer UI state.

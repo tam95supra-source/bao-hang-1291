@@ -33,7 +33,8 @@ enum class IssueStatus(val wire: String, val label: String, val criticalForPicke
     REPLENISHING("REPLENISHING", "ĐANG XỬ LÝ"),
     AVAILABLE("AVAILABLE", "ĐÃ CÓ HÀNG • QUAY LẠI LẤY HÀNG", true),
     SKIP_ALLOWED("SKIP_ALLOWED", "ĐƯỢC PHÉP BỎ QUA • TIẾP TỤC CÔNG VIỆC", true),
-    CLOSED("CLOSED", "ĐÃ ĐÓNG");
+    CLOSED("CLOSED", "ĐÃ ĐÓNG"),
+    WITHDRAWN("WITHDRAWN", "ĐÃ THU HỒI");
 
     val isOpenBucket: Boolean get() = this in setOf(OPEN, CLAIMED, SEARCHING, REPLENISHING)
     val isClaimedBucket: Boolean get() = this in setOf(CLAIMED, SEARCHING, REPLENISHING)
@@ -94,7 +95,10 @@ data class StockIssue(
     val assignedId: String? = null,
     val issueVersion: Long = 1,
     val previousIssueId: String? = null,
-    val recurrence30m: Boolean = false
+    val recurrence30m: Boolean = false,
+    val withdrawnAt: String = "",
+    val withdrawAllowedUntil: String = "",
+    val canWithdraw: Boolean = false
 ) {
     companion object {
         fun fromJson(json: JSONObject) = StockIssue(
@@ -111,7 +115,10 @@ data class StockIssue(
             assignedId = json.optString("assigned_id").ifBlank { null },
             issueVersion = json.optLong("issue_version", 1),
             previousIssueId = json.optString("previous_issue_id").ifBlank { null },
-            recurrence30m = json.optBoolean("recurrence_30m", false)
+            recurrence30m = json.optBoolean("recurrence_30m", false),
+            withdrawnAt = json.optString("withdrawn_at"),
+            withdrawAllowedUntil = json.optString("withdraw_allowed_until"),
+            canWithdraw = json.optBoolean("can_withdraw", false)
         )
     }
 }
@@ -119,7 +126,8 @@ data class StockIssue(
 data class IssueBoard(
     val open: List<StockIssue>,
     val claimed: List<StockIssue>,
-    val recent: List<StockIssue>
+    val recent: List<StockIssue>,
+    val withdrawn: List<StockIssue> = emptyList()
 ) {
     val skipped: List<StockIssue> get() = recent.filter { it.status == IssueStatus.SKIP_ALLOWED }
     val available: List<StockIssue> get() = recent.filter { it.status == IssueStatus.AVAILABLE }
