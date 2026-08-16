@@ -1,11 +1,11 @@
 {
   "channel": "beta",
-  "versionCode": 10,
-  "versionName": "1.6.2",
-  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.2/bao-hang-1291-beta-1.6.2.apk",
-  "sha256": "877627a8f502b50ed0d5099b889d37a5d89699dd172c49f8dfd2e119f1239db1",
+  "versionCode": 11,
+  "versionName": "1.6.3",
+  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.3/bao-hang-1291-beta-1.6.3.apk",
+  "sha256": "2589f0f8ae53f7f14d7ea5127d0473b718c0a0267dd4ad80e7f3102e45e32122",
   "mandatory": false,
-  "releaseNotes": "Beta 1.6.2: Người báo hàng giữ nguyên nhóm đang xem khi Realtime/làm mới; Picker bỏ số lượt báo và chỉ tìm SKU bằng chuỗi số từ 3 chữ số, khớp ở mọi vị trí của mã SKU, không tìm theo tên; Gửi nhật ký có xác nhận Có/Không và đặt phía trên danh sách; căn giao diện tránh sát thanh hệ thống điện thoại/PDA; Picker được thu hồi lượt báo mới nhất trong 30 giây theo giờ server, quá 30 giây bị chặn, trạng thái Đã thu hồi đồng bộ đến nhóm Người lấy hàng thu hồi SKU và cảnh báo Người báo hàng/Admin; Người báo hàng bỏ mục tìm SKU; nút xử lý đổi thành Có hàng và Cho SKIP, bố trí ngang cân nhau.",
+  "releaseNotes": "Beta 1.6.3: sửa logic tìm/gợi ý SKU của Picker theo chuỗi số 3–8 ký tự ở bất kỳ vị trí nào của mã, ưu tiên tìm từ cache máy và bỏ cơ chế lọc ngầm/debounce gây chậm; chuẩn hóa số đếm vận hành trên app và web: Chờ xử lý/Đang xử lý là số hiện tại, Có hàng/Cho SKIP/Thu hồi là số phát sinh hôm nay theo giờ kho Việt Nam, count lấy trực tiếp từ backend; Web bổ sung nhóm Đã thu hồi; nút Thu hồi dùng thời gian còn lại do server tính, tự ẩn khi hết 30 giây và kiểm lại ngay lúc bấm/xác nhận, server vẫn chặn cuối cùng nếu quá hạn.",
   "signerSha256": "2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0",
-  "sourceSha": "8cfae9a39ecb915ac264c1537f2aac593bbc6e29"
+  "sourceSha": "38dab8cf07d8a74d123a0b56d8431ba336d62e60"
 }
