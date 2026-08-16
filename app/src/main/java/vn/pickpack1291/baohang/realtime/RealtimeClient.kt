@@ -23,8 +23,8 @@ class RealtimeClient(
 
     @Volatile private var running = false
 
-    private val listener: (RealtimeSignalBus.Topic) -> Unit = { topic ->
-        if (!running) return@let
+    private val listener: (RealtimeSignalBus.Topic) -> Unit = listener@ { topic ->
+        if (!running) return@listener
         when (topic) {
             RealtimeSignalBus.Topic.ISSUES -> onIssueChanged()
             RealtimeSignalBus.Topic.CATALOG -> onCatalogChanged()
@@ -44,7 +44,7 @@ class RealtimeClient(
         onStatus(Status.ONLINE)
         diagnostics.info(
             "realtime_fcm_bus_started",
-            mapOf("role" to role.wire)
+            mapOf("role" to role.name)
         )
     }
 
@@ -57,7 +57,7 @@ class RealtimeClient(
     }
 
     fun updateAccessToken(token: String) {
-        // FCM registration is independent from the Firebase ID-token refresh.
+        // FCM registration is independent from Firebase ID-token refresh.
         if (running && token.isBlank()) {
             diagnostics.warn("realtime_fcm_bus_blank_token")
         }
