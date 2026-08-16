@@ -9,7 +9,7 @@ export default defineConfig({
   },
   build: {
     target: 'es2020',
-    minify: 'esbuild',
+    minify: 'oxc',
     sourcemap: false,
     cssCodeSplit: true,
   },
