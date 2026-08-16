@@ -1,8 +1,8 @@
 {
   "action": "publish",
-  "channel": "stable",
-  "versionName": "1.5.0",
-  "versionCode": 8,
+  "channel": "beta",
+  "versionName": "1.6.1",
+  "versionCode": 9,
   "mandatory": false,
-  "releaseNotes": "Stable 1.5.0: sửa dứt điểm Web bị nhảy giữa hai giao diện bằng một owner Realtime ticket; bổ sung footer bản quyền; Xử lý báo hàng chia rõ Chờ xử lý, Đang xử lý, Đã có hàng, Đã bỏ qua; cho phép báo lại đã có hàng từ ticket đã bỏ qua và gửi cảnh báo lại cho người liên quan; Báo cáo vận hành kho dùng thuật ngữ thuần Việt, chi tiết hơn và xuất Excel; Android đồng bộ cùng phân loại và nghiệp vụ."
+  "releaseNotes": "Beta 1.6.1: tối ưu tìm SKU để giảm giật/lag khi nhập hoặc quét; thêm số lượng dạng thông báo ở góc 4 trạng thái Chờ xử lý, Đang xử lý, Đã có hàng, Đã bỏ qua; giảm kết nối Realtime không đúng quyền; thay các thuật ngữ kỹ thuật khó hiểu bằng từ nghiệp vụ dễ hiểu. Web đã sửa Realtime App → Web để tự cập nhật không cần F5."
 }
