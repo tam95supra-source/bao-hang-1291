@@ -75,10 +75,10 @@ Deno.serve(async(req:Request)=>{
     if(action==="my"){
       requireRole(context,["PICKER"]);
       const {data:reports,error}=await admin.from("issue_reports").select("id,issue_id,reported_at,withdrawn_at").eq("reporter_id",context.userId).order("reported_at",{ascending:false}).limit(500);if(error)throw error;
-      const groups=new Map<string,{latest:any;active:any|null}>();
-      for(const report of reports??[]){const id=String(report.issue_id);const g=groups.get(id)??{latest:report,active:null};if(!g.active&&!report.withdrawn_at)g.active=report;groups.set(id,g);}
-      const byIssue=await issueMap([...groups.keys()]);const now=Date.now();const issues:any[]=[];
-      for(const [id,g] of groups){const raw=byIssue.get(id);if(!raw)continue;const source=g.active??g.latest;const deadline=new Date(new Date(source.reported_at).getTime()+30000).toISOString();const withdrawn=!g.active&&Boolean(g.latest.withdrawn_at);const base=baseIssue(raw);issues.push({id:base.id,sku:base.sku,product_name:base.product_name,status:withdrawn?"WITHDRAWN":raw.status,reported_at:source.reported_at,updated_at:base.updated_at,issue_version:base.issue_version,assigned_id:base.assigned_id,withdrawn_at:withdrawn?g.latest.withdrawn_at:null,withdraw_allowed_until:deadline,can_withdraw:Boolean(g.active)&&now<=new Date(deadline).getTime()});}
+      const latestByIssue=new Map<string,any>();
+      for(const report of reports??[]){const id=String(report.issue_id);if(!latestByIssue.has(id))latestByIssue.set(id,report);}
+      const byIssue=await issueMap([...latestByIssue.keys()]);const now=Date.now();const issues:any[]=[];
+      for(const [id,source] of latestByIssue){const raw=byIssue.get(id);if(!raw)continue;const deadline=new Date(new Date(source.reported_at).getTime()+30000).toISOString();const withdrawn=Boolean(source.withdrawn_at);const base=baseIssue(raw);issues.push({id:base.id,sku:base.sku,product_name:base.product_name,status:withdrawn?"WITHDRAWN":raw.status,reported_at:source.reported_at,updated_at:base.updated_at,issue_version:base.issue_version,assigned_id:base.assigned_id,withdrawn_at:withdrawn?source.withdrawn_at:null,withdraw_allowed_until:deadline,can_withdraw:!withdrawn&&now<=new Date(deadline).getTime()});}
       issues.sort((a,b)=>new Date(b.reported_at).getTime()-new Date(a.reported_at).getTime());return json(req,{issues:issues.slice(0,200)});
     }
     if(action==="board"){
