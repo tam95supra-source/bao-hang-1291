@@ -118,7 +118,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
             android:gravity="center"
-            android:text="Hệ thống nội bộ • Kho 1291"
+            android:text="Copyright 2026 - SUPRA DC HƯNG YÊN - tamnv2 - Chuyên viên Pick Pack 1291"
             android:textColor="@color/text_secondary"
             android:textSize="12sp" />
     </LinearLayout>

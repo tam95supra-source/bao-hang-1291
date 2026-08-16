@@ -50,7 +50,7 @@
 }
 .wv2-tabs {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   margin-bottom: 16px;
 }
@@ -121,7 +121,7 @@
 .wv2-issue-head > div { display: grid; gap: 3px; }
 .wv2-issue-head strong { color: #101828; font-size: 18px; font-weight: 700; }
 .wv2-issue-head span, .wv2-issue-head time, .wv2-meta { color: #667085; font-size: 12px; }
-.wv2-product { margin: 9px 0 5px; color: #344054; font-size: 14px; }
+.wv2-product { margin: 9px 0 5px; color: #344054; font-size: 14px; font-weight: 650; }
 .wv2-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 13px; }
 .wv2-actions button { min-width: 150px; }
 .wv2-success { color: #fff; background: #067647; }
