@@ -497,7 +497,21 @@ async function renderLogs() {
   $('#refreshLogs').onclick=renderLogs;
   try{const [logs,audit]=await Promise.all([api('list-logs',{limit:100}),api('audit-history',{limit:150})]);$('#logs').innerHTML=logs.logs.length?logs.logs.map(l=>`<article class="card log"><div><strong>${escapeHtml(l.employee_code)} · ${escapeHtml(l.device_name)}</strong><span>${escapeHtml(l.app_version)} · ${formatTime(l.created_at)}</span><small>${Number(l.compressed_bytes||0).toLocaleString('vi-VN')} bytes · SHA ${escapeHtml(String(l.sha256).slice(0,12))}</small></div><button class="secondary" data-log="${l.id}">TẢI</button></article>`).join(''):'<div class="card muted">Chưa có log.</div>';$$('[data-log]').forEach(b=>b.onclick=()=>downloadLog(b.dataset.log));$('#audit').innerHTML=audit.audit.length?audit.audit.map(a=>`<article class="card"><strong>${escapeHtml(a.action)}</strong><p>${escapeHtml(a.from_status||'—')} → ${escapeHtml(a.to_status||'—')}</p><small>${formatTime(a.created_at)} · issue ${escapeHtml(String(a.issue_id).slice(0,8))}</small></article>`).join(''):'<div class="card muted">Chưa có audit.</div>';}catch(error){$('#logs').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(error))}</div>`;}
 }
-async function downloadLog(id){try{setBusy(true,'Đang tạo link tải log…');const r=await api('download-log',{id});location.href=r.url;}catch(error){alert(safeMessage(error));}finally{setBusy(false);}}
+async function downloadLog(id){
+  try{
+    setBusy(true,'Đang tải log…');
+    const r=await api('download-log',{id});
+    if(!r.gzip_base64)throw new Error('Máy chủ không trả dữ liệu log.');
+    const raw=atob(r.gzip_base64),bytes=new Uint8Array(raw.length);
+    for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);
+    const url=URL.createObjectURL(new Blob([bytes],{type:'application/gzip'}));
+    const link=document.createElement('a');
+    link.href=url;link.download=r.file_name||`bao-hang-1291-log-${id}.jsonl.gz`;
+    document.body.appendChild(link);link.click();link.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }catch(error){alert(safeMessage(error));}
+  finally{setBusy(false);}
+}
 
 async function renderSla(){
  $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">SLA</p><h2>Mốc thời gian vận hành</h2></div></div><div id="slaBody"></div>`;try{const c=await api('get-operational-config');$('#slaBody').innerHTML=`<article class="card"><div class="form-grid"><label>Thời gian nhận xử lý (phút)<input id="ackMin" type="number" min="1" max="480" value="${c.acknowledge_minutes}"><small>Từ lúc Picker báo đến khi Người báo hàng nhận xử lý.</small></label><label>Chu kỳ nhắc xử lý (phút)<input id="reminderMin" type="number" min="1" max="480" value="${c.reminder_minutes}"><small>Khoảng cách giữa các lần nhắc khi ticket còn mở.</small></label><label>Thời gian châm hàng (phút)<input id="replenishMin" type="number" min="1" max="480" value="${c.replenish_minutes}"><small>Mốc theo dõi sau khi đã nhận ticket.</small></label><label>Nhắc Picker xác nhận (phút)<input id="pickerAckMin" type="number" min="1" max="60" value="${c.picker_ack_reminder_minutes}"><small>Chỉ cho cảnh báo ĐÃ CÓ HÀNG hoặc CHO PHÉP SKIP.</small></label><label class="check"><input id="autoSkipEnabled" type="checkbox" ${c.auto_skip_enabled?'checked':''}> Tự động cho phép SKIP khi quá thời gian</label><label>Mốc tự động SKIP (phút)<input id="autoSkipAfter" type="number" min="15" max="4320" value="${c.auto_skip_after_minutes||120}"><small>120 phút = 2 giờ. Có thể tắt hoàn toàn.</small></label></div><button id="saveSla" class="primary">LƯU MỐC THỜI GIAN</button><div id="slaMsg" class="message" hidden></div></article>`;$('#saveSla').onclick=async()=>{try{await api('save-operational-config',{acknowledge_minutes:Number($('#ackMin').value),reminder_minutes:Number($('#reminderMin').value),replenish_minutes:Number($('#replenishMin').value),picker_ack_reminder_minutes:Number($('#pickerAckMin').value),auto_skip_enabled:$('#autoSkipEnabled').checked,auto_skip_after_minutes:Number($('#autoSkipAfter').value)});message('#slaMsg','Đã lưu cấu hình vận hành.','good');}catch(e){message('#slaMsg',safeMessage(e),'error');}};}catch(e){$('#slaBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}
