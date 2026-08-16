@@ -34,6 +34,7 @@ const state = {
   realtimeStatus: 'OFFLINE',
   fallbackTimer: null,
   refreshTimer: null,
+  issueBucket: 'open',
 };
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -135,6 +136,13 @@ async function api(action, payload = {}) {
   }
   return parseResponse(response);
 }
+async function issueWithdraw(action, payload = {}) {
+  await refreshSessionIfNeeded();
+  const headers = { 'content-type': 'application/json', apikey: SUPABASE_ANON_KEY, authorization: `Bearer ${state.session.access_token}` };
+  if (state.testRole) headers['x-admin-test-role'] = state.testRole;
+  const response = await fetch(`${SUPABASE_URL}/functions/v1/issue-withdraw/${encodeURIComponent(action)}`, { method: 'POST', headers, body: JSON.stringify(payload) });
+  return parseResponse(response);
+}
 function setBusy(busy, text = 'Đang xử lý…') {
   const el = $('#busy');
   if (!el) return;
@@ -183,7 +191,7 @@ async function handleLogin(event) {
 function tabsForRole(currentRole) {
   if(currentRole==='ADMIN')return [['overview','Tổng quan'],['events','Sự kiện'],['sku','Danh mục SKU'],['reports','Báo cáo'],['users','Nhân sự & quyền'],['devices','Thiết bị'],['services','Hệ thống & dung lượng'],['logs','Nhật ký & kiểm tra'],['config','Cấu hình'],['versions','Phiên bản']];
   if(currentRole==='ADMIN_INVENT')return [['overview','Tổng quan'],['events','Sự kiện'],['sku','Danh mục SKU'],['reports','Báo cáo'],['users','Nhân sự'],['logs','Nhật ký'],['sla','Mốc thời gian']];
-  if(currentRole==='INVENT')return [['events','Sự kiện'],['sku','Danh mục SKU']];return [['picker','Báo thiếu hàng']];
+  if(currentRole==='INVENT')return [['events','Sự kiện']];return [['picker','Báo thiếu hàng']];
 }
 function tabFromHash(tabs) {
   const id = location.hash.replace(/^#\/?/, '').split('/')[0];
@@ -296,39 +304,46 @@ function formatAge(value) {
 }
 
 async function renderEvents() {
+  const buckets = [['open','CHỜ NHẬN'],['claimed',`ĐANG XỬ LÝ${role()==='INVENT'?' CỦA TÔI':''}`],['recent','ĐÃ XỬ LÝ GẦN ĐÂY'],['withdrawn','NGƯỜI LẤY HÀNG THU HỒI SKU']];
+  if (!buckets.some(([id]) => id === state.issueBucket)) state.issueBucket = 'open';
   $('#content').innerHTML = `<div class="heading"><div><p class="eyebrow">BÁO HÀNG</p><h2>Xử lý báo hàng</h2></div><button id="refreshBoard" class="secondary">Làm mới</button></div>
-    <div class="subtabs"><button data-bucket="open" class="active">CHỜ NHẬN</button><button data-bucket="claimed">ĐANG XỬ LÝ${role()==='INVENT'?' CỦA TÔI':''}</button><button data-bucket="recent">ĐÃ XỬ LÝ GẦN ĐÂY</button></div><div id="board"></div>`;
+    <div class="subtabs">${buckets.map(([id,label])=>`<button data-bucket="${id}" class="${id===state.issueBucket?'active':''}">${label}</button>`).join('')}</div><div id="board"></div>`;
   let board = null;
-  let bucket = 'open';
   const draw = () => {
-    const rows = board?.[bucket] || [];
-    $('#board').innerHTML = rows.length ? rows.map((issue) => issueCard(issue, bucket)).join('') : `<div class="card muted">Không có SKU ở nhóm này.</div>`;
+    const rows = board?.[state.issueBucket] || [];
+    $('#board').innerHTML = rows.length ? rows.map((issue) => issueCard(issue, state.issueBucket)).join('') : `<div class="card muted">Không có SKU ở nhóm này.</div>`;
     $$('[data-claim]').forEach((b) => b.onclick = () => claimIssue(b.dataset.claim, load));
     $$('[data-action]').forEach((b) => b.onclick = () => issueAction(b.dataset.issue, b.dataset.action, b.dataset.sku, load));
     $$('[data-reassign]').forEach((b) => b.onclick = () => openReassign(b.dataset.reassign, b.dataset.sku, load));
   };
   const load = async () => {
-    try { board = await api('issue-board'); draw(); }
-    catch (error) { $('#board').innerHTML = `<div class="message" data-type="error">${escapeHtml(safeMessage(error))}</div>`; }
+    try {
+      const [mainBoard, withdrawalBoard] = await Promise.all([api('issue-board'), issueWithdraw('board').catch(() => ({withdrawn:[]}))]);
+      board = { ...mainBoard, withdrawn: withdrawalBoard.withdrawn || [] };
+      draw();
+    } catch (error) { $('#board').innerHTML = `<div class="message" data-type="error">${escapeHtml(safeMessage(error))}</div>`; }
   };
   $('#refreshBoard').onclick = load;
-  $$('[data-bucket]').forEach((b) => b.onclick = () => { bucket = b.dataset.bucket; $$('[data-bucket]').forEach((x) => x.classList.toggle('active', x === b)); draw(); });
+  $$('[data-bucket]').forEach((b) => b.onclick = () => { state.issueBucket = b.dataset.bucket; $$('[data-bucket]').forEach((x) => x.classList.toggle('active', x === b)); draw(); });
   load();
 }
 function issueCard(issue, bucket) {
-  const recurrence = issue.recurrence_30m ? '<span class="badge warn">TÁI PHÁT ≤30 PHÚT</span>' : '';
+  const recurrence = issue.recurrence_30m ? '<span class="badge warn">BÁO LẠI TRONG 30 PHÚT</span>' : '';
   const assignment = issue.assigned_name ? ` · Xử lý: ${escapeHtml(issue.assigned_name)}` : '';
+  if (bucket === 'withdrawn') {
+    return `<article class="card issue"><div class="issue-top"><div><strong>SKU ${escapeHtml(issue.sku)}</strong><span>ĐÃ THU HỒI · v${Number(issue.issue_version || 1)}</span></div><time>${formatTime(issue.withdrawn_at || issue.updated_at)}</time></div><p>${escapeHtml(issue.product_name)}</p><small>Người lấy hàng: ${escapeHtml(issue.latest_reporter_name || '—')}</small><p class="muted">${escapeHtml(issue.latest_message || 'Đã ghi nhận thu hồi báo thiếu.')}</p></article>`;
+  }
   const header = `<article class="card issue"><div class="issue-top"><div><strong>SKU ${escapeHtml(issue.sku)}</strong><span>${Number(issue.report_count || 1)} lượt · v${Number(issue.issue_version || 1)}</span></div><time>${formatTime(issue.reported_at)}</time></div><p>${escapeHtml(issue.product_name)}</p><small>${escapeHtml(statusLabel(issue.status))}${assignment}</small>${recurrence}`;
   if (bucket === 'open') {
-    return `${header}<div class="actions"><button class="secondary" data-claim="${issue.id}">NHẬN XỬ LÝ</button>${elevated() ? `<button class="danger" data-action="NOT_FOUND" data-issue="${issue.id}" data-sku="${escapeHtml(issue.sku)}">CHO SKIP</button><button class="primary" data-action="AVAILABLE" data-issue="${issue.id}" data-sku="${escapeHtml(issue.sku)}">ĐÃ CÓ HÀNG</button>` : ''}</div></article>`;
+    return `${header}<div class="actions"><button class="secondary" data-claim="${issue.id}">NHẬN XỬ LÝ</button>${elevated() ? `<button class="primary" data-action="AVAILABLE" data-issue="${issue.id}" data-sku="${escapeHtml(issue.sku)}">CÓ HÀNG</button><button class="danger" data-action="NOT_FOUND" data-issue="${issue.id}" data-sku="${escapeHtml(issue.sku)}">CHO SKIP</button>` : ''}</div></article>`;
   }
   if (bucket === 'claimed') {
-    return `${header}<div class="actions"><button class="danger" data-action="NOT_FOUND" data-issue="${issue.id}" data-sku="${escapeHtml(issue.sku)}">KHÔNG THẤY — CHO SKIP</button><button class="primary" data-action="AVAILABLE" data-issue="${issue.id}" data-sku="${escapeHtml(issue.sku)}">ĐÃ CÓ HÀNG / CHÂM BÙ</button>${elevated() ? `<button class="secondary" data-reassign="${issue.id}" data-sku="${escapeHtml(issue.sku)}">ĐIỀU PHỐI LẠI</button>` : ''}</div></article>`;
+    return `${header}<div class="actions"><button class="primary" data-action="AVAILABLE" data-issue="${issue.id}" data-sku="${escapeHtml(issue.sku)}">CÓ HÀNG</button><button class="danger" data-action="NOT_FOUND" data-issue="${issue.id}" data-sku="${escapeHtml(issue.sku)}">CHO SKIP</button>${elevated() ? `<button class="secondary" data-reassign="${issue.id}" data-sku="${escapeHtml(issue.sku)}">ĐIỀU PHỐI LẠI</button>` : ''}</div></article>`;
   }
   return `${header}</article>`;
 }
 function statusLabel(status) {
-  return ({ OPEN:'Chờ nhận', CLAIMED:'Đang xử lý', SEARCHING:'Đang xử lý', REPLENISHING:'Đang xử lý', AVAILABLE:'Đã có hàng/châm bù', SKIP_ALLOWED:'Được phép skip', CLOSED:'Đã đóng' })[status] || status;
+  return ({ OPEN:'Chờ nhận', CLAIMED:'Đang xử lý', SEARCHING:'Đang xử lý', REPLENISHING:'Đang xử lý', AVAILABLE:'Đã có hàng', SKIP_ALLOWED:'Được phép SKIP', CLOSED:'Đã đóng', WITHDRAWN:'Đã thu hồi' })[status] || status;
 }
 async function claimIssue(id, done) {
   try { setBusy(true,'Đang nhận xử lý…'); await api('claim-issue',{ issue_id:id }); await done(); }
@@ -364,12 +379,17 @@ async function openReassign(issueId, sku, done) {
 
 function renderPicker() {
   $('#content').innerHTML = `<div class="heading"><div><p class="eyebrow">PICKER</p><h2>Người lấy hàng</h2></div></div>
-    <div class="card"><label>Quét hoặc tìm SKU / tên hàng<input id="skuSearch" placeholder="Quét mã hoặc nhập một phần tên"></label><div id="skuResults" class="search-results"></div>
+    <div class="card"><label>Nhập hoặc quét mã SKU<input id="skuSearch" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Nhập ít nhất 3 số của SKU"></label><div id="skuResults" class="search-results"></div>
     <div id="selectedSku" class="selected muted">Chưa chọn SKU</div><button id="reportShortage" class="danger wide" disabled>BÁO THIẾU</button><div id="pickerMsg" class="message" hidden></div></div>
     <div class="heading compact"><h3>Báo gần đây của tôi</h3><button id="refreshMine" class="secondary">Làm mới</button></div><div id="myIssues"></div><div id="pendingAlert"></div>`;
   let timer;
   state.selectedSku = null;
-  $('#skuSearch').addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(searchSku, 120); });
+  $('#skuSearch').addEventListener('input', (event) => {
+    event.target.value = event.target.value.replace(/\D/g,'');
+    clearTimeout(timer);
+    if (event.target.value.length < 3) { $('#skuResults').innerHTML = ''; return; }
+    timer = setTimeout(searchSku, 180);
+  });
   $('#reportShortage').onclick = reportShortage;
   $('#refreshMine').onclick = loadMyIssues;
   loadMyIssues();
@@ -379,9 +399,10 @@ function renderPicker() {
 async function searchSku() {
   const input = $('#skuSearch');
   const query = input?.value.trim();
-  if (!query) { $('#skuResults').innerHTML = ''; return; }
+  if (!/^\d{3,}$/.test(query || '')) { $('#skuResults').innerHTML = ''; return; }
   try {
-    const data = await api('search-skus',{ query, limit:20 });
+    const data = await issueWithdraw('search',{ query, limit:20 });
+    if (input.value.trim() !== query) return;
     $('#skuResults').innerHTML = data.items.map((item, index) => `<button data-result="${index}"><strong>${escapeHtml(item.sku)}</strong><span>${escapeHtml(item.product_name)}</span></button>`).join('');
     $$('[data-result]').forEach((button) => button.onclick = () => selectSku(data.items[Number(button.dataset.result)]));
   } catch (error) { message('#pickerMsg', safeMessage(error), 'error'); }
@@ -393,8 +414,8 @@ async function reportShortage() {
   const button = $('#reportShortage');
   button.disabled = true;
   try {
-    const result = await api('report-shortage',{ sku:item.sku, client_request_id:uuid() });
-    message('#pickerMsg', result.already_reported ? `SKU đã có báo trước. Đã ghi thêm lượt của bạn; tổng ${result.issue.report_count} lượt.` : 'Đã được server xác nhận báo thiếu.', 'good');
+    await api('report-shortage',{ sku:item.sku, client_request_id:uuid() });
+    message('#pickerMsg', `Đã ghi nhận báo thiếu SKU ${item.sku}.`, 'good');
     state.selectedSku = null;
     $('#skuSearch').value = '';
     $('#selectedSku').textContent = 'Chưa chọn SKU';
@@ -407,10 +428,18 @@ async function reportShortage() {
 async function loadMyIssues() {
   const target = $('#myIssues'); if (!target) return;
   try {
-    const data = await api('my-issues');
-    target.innerHTML = data.issues.length ? data.issues.slice(0,50).map((issue) => `<article class="card"><strong>${escapeHtml(statusLabel(issue.status))} · SKU ${escapeHtml(issue.sku)}</strong><p>${escapeHtml(issue.product_name)}</p><small>${Number(issue.report_count || 1)} lượt · ${formatTime(issue.reported_at)}</small></article>`).join('') : '<div class="card muted">Chưa có báo thiếu.</div>';
+    const data = await issueWithdraw('my');
+    target.innerHTML = data.issues.length ? data.issues.slice(0,50).map((issue) => `<article class="card"><strong>${escapeHtml(statusLabel(issue.status))} · SKU ${escapeHtml(issue.sku)}</strong><p>${escapeHtml(issue.product_name)}</p><small>${issue.status==='WITHDRAWN'?`Thu hồi lúc ${formatTime(issue.withdrawn_at)}`:`Báo lúc ${formatTime(issue.reported_at)}`}</small>${issue.can_withdraw?`<button class="danger" data-withdraw="${issue.id}" data-sku="${escapeHtml(issue.sku)}">THU HỒI BÁO THIẾU</button>`:''}</article>`).join('') : '<div class="card muted">Chưa có báo thiếu.</div>';
+    $$('[data-withdraw]').forEach((button) => button.onclick = () => withdrawPickerReport(button.dataset.withdraw, button.dataset.sku));
   } catch (error) { target.innerHTML = `<div class="message" data-type="error">${escapeHtml(safeMessage(error))}</div>`; }
 }
+async function withdrawPickerReport(issueId, sku) {
+  if (!confirm(`Thu hồi báo thiếu SKU ${sku}?\n\nChỉ có thể thu hồi trong 30 giây kể từ lúc báo.`)) return;
+  try { setBusy(true,'Đang thu hồi báo thiếu…'); await issueWithdraw('withdraw',{issue_id:issueId}); message('#pickerMsg',`Đã thu hồi SKU ${sku}.`,'good'); await loadMyIssues(); }
+  catch (error) { alert(safeMessage(error)); }
+  finally { setBusy(false); }
+}
+
 async function loadPendingAlerts() {
   const target = $('#pendingAlert'); if (!target) return;
   try {

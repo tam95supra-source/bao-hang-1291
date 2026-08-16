@@ -131,6 +131,19 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
         return cursor.use { buildList { while (it.moveToNext()) add(SkuItem(it.getString(0), it.getString(1))) } }
     }
 
+    fun searchSkuDigits(query: String, limit: Int = 20): List<SkuItem> {
+        val digits = query.trim()
+        if (digits.length < 3 || !digits.all(Char::isDigit)) return emptyList()
+        val cursor = readableDatabase.rawQuery(
+            """SELECT sku, product_name FROM sku_catalog
+               WHERE sku LIKE ?
+               ORDER BY CASE WHEN sku=? THEN 0 WHEN sku LIKE ? THEN 1 ELSE 2 END, sku
+               LIMIT ?""",
+            arrayOf("%$digits%", digits, "$digits%", limit.toString())
+        )
+        return cursor.use { buildList { while (it.moveToNext()) add(SkuItem(it.getString(0), it.getString(1))) } }
+    }
+
     fun skuCount(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM sku_catalog", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
     fun clearSkus() { writableDatabase.delete("sku_catalog", null, null) }
 

@@ -79,6 +79,20 @@ class ApiClient(
         }
     }
 
+    suspend fun searchSkuDigits(query: String, limit: Int = 20): List<SkuItem> {
+        val response = invokeWithdraw("search", JSONObject().put("query", query).put("limit", limit))
+        val array = response.optJSONArray("items") ?: JSONArray()
+        return buildList {
+            for (i in 0 until array.length()) {
+                val item = array.getJSONObject(i)
+                add(SkuItem(item.getString("sku"), item.getString("product_name")))
+            }
+        }
+    }
+
+    suspend fun withdrawShortage(issueId: String): JSONObject =
+        invokeWithdraw("withdraw", JSONObject().put("issue_id", issueId))
+
     suspend fun reportShortage(sku: String, clientRequestId: String): ReportResult {
         val json = invoke("report-shortage", JSONObject().put("sku", sku).put("client_request_id", clientRequestId))
         return ReportResult(
@@ -92,10 +106,12 @@ class ApiClient(
 
     suspend fun issueBoard(): IssueBoard {
         val response = invoke("issue-board", JSONObject())
+        val withdrawn = runCatching { invokeWithdraw("board", JSONObject()).optJSONArray("withdrawn").toStockIssues() }.getOrDefault(emptyList())
         return IssueBoard(
             open = response.optJSONArray("open").toStockIssues(),
             claimed = response.optJSONArray("claimed").toStockIssues(),
-            recent = response.optJSONArray("recent").toStockIssues()
+            recent = response.optJSONArray("recent").toStockIssues(),
+            withdrawn = withdrawn
         )
     }
 
@@ -103,7 +119,8 @@ class ApiClient(
         invoke("issue-detail", JSONObject().put("issue_id", issueId)).getJSONObject("issue")
     )
 
-    suspend fun myIssues(): List<StockIssue> = invoke("my-issues", JSONObject()).optJSONArray("issues").toStockIssues()
+    suspend fun myIssues(): List<StockIssue> = runCatching { invokeWithdraw("my", JSONObject()).optJSONArray("issues").toStockIssues() }
+        .getOrElse { invoke("my-issues", JSONObject()).optJSONArray("issues").toStockIssues() }
 
     suspend fun claimIssue(issueId: String): StockIssue = StockIssue.fromJson(
         invoke("claim-issue", JSONObject().put("issue_id", issueId)).getJSONObject("issue")
@@ -230,6 +247,11 @@ class ApiClient(
     suspend fun invoke(action: String, payload: JSONObject): JSONObject = withContext(Dispatchers.IO) {
         refreshSessionIfNeeded()
         request("POST", "$baseUrl/functions/v1/api/$action", payload, authenticated = true, eventName = "api_$action")
+    }
+
+    private suspend fun invokeWithdraw(action: String, payload: JSONObject): JSONObject = withContext(Dispatchers.IO) {
+        refreshSessionIfNeeded()
+        request("POST", "$baseUrl/functions/v1/issue-withdraw/$action", payload, authenticated = true, eventName = "issue_withdraw_$action")
     }
 
     private fun fetchProfile(accessToken: String, userId: String): UserProfile {

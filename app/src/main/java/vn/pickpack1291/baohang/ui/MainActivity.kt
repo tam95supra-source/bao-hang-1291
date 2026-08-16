@@ -25,6 +25,8 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -56,6 +58,9 @@ class MainActivity : AppCompatActivity() {
     private var searchJob: Job? = null
     private var realtimeAuthJob: Job? = null
     private var currentScreen = ""
+    private var inventSelectedTab = 0
+    private var inventRefresh: (() -> Unit)? = null
+    private var pickerRefresh: (() -> Unit)? = null
 
     private enum class ButtonTone { PRIMARY, SECONDARY, SUCCESS, DANGER }
 
@@ -65,8 +70,11 @@ class MainActivity : AppCompatActivity() {
             onIssueChanged = {
                 runOnUiThread {
                     when (currentScreen) {
-                        SCREEN_INVENT -> showInventBoard()
-                        SCREEN_PICKER -> lifecycleScope.launch { checkPendingAlerts() }
+                        SCREEN_INVENT -> inventRefresh?.invoke() ?: showInventBoard()
+                        SCREEN_PICKER -> {
+                            pickerRefresh?.invoke()
+                            lifecycleScope.launch { checkPendingAlerts() }
+                        }
                     }
                 }
             },
@@ -102,6 +110,13 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, LoginActivity::class.java)); finish(); return
         }
         setContentView(R.layout.activity_main)
+        val rootMain = findViewById<View>(R.id.rootMain)
+        ViewCompat.setOnApplyWindowInsetsListener(rootMain) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
+        }
+        ViewCompat.requestApplyInsets(rootMain)
         container = findViewById(R.id.contentContainer)
         findViewById<TextView>(R.id.btnBack).setOnClickListener { navigateBack() }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -174,6 +189,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun page(title: String, screen: String): LinearLayout {
         currentScreen = screen
+        if (screen != SCREEN_INVENT) inventRefresh = null
+        if (screen != SCREEN_PICKER) pickerRefresh = null
         container.removeAllViews()
         updateBackButton()
         val scroll = ScrollView(this).apply { isFillViewport = true }
@@ -252,15 +269,15 @@ class MainActivity : AppCompatActivity() {
         val boardContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         content.addView(status)
         content.addView(tabs)
-        content.addView(boardContainer)
         addDiagnosticsButton(content)
+        content.addView(boardContainer)
 
         var board: IssueBoard? = null
-        var selected = 0
+        var selected = inventSelectedTab.coerceIn(0, 4)
         val tabButtons = mutableListOf<Button>()
         val tabBadges = mutableListOf<TextView>()
         fun updateTabs() {
-            val counts = board?.let { listOf(it.open.size, it.claimed.size, it.available.size, it.skipped.size) } ?: listOf(0, 0, 0, 0)
+            val counts = board?.let { listOf(it.open.size, it.claimed.size, it.available.size, it.skipped.size, it.withdrawn.size) } ?: listOf(0, 0, 0, 0, 0)
             tabButtons.forEachIndexed { index, tab ->
                 val active = index == selected
                 tab.setBackgroundResource(if (active) R.drawable.bg_button_primary else R.drawable.bg_button_secondary)
@@ -278,25 +295,27 @@ class MainActivity : AppCompatActivity() {
                 1 -> data.claimed
                 2 -> data.available
                 3 -> data.skipped
+                4 -> data.withdrawn
                 else -> data.open
             }
             boardContainer.removeAllViews()
             if (list.isEmpty()) boardContainer.addView(infoBox("Không có SKU trong nhóm này."))
-            list.forEach { issue -> boardContainer.addView(issueCard(issue, selected) { loadInventBoard(status) { board = it; draw() } }) }
+            list.forEach { issue -> boardContainer.addView(issueCard(issue, selected) { inventRefresh?.invoke() }) }
             status.text = when (selected) {
                 1 -> "${list.size} SKU đang xử lý${if (app.session.effectiveRole == UserRole.INVENT) " của tôi" else ""}"
                 2 -> "${list.size} SKU đã có hàng"
-                3 -> "${list.size} SKU đã được cho phép bỏ qua"
+                3 -> "${list.size} SKU đã được cho SKIP"
+                4 -> "${list.size} lượt Người lấy hàng đã thu hồi SKU"
                 else -> "${list.size} SKU đang chờ xử lý"
             }
             updateTabs()
         }
-        val labels = listOf("Chờ xử lý", "Đang xử lý", "Đã có hàng", "Đã bỏ qua")
+        val labels = listOf("Chờ xử lý", "Đang xử lý", "Đã có hàng", "Đã bỏ qua", "Người lấy hàng thu hồi SKU")
         labels.chunked(2).forEachIndexed { rowIndex, rowLabels ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
             rowLabels.forEachIndexed { columnIndex, label ->
                 val index = rowIndex * 2 + columnIndex
-                val tab = button(label) { selected = index; draw() }
+                val tab = button(label) { selected = index; inventSelectedTab = index; draw() }
                 val badge = text("", 11, true).apply {
                     gravity = Gravity.CENTER
                     setTextColor(getColor(R.color.white))
@@ -314,9 +333,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 val tabFrame = FrameLayout(this)
                 tabFrame.addView(tab, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), Gravity.BOTTOM))
-                tabFrame.addView(badge, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(24), Gravity.TOP or Gravity.END).apply {
-                    setMargins(0, 0, dp(1), 0)
-                })
+                tabFrame.addView(badge, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(24), Gravity.TOP or Gravity.END).apply { setMargins(0, 0, dp(1), 0) })
                 tabButtons += tab
                 tabBadges += badge
                 row.addView(tabFrame, LinearLayout.LayoutParams(0, dp(52), 1f).apply { setMargins(dp(2), dp(1), dp(2), dp(1)) })
@@ -325,7 +342,8 @@ class MainActivity : AppCompatActivity() {
         }
         tabs.setPadding(0, dp(3), 0, dp(7))
         updateTabs()
-        loadInventBoard(status) { board = it; draw() }
+        inventRefresh = { loadInventBoard(status) { board = it; draw() } }
+        inventRefresh?.invoke()
     }
 
     private fun loadInventBoard(status: TextView, onLoaded: (IssueBoard) -> Unit) {
@@ -348,7 +366,12 @@ class MainActivity : AppCompatActivity() {
         val recurrent = if (issue.recurrence30m) " • BÁO LẠI TRONG 30 PHÚT" else ""
         card.addView(text("SKU ${issue.sku}", 18, true))
         card.addView(text(issue.productName, 14, false).apply { setPadding(0, dp(2), 0, dp(4)) })
-        card.addView(text("${issue.status.label} • ${issue.reportCount} lượt • v${issue.issueVersion}$recurrent", 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
+        val issueSummary = if (bucket == 4) "${issue.status.label} • v${issue.issueVersion}" else "${issue.status.label} • ${issue.reportCount} lượt • v${issue.issueVersion}$recurrent"
+        card.addView(text(issueSummary, 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
+        if (bucket == 4) {
+            card.addView(text("Người lấy hàng: ${issue.latestReporterName.ifBlank { "—" }} • Thu hồi lúc ${shortTime(issue.withdrawnAt)}", 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
+            card.addView(text(if (issue.latestMessage.isNotBlank()) issue.latestMessage else "Đã ghi nhận thu hồi báo thiếu.", 12, false).apply { setPadding(0, dp(4), 0, 0) })
+        }
         card.addView(text("Báo lúc ${shortTime(issue.reportedAt)}${if (issue.assignedName.isNotBlank()) " • Xử lý: ${issue.assignedName}" else ""}", 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
         if (bucket == 0) {
             card.addView(button("Nhận xử lý", ButtonTone.PRIMARY) {
@@ -360,14 +383,14 @@ class MainActivity : AppCompatActivity() {
             })
             if (elevated) {
                 val direct = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-                direct.addView(button("Cho phép bỏ qua", ButtonTone.DANGER) { confirmIssueUpdate(issue, "NOT_FOUND", refresh) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(0, dp(5), dp(2), 0) })
-                direct.addView(button("Đã có hàng", ButtonTone.SUCCESS) { confirmIssueUpdate(issue, "AVAILABLE", refresh) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(dp(2), dp(5), 0, 0) })
+                direct.addView(button("Có hàng", ButtonTone.SUCCESS) { confirmIssueUpdate(issue, "AVAILABLE", refresh) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(0, dp(5), dp(2), 0) })
+                direct.addView(button("Cho SKIP", ButtonTone.DANGER) { confirmIssueUpdate(issue, "NOT_FOUND", refresh) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(dp(2), dp(5), 0, 0) })
                 card.addView(direct)
             }
         } else if (bucket == 1) {
-            val actions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            actions.addView(button("Đã có hàng / đã châm hàng", ButtonTone.SUCCESS) { confirmIssueUpdate(issue, "AVAILABLE", refresh) })
-            actions.addView(button("Không tìm thấy • cho phép bỏ qua", ButtonTone.DANGER) { confirmIssueUpdate(issue, "NOT_FOUND", refresh) })
+            val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            actions.addView(button("Có hàng", ButtonTone.SUCCESS) { confirmIssueUpdate(issue, "AVAILABLE", refresh) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(0, dp(5), dp(2), 0) })
+            actions.addView(button("Cho SKIP", ButtonTone.DANGER) { confirmIssueUpdate(issue, "NOT_FOUND", refresh) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(dp(2), dp(5), 0, 0) })
             card.addView(actions)
             if (elevated) card.addView(button("Điều phối lại") { reassignIssue(issue, refresh) })
         } else if (bucket == 3) {
@@ -379,8 +402,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun confirmIssueUpdate(issue: StockIssue, action: String, refresh: () -> Unit) {
         val isSkip = action == "NOT_FOUND"
-        val firstMessage = if (isSkip) "Không tìm thấy SKU ${issue.sku}. Cho phép Người lấy hàng bỏ qua SKU này?" else "Xác nhận SKU ${issue.sku} đã có hàng hoặc đã châm hàng?"
-        AlertDialog.Builder(this).setTitle(if (isSkip) "Cho phép bỏ qua" else "Đã có hàng")
+        val firstMessage = if (isSkip) "Không tìm thấy SKU ${issue.sku}. Cho Người lấy hàng SKIP SKU này?" else "Xác nhận SKU ${issue.sku} hiện đã có hàng?"
+        AlertDialog.Builder(this).setTitle(if (isSkip) "Cho SKIP" else "Có hàng")
             .setMessage(firstMessage).setNegativeButton("Hủy", null)
             .setPositiveButton("Xác nhận") { _, _ ->
                 if (isSkip) {
@@ -467,8 +490,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun showPicker() {
         val content = page("Báo thiếu hàng", SCREEN_PICKER)
-        content.addView(text("Quét SKU hoặc nhập tên hàng", 14, true).apply { setPadding(0, 0, 0, dp(5)) })
-        val input = AutoCompleteTextView(this).apply { hint = "Quét SKU / nhập tên sản phẩm"; threshold = 1; setSingleLine(true) }
+        content.addView(text("Nhập hoặc quét mã SKU", 14, true).apply { setPadding(0, 0, 0, dp(5)) })
+        val input = AutoCompleteTextView(this).apply {
+            hint = "Nhập ít nhất 3 số của SKU"
+            threshold = 3
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setSingleLine(true)
+        }
         val suggestionsAdapter = ArrayAdapter<SkuItem>(this, android.R.layout.simple_dropdown_item_1line, mutableListOf())
         input.setAdapter(suggestionsAdapter)
         val selected = infoBox("Chưa chọn SKU")
@@ -479,9 +507,9 @@ class MainActivity : AppCompatActivity() {
         content.addView(input)
         content.addView(selected)
         content.addView(reportButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)).apply { setMargins(0, dp(4), 0, dp(2)) })
+        addDiagnosticsButton(content)
         content.addView(section("Báo gần đây"))
         content.addView(recent)
-        addDiagnosticsButton(content)
         fun select(item: SkuItem) {
             chosen = item
             selected.text = "SKU ${item.sku}\n${item.productName}"
@@ -494,11 +522,11 @@ class MainActivity : AppCompatActivity() {
         fun suggestions(query: String) {
             searchJob?.cancel()
             val requested = query.trim()
-            if (requested.isBlank()) { suggestionsAdapter.clear(); input.dismissDropDown(); return }
+            if (!requested.matches(Regex("\\d{3,}"))) { suggestionsAdapter.clear(); input.dismissDropDown(); return }
             searchJob = lifecycleScope.launch {
-                delay(220)
-                val local = withContext(Dispatchers.IO) { app.repository.searchSkus(requested) }
-                val items = if (local.isNotEmpty() || requested.length < 3) local else runCatching { app.repository.searchSkusOnline(requested) }.getOrDefault(emptyList())
+                delay(180)
+                val local = withContext(Dispatchers.IO) { app.repository.searchSkuDigits(requested) }
+                val items = if (local.isNotEmpty()) local else runCatching { app.repository.searchSkuDigitsOnline(requested) }.getOrDefault(emptyList())
                 if (input.text.toString().trim() != requested || !input.hasFocus()) return@launch
                 suggestionsAdapter.clear()
                 suggestionsAdapter.addAll(items)
@@ -509,8 +537,15 @@ class MainActivity : AppCompatActivity() {
         input.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(v: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(v: CharSequence?, start: Int, before: Int, count: Int) {
+                val raw = v?.toString().orEmpty()
+                val digits = raw.filter(Char::isDigit)
+                if (raw != digits) {
+                    input.setText(digits, false)
+                    input.setSelection(digits.length)
+                    return
+                }
                 searchJob?.cancel()
-                if (v.isNullOrBlank()) { suggestionsAdapter.clear(); input.dismissDropDown() } else suggestions(v.toString())
+                if (digits.length < 3) { suggestionsAdapter.clear(); input.dismissDropDown() } else suggestions(digits)
             }
             override fun afterTextChanged(v: Editable?) = Unit
         })
@@ -521,7 +556,7 @@ class MainActivity : AppCompatActivity() {
                 reportButton.isEnabled = false
                 runCatching { app.repository.reportShortage(item.sku) }
                     .onSuccess {
-                        toast(it.message)
+                        toast("Đã ghi nhận báo thiếu SKU ${item.sku}")
                         chosen = null
                         selected.text = "Chưa chọn SKU"
                         loadMyIssues(recent)
@@ -531,7 +566,9 @@ class MainActivity : AppCompatActivity() {
                 reportButton.isEnabled = chosen != null
             }
         }
-        loadMyIssues(recent); input.requestFocus()
+        pickerRefresh = { loadMyIssues(recent) }
+        pickerRefresh?.invoke()
+        input.requestFocus()
     }
 
     private fun loadMyIssues(target: LinearLayout) {
@@ -541,10 +578,36 @@ class MainActivity : AppCompatActivity() {
                     target.removeAllViews()
                     if (issues.isEmpty()) target.addView(infoBox("Chưa có báo thiếu."))
                     issues.take(50).forEach { issue ->
-                        target.addView(infoBox("${issue.status.label} • SKU ${issue.sku}\n${issue.productName}\n${issue.reportCount} lượt • ${shortTime(issue.reportedAt)}"))
+                        val row = LinearLayout(this@MainActivity).apply {
+                            orientation = LinearLayout.VERTICAL
+                            setPadding(dp(12), dp(10), dp(12), dp(10))
+                            setBackgroundResource(R.drawable.bg_card)
+                        }
+                        row.addView(text("${issue.status.label} • SKU ${issue.sku}", 16, true))
+                        row.addView(text(issue.productName, 13, false).apply { setPadding(0, dp(2), 0, dp(2)) })
+                        val time = if (issue.status == IssueStatus.WITHDRAWN && issue.withdrawnAt.isNotBlank()) "Thu hồi lúc ${shortTime(issue.withdrawnAt)}" else "Báo lúc ${shortTime(issue.reportedAt)}"
+                        row.addView(text(time, 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
+                        if (issue.canWithdraw) {
+                            row.addView(button("Thu hồi báo thiếu", ButtonTone.DANGER) { confirmWithdrawIssue(issue, target) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { setMargins(0, dp(6), 0, 0) })
+                        }
+                        target.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(4), 0, dp(4)) })
                     }
                 }.onFailure { target.removeAllViews(); target.addView(infoBox("Không tải được lịch sử: ${it.message}")) }
         }
+    }
+
+    private fun confirmWithdrawIssue(issue: StockIssue, target: LinearLayout) {
+        AlertDialog.Builder(this)
+            .setTitle("Thu hồi báo thiếu?")
+            .setMessage("Thu hồi báo thiếu SKU ${issue.sku}? Thao tác chỉ hợp lệ trong 30 giây kể từ lúc báo.")
+            .setNegativeButton("Không", null)
+            .setPositiveButton("Có") { _, _ ->
+                lifecycleScope.launch {
+                    runCatching { app.repository.withdrawShortage(issue.id) }
+                        .onSuccess { toast("Đã thu hồi SKU ${issue.sku}"); loadMyIssues(target) }
+                        .onFailure { toast(it.message ?: "Không thể thu hồi SKU") }
+                }
+            }.show()
     }
 
     private fun showCatalog() {
@@ -771,12 +834,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun addDiagnosticsButton(content: LinearLayout) {
-        content.addView(button("Gửi chẩn đoán", ButtonTone.SECONDARY) {
-            lifecycleScope.launch {
-                runCatching { app.repository.sendDiagnosticLog() }
-                    .onSuccess { toast(if (it.optBoolean("uploaded")) "Đã gửi dữ liệu chẩn đoán" else it.optString("message", "Chưa có dữ liệu chẩn đoán")) }
-                    .onFailure { toast(it.message ?: "Không gửi được dữ liệu chẩn đoán") }
-            }
+        content.addView(button("Gửi nhật ký chẩn đoán", ButtonTone.SECONDARY) {
+            AlertDialog.Builder(this)
+                .setTitle("Gửi nhật ký chẩn đoán?")
+                .setMessage("Gửi dữ liệu chẩn đoán của ứng dụng để kiểm tra lỗi?")
+                .setNegativeButton("Không", null)
+                .setPositiveButton("Có") { _, _ ->
+                    lifecycleScope.launch {
+                        runCatching { app.repository.sendDiagnosticLog() }
+                            .onSuccess { toast(if (it.optBoolean("uploaded")) "Đã gửi dữ liệu chẩn đoán" else it.optString("message", "Chưa có dữ liệu chẩn đoán")) }
+                            .onFailure { toast(it.message ?: "Không gửi được dữ liệu chẩn đoán") }
+                    }
+                }.show()
         })
     }
 

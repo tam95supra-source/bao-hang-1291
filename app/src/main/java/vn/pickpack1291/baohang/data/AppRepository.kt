@@ -56,6 +56,9 @@ class AppRepository(
 
     fun searchSkus(query: String) = database.searchSkus(query)
     suspend fun searchSkusOnline(query: String) = api.searchSkus(query)
+    fun searchSkuDigits(query: String) = database.searchSkuDigits(query)
+    suspend fun searchSkuDigitsOnline(query: String) = api.searchSkuDigits(query)
+    suspend fun withdrawShortage(issueId: String) = api.withdrawShortage(issueId)
 
 
     suspend fun reportShortage(sku: String): ReportResult {
