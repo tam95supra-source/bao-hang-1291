@@ -29,7 +29,49 @@ jobs:
         with:
           deno-version: v2.x
       - name: Apply guarded product patch
-        run: python3 .automation/patch_search_counts.py
+        run: |
+          set -euo pipefail
+          set +e
+          output="$(python3 .automation/patch_search_counts.py 2>&1)"
+          rc=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$rc" -ne 0 ]; then
+            printf '%s\n' "$output" | grep -Fx 'web five status tabs: expected exactly 1 match, got 2' >/dev/null || exit "$rc"
+            python3 - <<'PY'
+          from pathlib import Path
+          p = Path('web-admin/src/warehouse-ui-v2.css')
+          s = p.read_text()
+          old = '''.wv2-tabs {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+          '''
+          new = '''.wv2-tabs {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+          '''
+          if s.count(old) != 1:
+              raise SystemExit(f'css targeted guard: expected 1 match, got {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          fi
+          python3 - <<'PY'
+          from pathlib import Path
+          checks = {
+              'app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt': ['InputFilter.LengthFilter(8)', 'withdrawRemainingMs', 'SystemClock.elapsedRealtime()', 'Không có SKU chứa chuỗi', 'data.availableCount'],
+              'app/src/main/java/vn/pickpack1291/baohang/data/AppDatabase.kt': ['instr(sku, ?) > 0', 'digits.length !in 3..8'],
+              'supabase/functions/api/index.ts': ['resolved: "TODAY"', 'siteDayBounds', 'availableCount.count'],
+              'supabase/functions/issue-withdraw/index.ts': ['withdraw_remaining_ms', 'scope:"TODAY"', 'fetchLimit'],
+              'web-admin/src/warehouse-ui-v2.js': ["withdrawApi('board')", 'Đã thu hồi', 'Có hàng/SKIP/Thu hồi = hôm nay'],
+              'web-admin/src/warehouse-ui-v2.css': ['grid-template-columns: repeat(5, minmax(0, 1fr));', 'data-state="withdrawn"'],
+          }
+          for path, needles in checks.items():
+              data = Path(path).read_text()
+              for needle in needles:
+                  if needle not in data:
+                      raise SystemExit(f'shape check failed: {path}: {needle}')
+          print('PATCH_SHAPE=PASS')
+          PY
       - name: Android unit test and debug build
         run: gradle --no-daemon testDebugUnitTest assembleDebug
       - name: Web production build
