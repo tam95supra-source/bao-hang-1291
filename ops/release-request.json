@@ -1,8 +1,8 @@
 {
   "action": "publish",
   "channel": "beta",
-  "versionName": "1.6.1",
-  "versionCode": 9,
+  "versionName": "1.6.2",
+  "versionCode": 10,
   "mandatory": false,
-  "releaseNotes": "Beta 1.6.1: tối ưu tìm SKU để giảm giật/lag khi nhập hoặc quét; thêm số lượng dạng thông báo ở góc 4 trạng thái Chờ xử lý, Đang xử lý, Đã có hàng, Đã bỏ qua; giảm kết nối Realtime không đúng quyền; thay các thuật ngữ kỹ thuật khó hiểu bằng từ nghiệp vụ dễ hiểu. Web đã sửa Realtime App → Web để tự cập nhật không cần F5."
+  "releaseNotes": "Beta 1.6.2: Người báo hàng giữ nguyên nhóm đang xem khi Realtime/làm mới; Picker bỏ số lượt báo và chỉ tìm SKU bằng chuỗi số từ 3 chữ số, khớp ở mọi vị trí của mã SKU, không tìm theo tên; Gửi nhật ký có xác nhận Có/Không và đặt phía trên danh sách; căn giao diện tránh sát thanh hệ thống điện thoại/PDA; Picker được thu hồi lượt báo mới nhất trong 30 giây theo giờ server, quá 30 giây bị chặn, trạng thái Đã thu hồi đồng bộ đến nhóm Người lấy hàng thu hồi SKU và cảnh báo Người báo hàng/Admin; Người báo hàng bỏ mục tìm SKU; nút xử lý đổi thành Có hàng và Cho SKIP, bố trí ngang cân nhau."
 }
