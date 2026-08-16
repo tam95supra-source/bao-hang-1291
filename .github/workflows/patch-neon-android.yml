@@ -1,0 +1,94 @@
+name: Patch Neon Android restore flow
+
+on:
+  push:
+    branches:
+      - migration/neon-cutover
+    paths:
+      - '.github/workflows/patch-neon-android.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.repository == 'tam95supra-source/bao-hang-1291' && github.ref == 'refs/heads/migration/neon-cutover'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: migration/neon-cutover
+          fetch-depth: 0
+      - name: Guard and patch Android Neon restore flow
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
+          test "$GITHUB_REF" = 'refs/heads/migration/neon-cutover'
+          ! grep -RInE 'ttwftrooaizxmjovkbaz|pick-pack-1291-primary|19a7c8e9-9fc0-4b04-a545-bcbe84b1bcb1' app/src app/build.gradle.kts
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          main_path = Path('app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt')
+          api_path = Path('app/src/main/java/vn/pickpack1291/baohang/network/ApiClient.kt')
+
+          main = main_path.read_text()
+          for imp in (
+              'import java.net.HttpURLConnection\n',
+              'import java.net.URI\n',
+              'import java.nio.charset.StandardCharsets\n',
+          ):
+              if main.count(imp) != 1:
+                  raise SystemExit(f'Unexpected import count for {imp.strip()}: {main.count(imp)}')
+              main = main.replace(imp, '')
+
+          pattern = re.compile(
+              r'    private suspend fun restoreSkippedIssue\(issueId: String\): StockIssue = withContext\(Dispatchers\.IO\) \{.*?\n    \}\n\n    private fun reassignIssue',
+              re.S,
+          )
+          replacement = (
+              '    private suspend fun restoreSkippedIssue(issueId: String): StockIssue =\n'
+              '        app.api.restoreSkippedIssue(issueId)\n\n'
+              '    private fun reassignIssue'
+          )
+          main, count = pattern.subn(replacement, main, count=1)
+          if count != 1:
+              raise SystemExit(f'Expected exactly one legacy restoreSkippedIssue block, got {count}')
+          if 'SUPABASE_URL' in main or 'SUPABASE_ANON_KEY' in main:
+              raise SystemExit('Legacy Supabase BuildConfig reference remains in MainActivity')
+          main_path.write_text(main)
+
+          api = api_path.read_text()
+          if 'suspend fun restoreSkippedIssue(issueId: String)' not in api:
+              marker = '    suspend fun pendingAlerts(): List<PendingAlert> {'
+              if api.count(marker) != 1:
+                  raise SystemExit(f'Unexpected pendingAlerts marker count: {api.count(marker)}')
+              method = '''    suspend fun restoreSkippedIssue(issueId: String): StockIssue {\n        val issue = StockIssue.fromJson(\n            invoke(\n                "restore-skipped",\n                JSONObject()\n                    .put("issue_id", issueId)\n                    .put("reason", "Đã tìm thấy hàng sau khi cho phép bỏ qua")\n            ).getJSONObject("issue")\n        )\n        kickWorkerBestEffort("restore_skipped")\n        return issue\n    }\n\n'''
+              api = api.replace(marker, method + marker, 1)
+
+          if '"restore-skipped" -> "api_restore_skipped_issue_rpc"' not in api:
+              marker = '            "withdraw-shortage" -> "api_withdraw_shortage_rpc" to base().put("p_issue_id", payload.getString("issue_id"))'
+              if api.count(marker) != 1:
+                  raise SystemExit(f'Unexpected withdraw mapping marker count: {api.count(marker)}')
+              mapping = '''            "restore-skipped" -> "api_restore_skipped_issue_rpc" to base()\n                .put("p_issue_id", payload.getString("issue_id"))\n                .put("p_reason", payload.optString("reason"))\n'''
+              api = api.replace(marker, mapping + marker, 1)
+
+          if 'SUPABASE_URL' in api or 'SUPABASE_ANON_KEY' in api:
+              raise SystemExit('Legacy Supabase BuildConfig reference remains in ApiClient')
+          api_path.write_text(api)
+          PY
+          ! grep -RInE 'ttwftrooaizxmjovkbaz|pick-pack-1291-primary|19a7c8e9-9fc0-4b04-a545-bcbe84b1bcb1' app/src app/build.gradle.kts
+          git diff --check
+          git diff -- app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt app/src/main/java/vn/pickpack1291/baohang/network/ApiClient.kt
+      - name: Commit guarded patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'bao-hang-1291-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt app/src/main/java/vn/pickpack1291/baohang/network/ApiClient.kt
+          git diff --cached --quiet && { echo 'No patch required'; exit 0; }
+          git commit -m 'fix(migration): route skipped restore through Neon RPC'
+          git push origin HEAD:migration/neon-cutover
