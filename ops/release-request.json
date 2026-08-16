@@ -1,8 +1,8 @@
 {
   "action": "publish",
   "channel": "beta",
-  "versionName": "1.6.3",
-  "versionCode": 11,
+  "versionName": "1.6.4",
+  "versionCode": 12,
   "mandatory": false,
-  "releaseNotes": "Beta 1.6.3: sửa logic tìm/gợi ý SKU của Picker theo chuỗi số 3–8 ký tự ở bất kỳ vị trí nào của mã, ưu tiên tìm từ cache máy và bỏ cơ chế lọc ngầm/debounce gây chậm; chuẩn hóa số đếm vận hành trên app và web: Chờ xử lý/Đang xử lý là số hiện tại, Có hàng/Cho SKIP/Thu hồi là số phát sinh hôm nay theo giờ kho Việt Nam, count lấy trực tiếp từ backend; Web bổ sung nhóm Đã thu hồi; nút Thu hồi dùng thời gian còn lại do server tính, tự ẩn khi hết 30 giây và kiểm lại ngay lúc bấm/xác nhận, server vẫn chặn cuối cùng nếu quá hạn."
+  "releaseNotes": "Beta 1.6.4: bỏ bước Chờ xử lý/Nhận xử lý, gộp toàn bộ SKU active vào Đang xử lý và vẫn ghi nhận chính xác người bấm Có hàng/Cho SKIP; App Người báo hàng còn 4 nhóm Đang xử lý, Đã có hàng, Đã bỏ qua, Picker thu hồi SKU, đưa nhóm xuống đáy, bỏ tiêu đề/count thừa, tên SKU và tên hàng in đậm, thêm ghi chú lịch sử trong ngày; App Picker căn trái gợi ý, đưa lịch sử/gợi ý lên trên và vùng nhập SKU + Báo thiếu xuống đáy; thanh App chỉ hiện họ tên + quyền, thêm Log cạnh Thoát và bỏ nút gửi log trong nội dung; cập nhật copyright App/Web thành Copyright 2026 - SUPRA DC HƯNG YÊN - tamnv2 - Chuyên viên Pick Pack 1291."
 }
