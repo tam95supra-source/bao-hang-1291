@@ -1,0 +1,34 @@
+name: Validate Neon web client
+
+on:
+  push:
+    branches: [migration/neon-cutover]
+    paths:
+      - 'web-admin/**'
+      - '.github/workflows/validate-neon-web.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: web-admin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Fail closed on PICK PACK identifiers
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -RInE 'ttwftrooaizxmjovkbaz|pick-pack-1291-primary|19a7c8e9-9fc0-4b04-a545-bcbe84b1bcb1' src package.json vite.config.js
+      - name: Install dependencies without cache or artifacts
+        run: npm install --no-audit --no-fund
+      - name: Build web
+        run: npm run build
