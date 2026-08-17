@@ -28,10 +28,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-
       - name: Install Firebase Admin without cache
         run: npm install --no-save --no-audit --no-fund firebase-admin@13
-
       - name: Create isolated Firebase PICKER and exercise Neon Data API
         shell: bash
         run: |
@@ -40,7 +38,6 @@ jobs:
           password="$(openssl rand -base64 30 | tr -d '\n')Aa1!"
           echo "::add-mask::$password"
           export TEST_PASSWORD="$password"
-
           cleanup() {
             node <<'NODE' >/dev/null 2>&1 || true
           const admin = require('firebase-admin');
@@ -50,7 +47,6 @@ jobs:
             rm -f login.json session.json search.json report.json mine.json admin.json direct.json
           }
           trap cleanup EXIT
-
           node <<'NODE'
           const admin = require('firebase-admin');
           admin.initializeApp({credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT))});
@@ -61,52 +57,40 @@ jobs:
             console.log('TEMP_FIREBASE_PICKER_CREATED');
           })().catch(e=>{console.error(e.message);process.exit(1)});
           NODE
-
-          http="$(curl --silent --show-error --output login.json --write-out '%{http_code}' \
-            --header 'Content-Type: application/json' \
-            --data "$(jq -nc --arg email "$TEST_EMAIL" --arg password "$password" '{email:$email,password:$password,returnSecureToken:true}')" \
-            "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$FIREBASE_API_KEY")"
-          test "$http" = '200'
+          http="$(curl --silent --show-error --output login.json --write-out '%{http_code}' --header 'Content-Type: application/json' --data "$(jq -nc --arg email "$TEST_EMAIL" --arg password "$password" '{email:$email,password:$password,returnSecureToken:true}')" "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$FIREBASE_API_KEY")"
+          echo "LOGIN_HTTP=$http"
+          if test "$http" != '200'; then jq -r '.error.message // "LOGIN_FAILED"' login.json; exit 1; fi
           token="$(jq -er '.idToken' login.json)"
           echo "::add-mask::$token"
-          test -n "$token"
-
           call_rpc() {
             local name="$1" body="$2" out="$3"
-            curl --silent --show-error --output "$out" --write-out '%{http_code}' \
-              --header 'Content-Type: application/json' \
-              --header "Authorization: Bearer $token" \
-              --data "$body" "$NEON_API/rpc/$name"
+            curl --silent --show-error --output "$out" --write-out '%{http_code}' --header 'Content-Type: application/json' --header "Authorization: Bearer $token" --data "$body" "$NEON_API/rpc/$name"
           }
-
           http="$(call_rpc api_session_profile_rpc '{"p_test_role":null}' session.json)"
-          test "$http" = '200'
-          jq -e --arg uid "$TEST_UID" '.profile.id==$uid and .profile.role=="PICKER" and .effective_role=="PICKER"' session.json >/dev/null
-
+          echo "SESSION_HTTP=$http"
+          if test "$http" != '200'; then jq -r '.message // .error // "SESSION_FAILED"' session.json; exit 1; fi
+          jq -e --arg uid "$TEST_UID" '.profile.id==$uid and .profile.role=="PICKER" and .effective_role=="PICKER"' session.json >/dev/null || { echo SESSION_SHAPE_FAILED; exit 1; }
+          echo SESSION_OK
           http="$(call_rpc api_search_skus_rpc "$(jq -nc --arg q "$TEST_SKU" '{p_query:$q,p_limit:5,p_test_role:null}')" search.json)"
-          test "$http" = '200'
-          jq -e --arg sku "$TEST_SKU" 'tostring | contains($sku)' search.json >/dev/null
-
+          echo "SEARCH_HTTP=$http"
+          if test "$http" != '200'; then jq -r '.message // .error // "SEARCH_FAILED"' search.json; exit 1; fi
+          jq -e --arg sku "$TEST_SKU" 'tostring | contains($sku)' search.json >/dev/null || { echo SEARCH_SHAPE_FAILED; exit 1; }
+          echo SEARCH_OK
           client_request="p6-$(date +%s)-$RANDOM"
           http="$(call_rpc report_shortage_rpc "$(jq -nc --arg sku "$TEST_SKU" --arg req "$client_request" '{p_sku:$sku,p_client_request_id:$req}')" report.json)"
-          test "$http" = '200'
-          jq -e --arg sku "$TEST_SKU" '.issue.sku==$sku and (.issue.id|type)=="string"' report.json >/dev/null
+          echo "REPORT_HTTP=$http"
+          if test "$http" != '200'; then jq -r '.message // .error // "REPORT_FAILED"' report.json; exit 1; fi
+          jq -e --arg sku "$TEST_SKU" '.issue.sku==$sku and (.issue.id|type)=="string"' report.json >/dev/null || { echo REPORT_SHAPE_FAILED; exit 1; }
           issue_id="$(jq -er '.issue.id' report.json)"
           echo "P6_TEST_ISSUE_ID=$issue_id"
-
           http="$(call_rpc api_picker_my_issues_rpc '{"p_test_role":null}' mine.json)"
-          test "$http" = '200'
-          jq -e --arg issue "$issue_id" 'tostring | contains($issue)' mine.json >/dev/null
-
+          echo "MY_ISSUES_HTTP=$http"
+          if test "$http" != '200'; then jq -r '.message // .error // "MY_ISSUES_FAILED"' mine.json; exit 1; fi
+          jq -e --arg issue "$issue_id" 'tostring | contains($issue)' mine.json >/dev/null || { echo MY_ISSUES_SHAPE_FAILED; exit 1; }
           http="$(call_rpc api_admin_summary_rpc '{"p_test_role":null}' admin.json)"
+          echo "ADMIN_GATE_HTTP=$http"
           test "$http" != '200'
-
-          http="$(curl --silent --show-error --output direct.json --write-out '%{http_code}' \
-            --header "Authorization: Bearer $token" \
-            "$NEON_API/issues?select=id&limit=1")"
-          if test "$http" = '200' && test "$(jq 'length' direct.json)" != '0'; then
-            echo 'Direct issues table unexpectedly readable by PICKER' >&2
-            exit 1
-          fi
-
+          http="$(curl --silent --show-error --output direct.json --write-out '%{http_code}' --header "Authorization: Bearer $token" "$NEON_API/issues?select=id&limit=1")"
+          echo "DIRECT_ISSUES_HTTP=$http"
+          if test "$http" = '200' && test "$(jq 'length' direct.json)" != '0'; then echo 'Direct issues table unexpectedly readable by PICKER' >&2; exit 1; fi
           echo 'P6_NEON_API_E2E_OK auth=session+search+report+my_issues role_gate=blocked direct_table=blocked'
