@@ -33,7 +33,7 @@ jobs:
               s = s.replace('/rest/v1/', '/data/')
               s = s.replace("'/rest/v1'.length", "'/data'.length")
               s = s.replace('/functions/v1/', '/api/')
-              s = s.replace(r'^\\/functions\\/v1\\/', r'^\\/api\\/')
+              s = s.replace(r'^\/functions\/v1\/', r'^\/api\/')
               s = s.replace('compatibilityFetch', 'backendFetchAdapter')
               s = s.replace('ChannelShim', 'BackendChannel')
               s = s.replace('MIGRATION_ACTION_UNSUPPORTED', 'BACKEND_ACTION_UNSUPPORTED')
@@ -43,7 +43,7 @@ jobs:
           ! grep -RniE 'supabase\.co|oedasgcdjppjwidhlqdr|ap-northeast-2|@supabase/supabase-js|supabase-shim|compat\.bao-hang-1291\.invalid' web-admin --exclude-dir=node_modules
           grep -F "url.pathname === '/auth/token'" web-admin/src/backend-runtime.js >/dev/null
           grep -F "url.pathname.startsWith('/data/')" web-admin/src/backend-runtime.js >/dev/null
-          grep -F "^\\/api\\/" web-admin/src/backend-runtime.js >/dev/null
+          grep -F "^\/api\/" web-admin/src/backend-runtime.js >/dev/null
           grep -F "const NEON_API = 'https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1'" web-admin/src/backend-runtime.js >/dev/null
           git diff --check
           cd web-admin
