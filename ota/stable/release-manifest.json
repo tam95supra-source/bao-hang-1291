@@ -1,11 +1,11 @@
 {
   "channel": "stable",
-  "versionCode": 8,
-  "versionName": "1.5.0",
-  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/stable-v1.5.0/bao-hang-1291-stable-1.5.0.apk",
-  "sha256": "3b0dadaaeb4e28cb7e6b27e77e2cee756496345e6739f42a6f1d6025a5b36bba",
-  "mandatory": false,
-  "releaseNotes": "Stable 1.5.0: sửa dứt điểm Web bị nhảy giữa hai giao diện bằng một owner Realtime ticket; bổ sung footer bản quyền; Xử lý báo hàng chia rõ Chờ xử lý, Đang xử lý, Đã có hàng, Đã bỏ qua; cho phép báo lại đã có hàng từ ticket đã bỏ qua và gửi cảnh báo lại cho người liên quan; Báo cáo vận hành kho dùng thuật ngữ thuần Việt, chi tiết hơn và xuất Excel; Android đồng bộ cùng phân loại và nghiệp vụ.",
+  "versionCode": 14,
+  "versionName": "1.6.5",
+  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/stable-v1.6.5/bao-hang-1291-stable-1.6.5.apk",
+  "sha256": "3158dafadf65fc836081c05cb528f84fde926b831fd4c0098a1a4274fddfd3fb",
+  "mandatory": true,
+  "releaseNotes": "Stable 1.6.5: hoàn tất chuyển runtime Báo hàng 1291 sang Neon production + Firebase Auth/FCM/Firestore và Apps Script worker; Supabase chuyển sang rollback-only, giữ nguyên nghiệp vụ, production signing và OTA.",
   "signerSha256": "2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0",
-  "sourceSha": "cbe98588c175b824bd4f4c930732cce02c0454ad"
+  "sourceSha": "d0f05882922911532e11e6839936f0fd894b65a9"
 }
