@@ -1,8 +1,8 @@
 {
   "action": "publish",
-  "channel": "beta",
+  "channel": "stable",
   "versionName": "1.6.5",
-  "versionCode": 13,
+  "versionCode": 14,
   "mandatory": true,
-  "releaseNotes": "Beta 1.6.5: chuyển runtime Báo hàng 1291 sang Neon production + Firebase Auth/FCM/Firestore và Apps Script worker; giữ nguyên luồng nghiệp vụ, signing production và OTA."
+  "releaseNotes": "Stable 1.6.5: hoàn tất chuyển runtime Báo hàng 1291 sang Neon production + Firebase Auth/FCM/Firestore và Apps Script worker; Supabase chuyển sang rollback-only, giữ nguyên nghiệp vụ, production signing và OTA."
 }
