@@ -1,26 +1,35 @@
-import { initializeApp, getApps } from 'firebase/app'
-import {
-  browserLocalPersistence,
-  getAuth,
-  setPersistence,
-  signInWithEmailAndPassword,
-  signOut,
-} from 'firebase/auth'
-import { doc, getFirestore, onSnapshot } from 'firebase/firestore'
-
 const FIREBASE_API_KEY = 'AIzaSyB-n368fntzxsuuLlvte9NXhcuX0DDbTXM'
 const FIREBASE_PROJECT = 'bao-hang-1291'
 const NEON_API = 'https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1'
 const WORKER_URL = (globalThis.__BAO_HANG_WORKER_URL__ || '').trim()
 
-const app = getApps().find((item) => item.name === '[DEFAULT]') || initializeApp({
-  apiKey: FIREBASE_API_KEY,
-  authDomain: `${FIREBASE_PROJECT}.firebaseapp.com`,
-  projectId: FIREBASE_PROJECT,
-})
-const auth = getAuth(app)
-const firestore = getFirestore(app)
-setPersistence(auth, browserLocalPersistence).catch(() => {})
+let firebaseRuntimePromise
+async function firebaseRuntime() {
+  if (!firebaseRuntimePromise) {
+    firebaseRuntimePromise = Promise.all([
+      import('firebase/app'),
+      import('firebase/auth'),
+      import('firebase/firestore'),
+    ]).then(([appModule, authModule, firestoreModule]) => {
+      const app = appModule.getApps().find((item) => item.name === '[DEFAULT]') || appModule.initializeApp({
+        apiKey: FIREBASE_API_KEY,
+        authDomain: `${FIREBASE_PROJECT}.firebaseapp.com`,
+        projectId: FIREBASE_PROJECT,
+      })
+      const auth = authModule.getAuth(app)
+      authModule.setPersistence(auth, authModule.browserLocalPersistence).catch(() => {})
+      return {
+        auth,
+        firestore: firestoreModule.getFirestore(app),
+        signInWithEmailAndPassword: authModule.signInWithEmailAndPassword,
+        signOut: authModule.signOut,
+        doc: firestoreModule.doc,
+        onSnapshot: firestoreModule.onSnapshot,
+      }
+    })
+  }
+  return firebaseRuntimePromise
+}
 
 let installed = false
 let realtimeToken = ''
@@ -57,6 +66,7 @@ function testRole(init) {
 }
 
 async function supabaseLikeLogin(body) {
+  const { auth, signInWithEmailAndPassword } = await firebaseRuntime()
   const credential = await signInWithEmailAndPassword(auth, String(body.email || ''), String(body.password || ''))
   const token = await credential.user.getIdToken()
   realtimeToken = token
@@ -71,6 +81,7 @@ async function supabaseLikeLogin(body) {
 
 async function refreshFirebase(body) {
   const refreshToken = String(body.refresh_token || '')
+  const { auth } = await firebaseRuntime()
   if (auth.currentUser) {
     const token = await auth.currentUser.getIdToken(true)
     realtimeToken = token
@@ -183,6 +194,7 @@ async function compatibilityFetch(input, init = {}) {
       return jsonResponse({ error: 'UNSUPPORTED_GRANT' }, 400)
     }
     if (url.pathname === '/auth/v1/logout') {
+      const { auth, signOut } = await firebaseRuntime()
       await signOut(auth).catch(() => {})
       realtimeToken = ''
       return jsonResponse({}, 204)
@@ -232,6 +244,7 @@ class ChannelShim {
     this.name = name
     this.handlers = []
     this.unsub = null
+    this.closed = false
   }
 
   on(type, filter, callback) {
@@ -245,22 +258,28 @@ class ChannelShim {
       statusCallback?.('CHANNEL_ERROR')
       return this
     }
-    this.unsub = onSnapshot(
-      doc(firestore, 'realtime', topic),
-      (snapshot) => {
-        if (!snapshot.exists()) return
-        const event = snapshot.data() || {}
-        this.handlers.forEach(({ filter, callback }) => {
-          if (!filter?.event || filter.event === event.event_type) callback({ payload: event })
-        })
-      },
-      () => statusCallback?.('CHANNEL_ERROR'),
-    )
-    statusCallback?.('SUBSCRIBED')
+    this.closed = false
+    statusCallback?.('CONNECTING')
+    firebaseRuntime().then(({ firestore, doc, onSnapshot }) => {
+      if (this.closed) return
+      this.unsub = onSnapshot(
+        doc(firestore, 'realtime', topic),
+        (snapshot) => {
+          if (!snapshot.exists()) return
+          const event = snapshot.data() || {}
+          this.handlers.forEach(({ filter, callback }) => {
+            if (!filter?.event || filter.event === event.event_type) callback({ payload: event })
+          })
+        },
+        () => statusCallback?.('CHANNEL_ERROR'),
+      )
+      statusCallback?.('SUBSCRIBED')
+    }).catch(() => statusCallback?.('CHANNEL_ERROR'))
     return this
   }
 
   close() {
+    this.closed = true
     this.unsub?.()
     this.unsub = null
   }
