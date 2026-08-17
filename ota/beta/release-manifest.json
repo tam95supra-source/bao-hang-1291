@@ -1,11 +1,11 @@
 {
   "channel": "beta",
-  "versionCode": 12,
-  "versionName": "1.6.4",
-  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.4/bao-hang-1291-beta-1.6.4.apk",
-  "sha256": "b2869c45a949553a0af99a7e545d7b877a95b425345cc457b5d1059101453b90",
-  "mandatory": false,
-  "releaseNotes": "Beta 1.6.4: bỏ bước Chờ xử lý/Nhận xử lý, gộp toàn bộ SKU active vào Đang xử lý và vẫn ghi nhận chính xác người bấm Có hàng/Cho SKIP; App Người báo hàng còn 4 nhóm Đang xử lý, Đã có hàng, Đã bỏ qua, Picker thu hồi SKU, đưa nhóm xuống đáy, bỏ tiêu đề/count thừa, tên SKU và tên hàng in đậm, thêm ghi chú lịch sử trong ngày; App Picker căn trái gợi ý, đưa lịch sử/gợi ý lên trên và vùng nhập SKU + Báo thiếu xuống đáy; thanh App chỉ hiện họ tên + quyền, thêm Log cạnh Thoát và bỏ nút gửi log trong nội dung; cập nhật copyright App/Web thành Copyright 2026 - SUPRA DC HƯNG YÊN - tamnv2 - Chuyên viên Pick Pack 1291.",
+  "versionCode": 13,
+  "versionName": "1.6.5",
+  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.5/bao-hang-1291-beta-1.6.5.apk",
+  "sha256": "66c7adbca3b86ba3bf059b02803704d270e290967313f6f93581fc16351a8bd6",
+  "mandatory": true,
+  "releaseNotes": "Beta 1.6.5: chuyển runtime Báo hàng 1291 sang Neon production + Firebase Auth/FCM/Firestore và Apps Script worker; giữ nguyên luồng nghiệp vụ, signing production và OTA.",
   "signerSha256": "2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0",
-  "sourceSha": "ed9c78fef9b7ed8937e05ceb653589b907d2d540"
+  "sourceSha": "e8e36d5f5f65784254bb5a1ec06db18f541f3057"
 }
