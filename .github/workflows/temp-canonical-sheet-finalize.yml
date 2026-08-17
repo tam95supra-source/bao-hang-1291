@@ -1,0 +1,88 @@
+name: Temp canonical Sheet finalizer
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/temp-canonical-sheet-finalize.yml']
+permissions:
+  contents: write
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Rebuild verify and ACK canonical Sheet
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
+          cat > "$RUNNER_TEMP/finalize.mjs" <<'NODE'
+          import fs from 'node:fs'; import crypto from 'node:crypto';
+          const PROJECT='bao-hang-1291', NEON_PROJECT='tiny-boat-19315489', NEON_BRANCH='br-broad-resonance-aznwrpea';
+          const BASE='https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1';
+          const SHEET='15_AJ8oB7cEeQjeM6Jb6dm0ki6NcqyxPRVRTAvQPHVM0', ADMIN_UID='44fae0a2-09eb-4226-8412-0f1a1f5d7ef8', KEY='AIzaSyB-n368fntzxsuuLlvte9NXhcuX0DDbTXM';
+          const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}'); if(sa.project_id!==PROJECT||!sa.private_key) throw new Error('FIREBASE_SCOPE_MISMATCH');
+          const b64=o=>Buffer.from(typeof o==='string'?o:JSON.stringify(o)).toString('base64url');
+          const jwt=p=>{const u=b64({alg:'RS256',typ:'JWT'})+'.'+b64(p);return u+'.'+crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url')};
+          const now=Math.floor(Date.now()/1000);
+          let r=await fetch('https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key='+KEY,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:jwt({iss:sa.client_email,sub:sa.client_email,aud:'https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit',iat:now,exp:now+3600,uid:ADMIN_UID}),returnSecureToken:true})});
+          let b=await r.json(); if(!r.ok||!b.idToken) throw new Error('FIREBASE_AUTH_'+r.status); const idToken=b.idToken;
+          const neon=async (path,opt={})=>{const x=await fetch(BASE+path,{...opt,headers:{Authorization:'Bearer '+idToken,'content-type':'application/json',...(opt.headers||{})}});const t=await x.text();if(!x.ok)throw new Error('NEON_'+x.status+'_'+t.slice(0,300));return t?JSON.parse(t):null};
+          const assertion=jwt({iss:sa.client_email,scope:'https://www.googleapis.com/auth/spreadsheets',aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+3600});
+          r=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion})}); b=await r.json(); if(!r.ok||!b.access_token) throw new Error('GOOGLE_OAUTH_'+r.status); const access=b.access_token;
+          const gs=async(url,opt={})=>{const x=await fetch('https://sheets.googleapis.com/v4/spreadsheets/'+SHEET+url,{...opt,headers:{Authorization:'Bearer '+access,'content-type':'application/json',...(opt.headers||{})}});const t=await x.text();if(!x.ok)throw new Error('SHEETS_'+x.status+'_'+t.slice(0,300));return t?JSON.parse(t):{}};
+          const eh=['Mã sự kiện','Thời gian','Loại sự kiện','Ticket ID','SKU','Tên sản phẩm','Trạng thái','Số lượt báo','Người báo/Actor ID','Dữ liệu JSON'];
+          const sh=['Ticket ID','SKU','Tên sản phẩm','Trạng thái','Số lượt báo','Báo lần đầu','Cập nhật cuối','Invent xử lý','Số lần mở lại'];
+          const uh=['Mã nhân viên','Họ tên','Nhà thầu','Vai trò','Trạng thái','Cập nhật cuối'];
+          const fmt=v=>v==null?'':String(v);
+          const local=v=>{if(!v)return '';const d=new Date(v);if(Number.isNaN(d.getTime()))return String(v);return new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Ho_Chi_Minh',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(d)};
+          let proof={ok:false,sheetId:SHEET,neonProject:NEON_PROJECT,neonBranch:NEON_BRANCH,checkedAt:new Date().toISOString()};
+          for(let attempt=1;attempt<=3;attempt++){
+            const [profiles,issues,queue]=await Promise.all([
+              neon('/profiles?select=*&order=employee_code.asc&limit=1000'),
+              neon('/issues?select=*&order=reported_at.asc&limit=1000'),
+              neon('/sheet_export_queue?select=*&order=id.asc&limit=1000')
+            ]);
+            if(new Set(queue.map(x=>String(x.event_id))).size!==queue.length) throw new Error('DUPLICATE_NEON_EVENT_ID');
+            const latest=new Map(); for(const q of queue) if(q.issue_id) latest.set(String(q.issue_id),q.payload||{});
+            const eventRows=queue.map(q=>{const p=q.payload||{};return [fmt(q.event_id||q.id),local(q.accepted_at_authority||q.created_at),fmt(q.event_type),fmt(q.issue_id),fmt(q.sku),fmt(p.product_name),fmt(p.status),Number(p.report_count||0),fmt(q.actor_account_id||p.actor_id||p.reporter_id),JSON.stringify(p)]});
+            const issueRows=issues.map(i=>{const p=latest.get(String(i.id))||{};return [fmt(i.id),fmt(i.sku),fmt(i.product_name),fmt(i.status),Number(i.report_count||0),fmt(i.reported_at),fmt(i.updated_at),fmt(p.assigned_name||''),Number(i.reopen_count||0)]});
+            const userRows=profiles.map(p=>[fmt(p.employee_code),fmt(p.full_name),fmt(p.contractor),fmt(p.role),p.active===true?'Đang hoạt động':'Ngừng hoạt động',fmt(p.updated_at)]);
+            const info=[['Mục','Giá trị'],['Backend','Neon PostgreSQL — BÁO HÀNG 1291'],['Neon project',NEON_PROJECT],['Neon production branch',NEON_BRANCH],['Đăng nhập / thông báo','Firebase Auth + FCM — '+PROJECT],['Google Sheet chính',SHEET],['Lịch sử nghiệp vụ','App/Web → Neon sheet_export_queue → Apps Script → SU_KIEN'],['Trạng thái hiện tại','TRANG_THAI_SKU — snapshot từ Neon issues'],['Nhân sự','NHAN_SU — snapshot từ Neon profiles'],['Mật khẩu','KHÔNG lưu trong Google Sheet'],['Cập nhật',new Intl.DateTimeFormat('vi-VN',{timeZone:'Asia/Ho_Chi_Minh',dateStyle:'short',timeStyle:'medium'}).format(new Date())]];
+            for(const range of ['SU_KIEN!A1:J5000','TRANG_THAI_SKU!A1:I5000','NHAN_SU!A1:F1000','THONG_TIN!A1:Z200']) await gs('/values/'+encodeURIComponent(range)+':clear',{method:'POST',body:'{}'});
+            await gs('/values:batchUpdate',{method:'POST',body:JSON.stringify({valueInputOption:'RAW',data:[
+              {range:`SU_KIEN!A1:J${eventRows.length+1}`,values:[eh,...eventRows]},
+              {range:`TRANG_THAI_SKU!A1:I${issueRows.length+1}`,values:[sh,...issueRows]},
+              {range:`NHAN_SU!A1:F${userRows.length+1}`,values:[uh,...userRows]},
+              {range:`THONG_TIN!A1:B${info.length}`,values:info}
+            ]})});
+            const read=async range=>(await gs('/values/'+encodeURIComponent(range))).values||[];
+            const [ev,st,us]=await Promise.all([read(`SU_KIEN!A1:J${eventRows.length+2}`),read(`TRANG_THAI_SKU!A1:I${issueRows.length+2}`),read(`NHAN_SU!A1:F${userRows.length+2}`)]);
+            if(JSON.stringify(ev[0]||[])!==JSON.stringify(eh)||JSON.stringify(st[0]||[])!==JSON.stringify(sh)||JSON.stringify(us[0]||[])!==JSON.stringify(uh)) throw new Error('HEADER_MISMATCH');
+            const sheetIds=ev.slice(1).map(x=>String(x[0]||'')), neonIds=queue.map(x=>String(x.event_id||x.id));
+            if(sheetIds.length!==neonIds.length||sheetIds.some((x,i)=>x!==neonIds[i])) throw new Error('EVENT_SEQUENCE_MISMATCH');
+            if(st.length!==issues.length+1||us.length!==profiles.length+1) throw new Error('SNAPSHOT_COUNT_MISMATCH');
+            const pending=queue.filter(q=>!q.exported_at).map(q=>Number(q.id));
+            if(pending.length){ const ack=await neon('/rpc/worker_sheet_ack_rpc',{method:'POST',body:JSON.stringify({p_ids:pending})}); if(Number(ack||0)<pending.length) throw new Error('ACK_COUNT_MISMATCH'); }
+            const after=await neon('/sheet_export_queue?select=id,event_id,exported_at&order=id.asc&limit=1000');
+            const stable=after.length===queue.length && after.every((x,i)=>String(x.event_id)===String(queue[i].event_id)) && after.every(x=>!!x.exported_at);
+            if(stable){ const ids=after.map(x=>String(x.event_id)); proof={ok:true,sheetId:SHEET,neonProject:NEON_PROJECT,neonBranch:NEON_BRANCH,attempt,events:after.length,issues:issues.length,profiles:profiles.length,pending:0,eventSha256:crypto.createHash('sha256').update(ids.join('\n')).digest('hex'),checkedAt:new Date().toISOString()}; break; }
+          }
+          fs.mkdirSync('.ops',{recursive:true}); fs.writeFileSync('.ops/canonical-sheet-proof.json',JSON.stringify(proof,null,2)+'\n');
+          if(!proof.ok) throw new Error('CANONICAL_SHEET_NOT_STABLE_AFTER_RETRIES');
+          console.log(`CANONICAL_SHEET_FINAL_PASS events=${proof.events} issues=${proof.issues} profiles=${proof.profiles} pending=0 sha256=${proof.eventSha256}`);
+          NODE
+          node "$RUNNER_TEMP/finalize.mjs"
+      - name: Commit proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '.ok == true and .pending == 0' .ops/canonical-sheet-proof.json >/dev/null
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .ops/canonical-sheet-proof.json
+          git diff --cached --quiet || git commit -m 'chore(sheet): record canonical Neon backfill proof'
+          git pull --rebase origin main
+          git push origin HEAD:main
