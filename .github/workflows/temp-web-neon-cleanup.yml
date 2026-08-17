@@ -35,8 +35,6 @@ jobs:
               raise SystemExit('expected supabase-shim.js missing')
           old_runtime.rename(new_runtime)
 
-          # The bridge is local-only. Keep the compatibility protocol while removing
-          # false provider naming; all network targets are Firebase, Neon and Apps Script.
           for p in list(src.glob('*.js')):
               s = p.read_text()
               s = s.replace("import { createClient } from '@supabase/supabase-js';", "import { createClient } from './backend-runtime.js';")
@@ -49,11 +47,9 @@ jobs:
               s = s.replace("progress('Dung lượng Supabase', db, dbLimit)", "progress('Dung lượng Neon', db, dbLimit)")
               p.write_text(s)
 
-          # Remove the obsolete Vite alias; the web now imports the local runtime directly.
           p = Path('web-admin/vite.config.js')
           p.write_text("""import { defineConfig } from 'vite'\n\nexport default defineConfig({\n  define: {\n    'globalThis.__BAO_HANG_WORKER_URL__': JSON.stringify(process.env.GOOGLE_SHEET_WEBHOOK_URL || process.env.APPS_SCRIPT_WORKER_URL || ''),\n  },\n  build: {\n    target: 'es2020',\n    minify: 'oxc',\n    sourcemap: false,\n    cssCodeSplit: true,\n  },\n})\n""")
 
-          # Replace the whole infrastructure page so it reflects live Neon architecture.
           p = Path('web-admin/src/ops-console.js')
           s = p.read_text()
           pattern = re.compile(r"async function renderServerView\(\) \{.*?\n\}\n\nasync function currentIssueBoard", re.S)
@@ -118,7 +114,6 @@ jobs:
           p.write_text(s2)
           PY
 
-          # Source gates: the only intentional provider mention is the rollback label.
           ! grep -RniE 'oedasgcdjppjwidhlqdr|ap-northeast-2|Supabase production|Dung lượng Supabase|Supabase: <b>ACTIVE' web-admin --exclude-dir=node_modules
           ! grep -Rni '@supabase/supabase-js' web-admin --exclude-dir=node_modules
           ! grep -Rni 'supabase-shim' web-admin --exclude-dir=node_modules
@@ -130,7 +125,7 @@ jobs:
           git diff --check
 
           cd web-admin
-          npm ci --no-audit --no-fund
+          npm install --no-audit --no-fund
           npm run build
           ! grep -RniE 'oedasgcdjppjwidhlqdr|ap-northeast-2|Supabase production|Dung lượng Supabase|Supabase: <b>ACTIVE|supabase\.co|compat\.bao-hang-1291\.invalid' dist
           grep -Rni 'Neon production' dist >/dev/null
