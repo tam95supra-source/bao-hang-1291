@@ -30,11 +30,11 @@ jobs:
           expression='$'+'{{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}'
           lines.insert(idx[0]+1, '      APPS_SCRIPT_WORKER_URL: '+expression)
           s='\n'.join(lines)+'\n'
-          anchor='          echo "::add-mask::$RELEASE_KEY_PASSWORD"\n'
+          anchor='          RELEASE_STORE_PASSWORD="$(cat "$RUNNER_TEMP/release-store-password")"\n'
           check='''          test -n "${APPS_SCRIPT_WORKER_URL:-}" || { echo 'Missing Apps Script worker URL' >&2; exit 1; }\n          case "$APPS_SCRIPT_WORKER_URL" in https://script.google.com/macros/s/*/exec) ;; *) echo 'Invalid Apps Script worker URL' >&2; exit 1;; esac\n'''
           if s.count(anchor)!=1:
-              raise SystemExit('release build anchor mismatch')
-          s=s.replace(anchor,anchor+check)
+              raise SystemExit(f'release build anchor count={s.count(anchor)}')
+          s=s.replace(anchor,check+anchor)
           p.write_text(s,encoding='utf-8')
           PY
           git diff --check
