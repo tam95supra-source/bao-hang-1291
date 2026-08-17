@@ -1,0 +1,47 @@
+name: Temp production Apps Script worker kick
+
+on:
+  push:
+    branches: [migration/neon-cutover]
+    paths: ['.github/workflows/temp-prod-worker-kick.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  kick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      WORKER_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
+      FIREBASE_API_KEY: 'AIzaSyB-n368fntzxsuuLlvte9NXhcuX0DDbTXM'
+      ADMIN_UID: '44fae0a2-09eb-4226-8412-0f1a1f5d7ef8'
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-save --no-audit --no-fund firebase-admin@13
+      - name: Mint scoped Firebase token and kick worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${FIREBASE_SERVICE_ACCOUNT:-}"
+          test -n "${WORKER_URL:-}"
+          case "$WORKER_URL" in https://script.google.com/macros/s/*/exec) ;; *) exit 1;; esac
+          custom="$(node <<'NODE'
+          const admin=require('firebase-admin');
+          admin.initializeApp({credential:admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT))});
+          admin.auth().createCustomToken(process.env.ADMIN_UID).then(t=>process.stdout.write(t)).catch(e=>{console.error(e.message);process.exit(1)});
+          NODE
+          )"
+          echo "::add-mask::$custom"
+          code="$(curl -sS -o "$RUNNER_TEMP/signin.json" -w '%{http_code}' -H 'Content-Type: application/json' --data "$(jq -nc --arg token "$custom" '{token:$token,returnSecureToken:true}')" "https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=$FIREBASE_API_KEY")"
+          echo "CUSTOM_SIGNIN_HTTP=$code"; test "$code" = 200
+          id_token="$(jq -er '.idToken' "$RUNNER_TEMP/signin.json")"; echo "::add-mask::$id_token"
+          jq -nc --arg token "$id_token" '{action:"worker-kick",id_token:$token}' > "$RUNNER_TEMP/kick.json"
+          code="$(curl -sS -L -o "$RUNNER_TEMP/result.json" -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @"$RUNNER_TEMP/kick.json" "$WORKER_URL")"
+          echo "WORKER_HTTP=$code"; test "$code" = 200
+          jq -e '.ok==true' "$RUNNER_TEMP/result.json" >/dev/null
+          jq '{ok,source,skipped,tick,notifications,pushes,sheet,realtime,schedule}' "$RUNNER_TEMP/result.json"
+          echo PROD_WORKER_KICK_PASS
