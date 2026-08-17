@@ -1,3 +1,4 @@
+# Re-run after production identity sequence repair.
 name: Temp P6 alert restore diagnostic
 
 on:
