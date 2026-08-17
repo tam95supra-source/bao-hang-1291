@@ -1,0 +1,35 @@
+name: Apps Script live worker probe
+
+on:
+  push:
+    branches: [migration/neon-cutover]
+    paths: ['.github/workflows/p4-apps-script-live-probe.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    env:
+      URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
+      SECRET: ${{ secrets.GOOGLE_SHEET_WEBHOOK_SECRET }}
+    steps:
+      - name: Verify existing BÁO HÀNG Apps Script endpoint and secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
+          test -n "${URL:-}" || { echo 'Missing GOOGLE_SHEET_WEBHOOK_URL'; exit 1; }
+          test -n "${SECRET:-}" || { echo 'Missing GOOGLE_SHEET_WEBHOOK_SECRET'; exit 1; }
+          case "$URL" in https://script.google.com/macros/s/*/exec) ;; *) echo 'Unexpected Apps Script URL'; exit 1;; esac
+          test ${#SECRET} -ge 32
+          curl -fsSL --retry 2 -X POST "$URL" -H 'content-type: application/json' -d '{"action":"ping"}' > "$RUNNER_TEMP/ping.json"
+          jq '{ok,project,provider,error}' "$RUNNER_TEMP/ping.json"
+          jq -e '.ok==true and .project=="bao-hang-1291" and .provider=="NEON_FIREBASE_GOOGLE"' "$RUNNER_TEMP/ping.json" >/dev/null
+          body="$(jq -cn --arg s "$SECRET" '{secret:$s,events:[]}')"
+          curl -fsSL --retry 2 -X POST "$URL" -H 'content-type: application/json' -d "$body" > "$RUNNER_TEMP/secret.json"
+          jq '{ok,processed,error}' "$RUNNER_TEMP/secret.json"
+          jq -e '.ok==true and .processed==0' "$RUNNER_TEMP/secret.json" >/dev/null
+          echo 'P4_LIVE_ENDPOINT_AND_SECRET_PASS'
