@@ -1,0 +1,54 @@
+name: Temp pin canonical report sheet
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/temp-pin-report-sheet.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Pin report spreadsheet ID
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          p=Path('google-apps-script/DEPLOY_NEON.gs')
+          s=p.read_text()
+          anchor="const BH_NEON_DATA_API = 'https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1';\n"
+          line="const BH_REPORT_SHEET_ID = '15_AJ8oB7cEeQjeM6Jb6dm0ki6NcqyxPRVRTAvQPHVM0';\n"
+          if line not in s:
+              if anchor not in s: raise SystemExit('anchor missing')
+              s=s.replace(anchor, anchor+line, 1)
+          s=s.replace("SpreadsheetApp.getActiveSpreadsheet().getSheetByName(tab)", "reportSpreadsheet_().getSheetByName(tab)")
+          s=s.replace("const ss=SpreadsheetApp.getActiveSpreadsheet();let s=ss.getSheetByName(name);", "const ss=reportSpreadsheet_();let s=ss.getSheetByName(name);")
+          helper="function reportSpreadsheet_(){const ss=SpreadsheetApp.openById(BH_REPORT_SHEET_ID);if(ss.getId()!==BH_REPORT_SHEET_ID)throw new Error('REPORT_SHEET_SCOPE_MISMATCH');return ss;}\n"
+          marker="function getOrCreateSheet_(name,headers) {\n"
+          if helper not in s:
+              if marker not in s: raise SystemExit('helper marker missing')
+              s=s.replace(marker, helper+marker, 1)
+          if 'SpreadsheetApp.getActiveSpreadsheet()' in s:
+              raise SystemExit('active spreadsheet reference remains')
+          p.write_text(s)
+          PY
+          cp google-apps-script/DEPLOY_NEON.gs "$RUNNER_TEMP/DEPLOY_NEON.js"
+          node --check "$RUNNER_TEMP/DEPLOY_NEON.js"
+          grep -F "BH_REPORT_SHEET_ID = '15_AJ8oB7cEeQjeM6Jb6dm0ki6NcqyxPRVRTAvQPHVM0'" google-apps-script/DEPLOY_NEON.gs >/dev/null
+          ! grep -F 'SpreadsheetApp.getActiveSpreadsheet()' google-apps-script/DEPLOY_NEON.gs
+      - name: Commit verified pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add google-apps-script/DEPLOY_NEON.gs
+          git diff --cached --quiet && exit 0
+          git commit -m 'fix(sheet): pin canonical report spreadsheet'
+          git push origin HEAD:main
