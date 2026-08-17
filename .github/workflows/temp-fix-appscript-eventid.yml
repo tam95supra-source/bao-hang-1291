@@ -1,0 +1,53 @@
+name: Temp normalize Apps Script event id
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/temp-fix-appscript-eventid.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Patch canonical Sheet event contract
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('google-apps-script/DEPLOY_NEON.gs')
+          s = p.read_text(encoding='utf-8')
+          old_header = "const BH_EVENT_HEADERS = ['Queue ID','Thời gian','Loại sự kiện','Ticket ID','SKU','Tên sản phẩm','Trạng thái','Số lượt báo','Người báo/Actor ID','Dữ liệu JSON'];"
+          new_header = "const BH_EVENT_HEADERS = ['Mã sự kiện','Thời gian','Loại sự kiện','Ticket ID','SKU','Tên sản phẩm','Trạng thái','Số lượt báo','Người báo/Actor ID','Dữ liệu JSON'];"
+          old_key = "  const queueId=String(event.id !== undefined && event.id !== null ? event.id : (event.queue_id !== undefined && event.queue_id !== null ? event.queue_id : (event.event_id || ''))).trim();\n  if(!queueId) throw new Error('SHEET_QUEUE_ID_REQUIRED');"
+          new_key = "  const eventId=String(event.event_id || event.queue_id || event.id || '').trim();\n  if(!eventId) throw new Error('SHEET_EVENT_ID_REQUIRED');"
+          old_upsert = "  upsertByKey_(eventSheet,1,queueId,[queueId,eventTime,eventType,issueId,sku,productName,status,reportCount,actorId,JSON.stringify(payload)]);"
+          new_upsert = "  upsertByKey_(eventSheet,1,eventId,[eventId,eventTime,eventType,issueId,sku,productName,status,reportCount,actorId,JSON.stringify(payload)]);"
+          for old, new, label in [(old_header,new_header,'header'),(old_key,new_key,'key'),(old_upsert,new_upsert,'upsert')]:
+              if old not in s:
+                  raise SystemExit(f'Expected {label} source not found; fail closed')
+              s = s.replace(old,new,1)
+          p.write_text(s,encoding='utf-8')
+      - name: Verify patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F "const BH_EVENT_HEADERS = ['Mã sự kiện'" google-apps-script/DEPLOY_NEON.gs
+          grep -F "const eventId=String(event.event_id || event.queue_id || event.id || '').trim();" google-apps-script/DEPLOY_NEON.gs
+          grep -F "upsertByKey_(eventSheet,1,eventId,[eventId,eventTime" google-apps-script/DEPLOY_NEON.gs
+          ! grep -F "const queueId=" google-apps-script/DEPLOY_NEON.gs
+      - name: Commit patch and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/temp-fix-appscript-eventid.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add google-apps-script/DEPLOY_NEON.gs .github/workflows/temp-fix-appscript-eventid.yml
+          git commit -m 'fix(worker): normalize Google Sheet event id contract'
+          git push origin HEAD:main
