@@ -338,7 +338,12 @@ function maybeStaffSync_(token) {
   if (!cfg || !cfg.staff_auto_sync_enabled) return;
   const interval = Math.max(15, Number(cfg.staff_sync_interval_minutes || 60));
   if (Date.now() - last < interval * 60000) return;
-  runStaffSync_('AUTO', {role:'ADMIN'});
+  try {
+    runStaffSync_('AUTO', {role:'ADMIN'});
+    props.deleteProperty('LAST_STAFF_SYNC_ERROR');
+  } catch (error) {
+    props.setProperty('LAST_STAFF_SYNC_ERROR', safeError_(error));
+  }
 }
 
 function runStaffSync_(triggerSource, callerProfile) {
