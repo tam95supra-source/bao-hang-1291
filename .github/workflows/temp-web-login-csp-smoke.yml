@@ -1,0 +1,82 @@
+name: Temp web login CSP smoke
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/temp-web-login-csp-smoke.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Verify live CSP and browser Firebase Auth network path
+        shell: bash
+        run: |
+          set -euo pipefail
+          headers="$RUNNER_TEMP/headers.txt"
+          curl -fsSI --retry 4 --retry-all-errors --retry-delay 2 https://bao-hang-1291.web.app/ > "$headers"
+          csp="$(grep -i '^content-security-policy:' "$headers" | tr -d '\r')"
+          echo "$csp" | grep -F 'https://*.googleapis.com' >/dev/null
+          echo "$csp" | grep -F 'https://script.google.com' >/dev/null
+          echo "$csp" | grep -F 'https://script.googleusercontent.com' >/dev/null
+          echo "$csp" | grep -F 'https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech' >/dev/null
+          ! echo "$csp" | grep -F 'oedasgcdjppjwidhlqdr.supabase.co' >/dev/null
+          echo LIVE_CSP_PASS
+
+          browser="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || true)"
+          test -n "$browser"
+          "$browser" --headless=new --no-sandbox --disable-gpu --remote-debugging-port=9222 --user-data-dir="$RUNNER_TEMP/chrome" about:blank >"$RUNNER_TEMP/chrome.log" 2>&1 &
+          chrome_pid=$!
+          trap 'kill "$chrome_pid" >/dev/null 2>&1 || true' EXIT
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:9222/json/version > "$RUNNER_TEMP/version.json" && break || sleep 1; done
+          curl -fsS -X PUT 'http://127.0.0.1:9222/json/new?https%3A%2F%2Fbao-hang-1291.web.app%2F' > "$RUNNER_TEMP/tab.json"
+          ws="$(jq -er '.webSocketDebuggerUrl' "$RUNNER_TEMP/tab.json")"
+          WS_URL="$ws" node <<'NODE'
+          const ws = new WebSocket(process.env.WS_URL)
+          let id = 0
+          const pending = new Map()
+          ws.onmessage = (event) => {
+            const msg = JSON.parse(event.data)
+            if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id) }
+          }
+          const call = (method, params={}) => new Promise((resolve,reject) => {
+            const callId = ++id
+            pending.set(callId, (msg) => msg.error ? reject(new Error(msg.error.message)) : resolve(msg.result))
+            ws.send(JSON.stringify({id:callId,method,params}))
+          })
+          const evalJs = async (expression) => (await call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true})).result?.value
+          const sleep = ms => new Promise(r=>setTimeout(r,ms))
+          ws.onopen = async () => {
+            try {
+              await call('Runtime.enable')
+              await call('Page.enable')
+              for (let i=0;i<40;i++) {
+                if (await evalJs("!!document.querySelector('#loginForm')")) break
+                await sleep(250)
+              }
+              if (!(await evalJs("!!document.querySelector('#loginForm')"))) throw new Error('LOGIN_FORM_NOT_READY')
+              await evalJs(`(()=>{const u=document.querySelector('#employeeCode');const p=document.querySelector('#password');u.value='csp_probe_nonexistent';p.value='CspProbe-NotARealPassword-1291';u.dispatchEvent(new Event('input',{bubbles:true}));p.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#loginForm').requestSubmit(document.querySelector('#loginForm button'));return true})()`)
+              let text = ''
+              for (let i=0;i<40;i++) {
+                await sleep(250)
+                text = await evalJs("document.querySelector('#loginMessage')?.textContent?.trim() || ''")
+                if (text && text !== 'Đang xác thực…') break
+              }
+              console.log(`LOGIN_RESULT=${text}`)
+              if (!text) throw new Error('LOGIN_NO_RESULT')
+              if (text.includes('network-request-failed')) throw new Error('FIREBASE_AUTH_NETWORK_STILL_BLOCKED')
+              if (!text.includes('Sai mã nhân viên hoặc mật khẩu')) throw new Error(`UNEXPECTED_LOGIN_RESULT:${text}`)
+              console.log('BROWSER_FIREBASE_AUTH_PATH_PASS')
+              ws.close()
+              process.exit(0)
+            } catch (error) {
+              console.error(error.message)
+              ws.close()
+              process.exit(1)
+            }
+          }
+          NODE
