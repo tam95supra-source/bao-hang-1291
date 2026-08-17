@@ -1,0 +1,29 @@
+name: Temp Apps Script Neon independence
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/temp-apps-script-neon-independence.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      WORKER_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
+    steps:
+      - name: Verify worker endpoint is live and Neon-targeted
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${WORKER_URL:-}"
+          case "$WORKER_URL" in https://script.google.com/macros/s/*/exec) ;; *) echo 'WORKER_URL_SCOPE_FAIL' >&2; exit 10;; esac
+          curl -fsSL --retry 4 --retry-all-errors --retry-delay 2 \
+            -X POST "$WORKER_URL" \
+            -H 'content-type: application/json' \
+            -d '{"action":"ping"}' > "$RUNNER_TEMP/ping.json"
+          jq -e '.ok == true and .project == "bao-hang-1291" and .provider == "NEON_FIREBASE_GOOGLE"' "$RUNNER_TEMP/ping.json" >/dev/null
+          echo 'APPS_SCRIPT_PRODUCTION_PING=PASS'
