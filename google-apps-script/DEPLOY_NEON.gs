@@ -25,7 +25,7 @@ function setupBaoHang1291() {
     ['Nguồn dữ liệu','Neon PostgreSQL — BÁO HÀNG 1291'],
     ['Đăng nhập / thông báo','Firebase Auth + FCM — bao-hang-1291'],
     ['Mật khẩu','KHÔNG đồng bộ vào Google Sheet'],
-    ['Lưu báo cáo','Theo cấu hình hệ thống'],
+    ['Lưu báo cáo','Sheet chính 15_AJ8oB7cEeQjeM6Jb6dm0ki6NcqyxPRVRTAvQPHVM0 — hàng đợi Neon'],
     ['Cập nhật',new Date()]
   ]);
   getLogFolder_();
@@ -616,12 +616,56 @@ function sheetWebhook_(body) {
 }
 
 function applyEvent_(event) {
-  const tab=event.type==='USER'?'NHAN_SU':event.type==='ISSUE'?'TRANG_THAI_SKU':'SU_KIEN';
-  const sheet=reportSpreadsheet_().getSheetByName(tab);
-  if(!sheet)throw new Error('Thiếu tab '+tab);
-  if(tab==='NHAN_SU')upsertByKey_(sheet,1,event.employee_code,[event.employee_code,event.full_name,event.contractor,event.role,event.active?'Đang hoạt động':'Ngừng',event.updated_at]);
-  else if(tab==='TRANG_THAI_SKU')upsertByKey_(sheet,1,event.issue_id,[event.issue_id,event.sku,event.product_name,event.status,event.report_count,event.first_reported_at,event.last_reported_at,event.invent_assignee_id,event.reopen_count]);
-  else sheet.appendRow([event.queue_id,event.created_at,event.event_type,event.issue_id,event.sku,event.product_name,event.status,event.report_count,event.actor_user_id,JSON.stringify(event.payload||{})]);
+  if(!event || typeof event !== 'object') throw new Error('SHEET_EVENT_INVALID');
+  const payload=(event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)) ? event.payload : {};
+  const eventType=String(event.event_type || event.type || '').trim().toUpperCase();
+  const queueId=String(event.id !== undefined && event.id !== null ? event.id : (event.queue_id !== undefined && event.queue_id !== null ? event.queue_id : (event.event_id || ''))).trim();
+  if(!queueId) throw new Error('SHEET_QUEUE_ID_REQUIRED');
+
+  const issueId=String(event.issue_id || payload.id || event.ticket_id || '').trim();
+  const sku=String(event.sku || payload.sku || '').trim();
+  const productName=String(event.product_name || payload.product_name || '').trim();
+  const status=String(event.status || payload.status || '').trim();
+  const reportCount=Number(event.report_count !== undefined ? event.report_count : (payload.report_count || 0));
+  const actorId=String(event.actor_account_id || event.actor_user_id || payload.actor_id || payload.reporter_id || '').trim();
+  const eventTime=event.created_at || event.accepted_at_authority || event.occurred_at_device || payload.updated_at || new Date().toISOString();
+
+  const eventSheet=reportSpreadsheet_().getSheetByName('SU_KIEN');
+  if(!eventSheet) throw new Error('Thiếu tab SU_KIEN');
+  upsertByKey_(eventSheet,1,queueId,[queueId,eventTime,eventType,issueId,sku,productName,status,reportCount,actorId,JSON.stringify(payload)]);
+
+  if(eventType === 'USER_UPSERT' || eventType === 'USER') {
+    const employeeCode=String(payload.employee_code || event.employee_code || '').trim();
+    if(!employeeCode) throw new Error('SHEET_EMPLOYEE_CODE_REQUIRED');
+    const userSheet=reportSpreadsheet_().getSheetByName('NHAN_SU');
+    if(!userSheet) throw new Error('Thiếu tab NHAN_SU');
+    const active=(payload.active !== undefined ? payload.active : event.active) !== false;
+    upsertByKey_(userSheet,1,employeeCode,[
+      employeeCode,
+      String(payload.full_name || event.full_name || ''),
+      String(payload.contractor || event.contractor || ''),
+      String(payload.role || event.role || ''),
+      active ? 'HOẠT ĐỘNG' : 'NGỪNG HOẠT ĐỘNG',
+      payload.updated_at || event.updated_at || eventTime
+    ]);
+  }
+
+  if(eventType === 'REPORT_SHORTAGE' || eventType === 'ISSUE_STATUS' || eventType === 'ISSUE') {
+    if(!issueId) throw new Error('SHEET_ISSUE_ID_REQUIRED');
+    const issueSheet=reportSpreadsheet_().getSheetByName('TRANG_THAI_SKU');
+    if(!issueSheet) throw new Error('Thiếu tab TRANG_THAI_SKU');
+    upsertByKey_(issueSheet,1,issueId,[
+      issueId,
+      sku,
+      productName,
+      status,
+      reportCount,
+      payload.first_reported_at || payload.reported_at || event.first_reported_at || '',
+      payload.updated_at || event.last_reported_at || event.updated_at || eventTime,
+      String(payload.assigned_name || event.invent_assignee_name || event.invent_assignee_id || ''),
+      Number(payload.reopen_count !== undefined ? payload.reopen_count : (event.reopen_count || 0))
+    ]);
+  }
 }
 
 function upsertByKey_(sheet,keyCol,key,values) {
@@ -632,7 +676,13 @@ function upsertByKey_(sheet,keyCol,key,values) {
 
 function reportSpreadsheet_(){const ss=SpreadsheetApp.openById(BH_REPORT_SHEET_ID);if(ss.getId()!==BH_REPORT_SHEET_ID)throw new Error('REPORT_SHEET_SCOPE_MISMATCH');return ss;}
 function getOrCreateSheet_(name,headers) {
-  const ss=reportSpreadsheet_();let s=ss.getSheetByName(name);if(!s)s=ss.insertSheet(name);if(s.getLastRow()===0)s.appendRow(headers);return s;
+  const ss=reportSpreadsheet_();
+  let s=ss.getSheetByName(name);
+  if(!s)s=ss.insertSheet(name);
+  if(s.getMaxColumns()<headers.length)s.insertColumnsAfter(s.getMaxColumns(),headers.length-s.getMaxColumns());
+  s.getRange(1,1,1,headers.length).setValues([headers]);
+  s.setFrozenRows(1);
+  return s;
 }
 function getLogFolder_(){const it=DriveApp.getFoldersByName(BH_LOG_FOLDER);return it.hasNext()?it.next():DriveApp.createFolder(BH_LOG_FOLDER);}
 function parseBody_(e){if(!e||!e.postData||!e.postData.contents)return{};try{return JSON.parse(e.postData.contents)}catch(ignore){return{}}}
