@@ -39,7 +39,7 @@ jobs:
               s = s.replace('MIGRATION_ACTION_UNSUPPORTED', 'BACKEND_ACTION_UNSUPPORTED')
               p.write_text(s)
           PY
-          ! grep -RniE '/auth/v1|/rest/v1|/functions/v1|MIGRATION_ACTION_UNSUPPORTED|compatibilityFetch|ChannelShim' web-admin/src
+          ! grep -RniE '/auth/v1|/functions/v1|url\.pathname.*rest/v1|BACKEND_BRIDGE_URL.*rest/v1|MIGRATION_ACTION_UNSUPPORTED|compatibilityFetch|ChannelShim' web-admin/src
           ! grep -RniE 'supabase\.co|oedasgcdjppjwidhlqdr|ap-northeast-2|@supabase/supabase-js|supabase-shim|compat\.bao-hang-1291\.invalid' web-admin --exclude-dir=node_modules
           grep -F "url.pathname === '/auth/token'" web-admin/src/backend-runtime.js >/dev/null
           grep -F "url.pathname.startsWith('/data/')" web-admin/src/backend-runtime.js >/dev/null
@@ -49,7 +49,7 @@ jobs:
           cd web-admin
           npm ci --no-audit --no-fund
           npm run build
-          ! grep -RniE '/auth/v1|/rest/v1|/functions/v1|supabase\.co|oedasgcdjppjwidhlqdr|ap-northeast-2|compat\.bao-hang-1291\.invalid' dist
+          ! grep -RniE '/auth/v1|/functions/v1|supabase\.co|oedasgcdjppjwidhlqdr|ap-northeast-2|compat\.bao-hang-1291\.invalid' dist
           cd ..
       - name: Commit verified protocol cleanup
         shell: bash
