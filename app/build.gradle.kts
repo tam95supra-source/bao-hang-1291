@@ -42,7 +42,7 @@ android {
 
         // Client-visible configuration only. Server secrets remain outside APK/source.
         // Authorization is enforced by Firebase Auth, Neon JWT verification and RLS/RPC grants.
-        buildConfigField("String", "NEON_DATA_API", "\"${secret("NEON_DATA_API", "https://ep-flat-feather-azdi44be.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1")}\"")
+        buildConfigField("String", "NEON_DATA_API", "\"${secret("NEON_DATA_API", "https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1")}\"")
         buildConfigField("String", "FIREBASE_WEB_API_KEY", "\"${secret("FIREBASE_WEB_API_KEY", "AIzaSyB-n368fntzxsuuLlvte9NXhcuX0DDbTXM")}\"")
         buildConfigField("String", "APPS_SCRIPT_WORKER_URL", "\"$appsScriptWorkerUrl\"")
         buildConfigField("String", "OTA_CHANNEL", "\"$requestedOtaChannel\"")

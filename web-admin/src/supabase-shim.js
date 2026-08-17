@@ -10,7 +10,7 @@ import { doc, getFirestore, onSnapshot } from 'firebase/firestore'
 
 const FIREBASE_API_KEY = 'AIzaSyB-n368fntzxsuuLlvte9NXhcuX0DDbTXM'
 const FIREBASE_PROJECT = 'bao-hang-1291'
-const NEON_API = 'https://ep-flat-feather-azdi44be.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1'
+const NEON_API = 'https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1'
 const WORKER_URL = (globalThis.__BAO_HANG_WORKER_URL__ || '').trim()
 
 const app = getApps().find((item) => item.name === '[DEFAULT]') || initializeApp({
