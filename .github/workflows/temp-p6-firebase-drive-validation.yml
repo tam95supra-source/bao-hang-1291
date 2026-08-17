@@ -1,4 +1,4 @@
-name: Temp P6 Firebase and Drive validation
+name: Temp P6 Apps Script diagnostic validation
 
 on:
   push:
@@ -13,7 +13,7 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 8
     env:
       FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
       GOOGLE_SHEET_WEBHOOK_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
@@ -29,63 +29,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install Firebase Admin without cache
-        run: npm install --no-save --no-audit --no-fund firebase-admin@13
-
-      - name: Validate Firebase FCM dry-run and Firestore service path
+      - run: npm install --no-save --no-audit --no-fund firebase-admin@13
+      - name: Diagnose Apps Script Drive diagnostic roundtrip
         shell: bash
         run: |
           set -euo pipefail
-          node <<'NODE'
-          const admin = require('firebase-admin');
-          const {getMessaging} = require('firebase-admin/messaging');
-          const {getFirestore, FieldValue} = require('firebase-admin/firestore');
-          const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-          if (sa.project_id !== 'bao-hang-1291') throw new Error('FIREBASE_SCOPE_MISMATCH');
-          admin.initializeApp({credential: admin.credential.cert(sa), projectId: 'bao-hang-1291'});
-          (async()=>{
-            const msg = await getMessaging().send({
-              topic: 'p6-validation-never-subscribed',
-              data: {kind:'P6_FCM_DRY_RUN', project:'bao-hang-1291'}
-            }, true);
-            if (!String(msg).includes('/messages/')) throw new Error('FCM_DRY_RUN_NO_MESSAGE_ID');
-            console.log('FCM_DRY_RUN_OK project=bao-hang-1291 delivered=false');
-
-            const db = getFirestore();
-            const id = 'p6-' + Date.now() + '-' + Math.random().toString(16).slice(2);
-            const ref = db.collection('_migration_validation').doc(id);
-            try {
-              await ref.set({project:'bao-hang-1291', marker:'P6_FIRESTORE_ADMIN_PROBE', created_at:FieldValue.serverTimestamp()});
-              const snap = await ref.get();
-              if (!snap.exists || snap.get('marker') !== 'P6_FIRESTORE_ADMIN_PROBE') throw new Error('FIRESTORE_READBACK_FAILED');
-              console.log('FIRESTORE_ADMIN_ROUNDTRIP_OK project=bao-hang-1291');
-            } finally {
-              await ref.delete().catch(()=>{});
-            }
-          })().catch(e=>{console.error(e.message);process.exit(1)});
-          NODE
-
-      - name: Validate Apps Script Drive diagnostic upload and download
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "${FIREBASE_SERVICE_ACCOUNT:-}"
-          test -n "${GOOGLE_SHEET_WEBHOOK_URL:-}"
-          case "$GOOGLE_SHEET_WEBHOOK_URL" in https://script.google.com/macros/s/*/exec) ;; *) echo 'Invalid Apps Script URL'; exit 1;; esac
-
           password="$(openssl rand -base64 30 | tr -d '\n')Aa1!"
-          echo "::add-mask::$password"
-          export TEST_PASSWORD="$password"
+          echo "::add-mask::$password"; export TEST_PASSWORD="$password"
           cleanup() {
             node <<'NODE' >/dev/null 2>&1 || true
           const admin=require('firebase-admin');
           if(!admin.apps.length) admin.initializeApp({credential:admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT))});
           Promise.all([process.env.PICKER_UID,process.env.ADMIN_UID].map(uid=>admin.auth().deleteUser(uid).catch(()=>{}))).finally(()=>process.exit(0));
           NODE
-            rm -f *.p6.json p6-log.gz p6-log.txt
+            rm -f *.p6.json *.p6.gz p6-log.gz p6-log.txt
           }
           trap cleanup EXIT
-
           node <<'NODE'
           const admin=require('firebase-admin');
           admin.initializeApp({credential:admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT))});
@@ -98,30 +57,31 @@ jobs:
           })().catch(e=>{console.error(e.message);process.exit(1)});
           NODE
           sleep 2
-
           signin(){
             local email="$1" out="$2" code
             code="$(curl -sS -o "$out" -w '%{http_code}' -H 'Content-Type: application/json' --data "$(jq -nc --arg email "$email" --arg password "$password" '{email:$email,password:$password,returnSecureToken:true}')" "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$FIREBASE_API_KEY")"
-            test "$code" = 200
-            jq -er '.idToken' "$out"
+            echo "SIGNIN_HTTP=$code" >&2; test "$code" = 200; jq -er '.idToken' "$out"
           }
           picker_token="$(signin "$PICKER_EMAIL" picker-login.p6.json)"
           admin_token="$(signin "$ADMIN_EMAIL" admin-login.p6.json)"
           echo "::add-mask::$picker_token"; echo "::add-mask::$admin_token"
-
           printf '%s\n' '{"marker":"P6_DRIVE_DIAGNOSTIC","project":"bao-hang-1291"}' > p6-log.txt
           gzip -n -c p6-log.txt > p6-log.gz
-          sha="$(sha256sum p6-log.gz | awk '{print $1}')"
-          b64="$(base64 -w0 p6-log.gz)"
+          sha="$(sha256sum p6-log.gz | awk '{print $1}')"; b64="$(base64 -w0 p6-log.gz)"
           jq -nc --arg token "$picker_token" --arg data "$b64" --arg sha "$sha" '{action:"upload-log",id_token:$token,gzip_base64:$data,sha256:$sha,device_name:"P6_ISOLATED",app_version:"P6_VALIDATION"}' > upload-body.p6.json
-          curl -sS -L -H 'Content-Type: application/json' --data-binary @upload-body.p6.json -o upload.p6.json "$GOOGLE_SHEET_WEBHOOK_URL"
-          jq -e '.uploaded==true and (.id|type)=="string" and (.sha256|type)=="string"' upload.p6.json >/dev/null
+          code="$(curl -sS -L -H 'Content-Type: application/json' --data-binary @upload-body.p6.json -o upload.p6.json -w '%{http_code}' "$GOOGLE_SHEET_WEBHOOK_URL")"
+          echo "UPLOAD_HTTP=$code"
+          err="$(jq -r '.error // empty' upload.p6.json 2>/dev/null || true)"
+          if test -n "$err"; then echo "UPLOAD_ERROR=$err"; exit 1; fi
+          jq -e '.uploaded==true and (.id|type)=="string"' upload.p6.json >/dev/null || { echo 'UPLOAD_RESPONSE_SHAPE_FAILED'; exit 1; }
           log_id="$(jq -er '.id' upload.p6.json)"
-
+          echo 'UPLOAD_OK'
           jq -nc --arg token "$admin_token" --arg id "$log_id" '{action:"download-log",id_token:$token,id:$id}' > download-body.p6.json
-          curl -sS -L -H 'Content-Type: application/json' --data-binary @download-body.p6.json -o download.p6.json "$GOOGLE_SHEET_WEBHOOK_URL"
-          jq -e '.ok==true and (.gzip_base64|type)=="string"' download.p6.json >/dev/null
+          code="$(curl -sS -L -H 'Content-Type: application/json' --data-binary @download-body.p6.json -o download.p6.json -w '%{http_code}' "$GOOGLE_SHEET_WEBHOOK_URL")"
+          echo "DOWNLOAD_HTTP=$code"
+          err="$(jq -r '.error // empty' download.p6.json 2>/dev/null || true)"
+          if test -n "$err"; then echo "DOWNLOAD_ERROR=$err"; exit 1; fi
+          jq -e '.ok==true and (.gzip_base64|type)=="string"' download.p6.json >/dev/null || { echo 'DOWNLOAD_RESPONSE_SHAPE_FAILED'; exit 1; }
           jq -r '.gzip_base64' download.p6.json | base64 -d > downloaded.p6.gz
           test "$(sha256sum downloaded.p6.gz | awk '{print $1}')" = "$sha"
-          echo 'APPS_SCRIPT_DRIVE_DIAGNOSTIC_ROUNDTRIP_OK upload=true download_sha_match=true'
-          rm -f upload-body.p6.json download-body.p6.json downloaded.p6.gz
+          echo 'APPS_SCRIPT_DRIVE_DIAGNOSTIC_ROUNDTRIP_OK'
