@@ -2,8 +2,10 @@ name: Temp browser auth hardening
 
 on:
   push:
-    branches: [main]
-    paths: ['.github/workflows/temp-auth-browser-hardening.yml']
+    branches:
+      - main
+    paths:
+      - '.github/workflows/temp-auth-browser-hardening.yml'
 
 permissions:
   contents: write
@@ -16,54 +18,32 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Patch Firebase Auth browser initialization
+      - name: Patch source
         shell: bash
         run: |
           set -euo pipefail
-          python3 <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
           p = Path('web-admin/src/supabase-shim.js')
           s = p.read_text()
-          old = """      const app = appModule.getApps().find((item) => item.name === '[DEFAULT]') || appModule.initializeApp({
-        apiKey: FIREBASE_API_KEY,
-        authDomain: `${FIREBASE_PROJECT}.firebaseapp.com`,
-        projectId: FIREBASE_PROJECT,
-      })
-      const auth = authModule.getAuth(app)
-      authModule.setPersistence(auth, authModule.browserLocalPersistence).catch(() => {})
-"""
-          new = """      const app = appModule.getApps().find((item) => item.name === '[DEFAULT]') || appModule.initializeApp({
-        apiKey: FIREBASE_API_KEY,
-        authDomain: `${FIREBASE_PROJECT}.web.app`,
-        projectId: FIREBASE_PROJECT,
-      })
-      let auth
-      try {
-        // Password-only web auth does not need popup/redirect resolver. Avoid the
-        // cross-origin auth iframe so strict browser privacy policies cannot break login.
-        auth = authModule.initializeAuth(app, { persistence: authModule.browserLocalPersistence })
-      } catch (error) {
-        if (error?.code !== 'auth/already-initialized') throw error
-        auth = authModule.getAuth(app)
-      }
-"""
-          if old not in s:
-              raise SystemExit('expected auth initialization block not found')
-          p.write_text(s.replace(old, new, 1))
-
+          s2 = s.replace("authDomain: `${FIREBASE_PROJECT}.firebaseapp.com`,", "authDomain: `${FIREBASE_PROJECT}.web.app`,", 1)
+          s2 = s2.replace("      const auth = authModule.getAuth(app)\n      authModule.setPersistence(auth, authModule.browserLocalPersistence).catch(() => {})", "      let auth\n      try {\n        auth = authModule.initializeAuth(app, { persistence: authModule.browserLocalPersistence })\n      } catch (error) {\n        if (error?.code !== 'auth/already-initialized') throw error\n        auth = authModule.getAuth(app)\n      }", 1)
+          if s2 == s:
+              raise SystemExit('auth patch did not apply')
+          p.write_text(s2)
           p = Path('firebase.json')
           s = p.read_text()
-          old = "form-action 'self'"
-          new = "frame-src 'self' https://bao-hang-1291.firebaseapp.com https://bao-hang-1291.web.app; form-action 'self'"
-          if old not in s:
-              raise SystemExit('expected CSP tail not found')
-          p.write_text(s.replace(old, new, 1))
+          marker = "frame-ancestors 'none'; form-action 'self'"
+          replacement = "frame-ancestors 'none'; frame-src 'self' https://bao-hang-1291.firebaseapp.com https://bao-hang-1291.web.app; form-action 'self'"
+          if marker not in s:
+              raise SystemExit('CSP marker missing')
+          p.write_text(s.replace(marker, replacement, 1))
           PY
           git diff --check
-          grep -F "authDomain: \`${FIREBASE_PROJECT:-bao-hang-1291}.web.app\`" web-admin/src/supabase-shim.js >/dev/null || grep -F 'authDomain: `${FIREBASE_PROJECT}.web.app`' web-admin/src/supabase-shim.js >/dev/null
+          grep -F 'authDomain: `${FIREBASE_PROJECT}.web.app`' web-admin/src/supabase-shim.js >/dev/null
           grep -F 'initializeAuth(app' web-admin/src/supabase-shim.js >/dev/null
           grep -F "frame-src 'self' https://bao-hang-1291.firebaseapp.com https://bao-hang-1291.web.app" firebase.json >/dev/null
-      - name: Commit source fix
+      - name: Commit patch
         shell: bash
         run: |
           set -euo pipefail
