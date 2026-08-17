@@ -23,6 +23,7 @@ jobs:
     timeout-minutes: 15
     env:
       NEON_DATA_API: https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1
+      APPS_SCRIPT_WORKER_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v6
 
@@ -32,7 +33,16 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
           test "$NEON_DATA_API" = 'https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1'
-          ! grep -RInE 'ttwftrooaizxmjovkbaz|pick-pack-1291\.web\.app|pick-pack-1291-primary' web-admin firebase.json
+          test -n "${APPS_SCRIPT_WORKER_URL:-}"
+          case "$APPS_SCRIPT_WORKER_URL" in https://script.google.com/macros/s/*/exec) ;; *) echo 'Invalid Apps Script worker URL' >&2; exit 1;; esac
+          if grep -RInE 'ttwftrooaizxmjovkbaz|pick-pack-1291\.web\.app|pick-pack-1291-primary' web-admin firebase.json; then
+            echo 'Forbidden PICK PACK identifier found' >&2
+            exit 1
+          fi
+          if grep -RInF 'oedasgcdjppjwidhlqdr.supabase.co' web-admin/src web-admin/vite.config.js; then
+            echo 'Supabase live runtime URL found in Web source' >&2
+            exit 1
+          fi
 
       - name: Enforce zero-cost Firebase billing guard
         shell: bash
@@ -51,10 +61,7 @@ jobs:
             const claim = enc({ iss: sa.client_email, scope: 'https://www.googleapis.com/auth/cloud-platform', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 900 });
             const unsigned = `${header}.${claim}`;
             const signature = crypto.sign('RSA-SHA256', Buffer.from(unsigned), sa.private_key).toString('base64url');
-            const res = await fetch('https://oauth2.googleapis.com/token', {
-              method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
-              body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: `${unsigned}.${signature}` }),
-            });
+            const res = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth2:grant-type:jwt-bearer', assertion: `${unsigned}.${signature}` }) });
             if (!res.ok) throw new Error(`OAuth token HTTP ${res.status}`);
             return (await res.json()).access_token;
           }
@@ -89,19 +96,14 @@ jobs:
         shell: bash
         run: npm --prefix web-admin run build
 
-      - name: Reject Supabase runtime and secret material from static build
+      - name: Reject retired runtime and secret material from static build
         shell: bash
         run: |
           set -euo pipefail
-          if grep -R -E 'BEGIN (RSA )?PRIVATE KEY|SUPABASE_SERVICE_ROLE_KEY|service_role' web-admin/dist; then
-            echo 'Secret-like material found in static build' >&2
-            exit 1
-          fi
-          if grep -R -F 'oedasgcdjppjwidhlqdr.supabase.co' web-admin/dist; then
-            echo 'Supabase runtime URL found in production Web Admin build' >&2
-            exit 1
-          fi
+          if grep -R -E 'BEGIN (RSA )?PRIVATE KEY|SUPABASE_SERVICE_ROLE_KEY|service_role' web-admin/dist; then echo 'Secret-like material found in static build' >&2; exit 1; fi
+          if grep -R -F 'oedasgcdjppjwidhlqdr.supabase.co' web-admin/dist; then echo 'Supabase runtime URL found in production Web Admin build' >&2; exit 1; fi
           grep -R -F 'ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech' web-admin/dist >/dev/null
+          grep -R -F 'script.google.com/macros/s/' web-admin/dist >/dev/null
           test -f web-admin/dist/index.html
           test -f web-admin/dist/MAU_NHAN_SU_BAO_HANG_1291.xlsx
 
@@ -109,12 +111,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          code="$(curl -sS --retry 3 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/neon-unauth.json" -w '%{http_code}' \
-            -X POST "$NEON_DATA_API/rpc/api_session_profile_rpc" \
-            -H 'Content-Type: application/json' \
-            -d '{"p_test_role":null}')"
+          code="$(curl -sS --retry 3 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/neon-unauth.json" -w '%{http_code}' -X POST "$NEON_DATA_API/rpc/api_session_profile_rpc" -H 'Content-Type: application/json' -d '{"p_test_role":null}')"
           echo "NEON_UNAUTH_HTTP=$code"
           case "$code" in
+            400) jq -e '(.message // "") | contains("missing authentication credentials")' "$RUNNER_TEMP/neon-unauth.json" >/dev/null ;;
             401|403) ;;
             *) echo "Unexpected unauthenticated Neon response: HTTP $code" >&2; cat "$RUNNER_TEMP/neon-unauth.json" >&2; exit 1 ;;
           esac
