@@ -7,6 +7,7 @@ const BH_PROJECT = 'bao-hang-1291';
 const BH_NEON_PROJECT = 'tiny-boat-19315489';
 const BH_NEON_BRANCH = 'br-broad-resonance-aznwrpea';
 const BH_NEON_DATA_API = 'https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1';
+const BH_REPORT_SHEET_ID = '15_AJ8oB7cEeQjeM6Jb6dm0ki6NcqyxPRVRTAvQPHVM0';
 const BH_STAFF_SHEET_ID = '1FRROqCp1lmkuHc3lc4UBpVI5_ZrtiPI1thlEymv458E';
 const BH_STAFF_SHEET_NAME = 'DANH MỤC NHÂN SỰ';
 const BH_PROTECTED_ADMIN_CODE = '6281280';
@@ -616,7 +617,7 @@ function sheetWebhook_(body) {
 
 function applyEvent_(event) {
   const tab=event.type==='USER'?'NHAN_SU':event.type==='ISSUE'?'TRANG_THAI_SKU':'SU_KIEN';
-  const sheet=SpreadsheetApp.getActiveSpreadsheet().getSheetByName(tab);
+  const sheet=reportSpreadsheet_().getSheetByName(tab);
   if(!sheet)throw new Error('Thiếu tab '+tab);
   if(tab==='NHAN_SU')upsertByKey_(sheet,1,event.employee_code,[event.employee_code,event.full_name,event.contractor,event.role,event.active?'Đang hoạt động':'Ngừng',event.updated_at]);
   else if(tab==='TRANG_THAI_SKU')upsertByKey_(sheet,1,event.issue_id,[event.issue_id,event.sku,event.product_name,event.status,event.report_count,event.first_reported_at,event.last_reported_at,event.invent_assignee_id,event.reopen_count]);
@@ -629,8 +630,9 @@ function upsertByKey_(sheet,keyCol,key,values) {
   if(row)sheet.getRange(row,1,1,values.length).setValues([values]);else sheet.appendRow(values);
 }
 
+function reportSpreadsheet_(){const ss=SpreadsheetApp.openById(BH_REPORT_SHEET_ID);if(ss.getId()!==BH_REPORT_SHEET_ID)throw new Error('REPORT_SHEET_SCOPE_MISMATCH');return ss;}
 function getOrCreateSheet_(name,headers) {
-  const ss=SpreadsheetApp.getActiveSpreadsheet();let s=ss.getSheetByName(name);if(!s)s=ss.insertSheet(name);if(s.getLastRow()===0)s.appendRow(headers);return s;
+  const ss=reportSpreadsheet_();let s=ss.getSheetByName(name);if(!s)s=ss.insertSheet(name);if(s.getLastRow()===0)s.appendRow(headers);return s;
 }
 function getLogFolder_(){const it=DriveApp.getFoldersByName(BH_LOG_FOLDER);return it.hasNext()?it.next():DriveApp.createFolder(BH_LOG_FOLDER);}
 function parseBody_(e){if(!e||!e.postData||!e.postData.contents)return{};try{return JSON.parse(e.postData.contents)}catch(ignore){return{}}}
