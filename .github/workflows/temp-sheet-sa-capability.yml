@@ -1,0 +1,51 @@
+name: Temp Sheets service-account capability
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/temp-sheet-sa-capability.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+    steps:
+      - name: Probe canonical BÁO HÀNG Sheet access
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${FIREBASE_SERVICE_ACCOUNT:-}"
+          work="$RUNNER_TEMP/sheets-probe"
+          mkdir -p "$work"
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | jq -er '.private_key' > "$work/key.pem"
+          client_email="$(printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | jq -er '.client_email')"
+          now="$(date +%s)"
+          exp="$((now+3600))"
+          b64url(){ openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+          header="$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)"
+          payload="$(jq -cn --arg iss "$client_email" --arg scope 'https://www.googleapis.com/auth/spreadsheets' --arg aud 'https://oauth2.googleapis.com/token' --argjson iat "$now" --argjson exp "$exp" '{iss:$iss,scope:$scope,aud:$aud,iat:$iat,exp:$exp}' | b64url)"
+          unsigned="$header.$payload"
+          printf '%s' "$unsigned" > "$work/unsigned"
+          openssl dgst -sha256 -sign "$work/key.pem" -out "$work/sig" "$work/unsigned"
+          sig="$(cat "$work/sig" | b64url)"
+          assertion="$unsigned.$sig"
+          token_json="$(curl -fsS -X POST 'https://oauth2.googleapis.com/token' -H 'Content-Type: application/x-www-form-urlencoded' --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer' --data-urlencode "assertion=$assertion")"
+          access="$(jq -er '.access_token' <<<"$token_json")"
+          echo "::add-mask::$access"
+          code="$(curl -sS -o "$work/resp.json" -w '%{http_code}' -H "Authorization: Bearer $access" 'https://sheets.googleapis.com/v4/spreadsheets/15_AJ8oB7cEeQjeM6Jb6dm0ki6NcqyxPRVRTAvQPHVM0?fields=spreadsheetId,properties.title')"
+          echo "SHEETS_API_HTTP=$code"
+          if test "$code" = 200; then
+            test "$(jq -r '.spreadsheetId' "$work/resp.json")" = '15_AJ8oB7cEeQjeM6Jb6dm0ki6NcqyxPRVRTAvQPHVM0'
+            echo 'SHEETS_SERVICE_ACCOUNT_ACCESS_PASS'
+          else
+            jq -r '.error.status // .error.message // "unknown"' "$work/resp.json" | sed 's/^/SHEETS_ERROR=/'
+            exit 1
+          fi
+      - name: Cleanup
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/sheets-probe"
