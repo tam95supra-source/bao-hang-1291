@@ -1,0 +1,61 @@
+name: Temp canonical Sheet verify
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/temp-canonical-sheet-verify.yml']
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify Neon and canonical Sheet
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/verify.mjs" <<'NODE'
+          import fs from 'node:fs'; import crypto from 'node:crypto';
+          const PROJECT='bao-hang-1291', BASE='https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1', SHEET='15_AJ8oB7cEeQjeM6Jb6dm0ki6NcqyxPRVRTAvQPHVM0', ADMIN_UID='44fae0a2-09eb-4226-8412-0f1a1f5d7ef8', KEY='AIzaSyB-n368fntzxsuuLlvte9NXhcuX0DDbTXM';
+          const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');
+          const status={ok:false,serviceAccountEmail:String(sa.client_email||''),sheetId:SHEET,checkedAt:new Date().toISOString()};
+          const b64=o=>Buffer.from(typeof o==='string'?o:JSON.stringify(o)).toString('base64url');
+          const jwt=p=>{const u=b64({alg:'RS256',typ:'JWT'})+'.'+b64(p);return u+'.'+crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url')};
+          try {
+            if(sa.project_id!==PROJECT) throw new Error('FIREBASE_SCOPE_MISMATCH');
+            const now=Math.floor(Date.now()/1000);
+            const custom=jwt({iss:sa.client_email,sub:sa.client_email,aud:'https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit',iat:now,exp:now+3600,uid:ADMIN_UID});
+            let r=await fetch('https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key='+KEY,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:custom,returnSecureToken:true})}); let b=await r.json(); if(!r.ok||!b.idToken) throw new Error('FIREBASE_AUTH_'+r.status); const idToken=b.idToken;
+            const neon=async p=>{const x=await fetch(BASE+p,{headers:{Authorization:'Bearer '+idToken}});const t=await x.text();if(!x.ok)throw new Error('NEON_'+x.status);return JSON.parse(t||'[]')};
+            const [profiles,issues,queue]=await Promise.all([neon('/profiles?select=id&limit=1000'),neon('/issues?select=id&limit=1000'),neon('/sheet_export_queue?select=id,event_id&order=id.asc&limit=1000')]);
+            const assertion=jwt({iss:sa.client_email,scope:'https://www.googleapis.com/auth/spreadsheets.readonly',aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+3600});
+            r=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion})}); b=await r.json(); if(!r.ok||!b.access_token) throw new Error('GOOGLE_OAUTH_'+r.status); const access=b.access_token;
+            const vals=async range=>{const x=await fetch('https://sheets.googleapis.com/v4/spreadsheets/'+SHEET+'/values/'+encodeURIComponent(range),{headers:{Authorization:'Bearer '+access}});const t=await x.text();if(!x.ok)throw new Error('SHEETS_'+x.status);return (JSON.parse(t||'{}').values||[])};
+            const [ev,st,us]=await Promise.all([vals('SU_KIEN!A1:J1000'),vals('TRANG_THAI_SKU!A1:I1000'),vals('NHAN_SU!A1:F1000')]);
+            const eh=['Mã sự kiện','Thời gian','Loại sự kiện','Ticket ID','SKU','Tên sản phẩm','Trạng thái','Số lượt báo','Người báo/Actor ID','Dữ liệu JSON'];
+            const sh=['Ticket ID','SKU','Tên sản phẩm','Trạng thái','Số lượt báo','Báo lần đầu','Cập nhật cuối','Invent xử lý','Số lần mở lại'];
+            const uh=['Mã nhân viên','Họ tên','Nhà thầu','Vai trò','Trạng thái','Cập nhật cuối'];
+            if(JSON.stringify(ev[0]||[])!==JSON.stringify(eh)||JSON.stringify(st[0]||[])!==JSON.stringify(sh)||JSON.stringify(us[0]||[])!==JSON.stringify(uh)) throw new Error('HEADER_MISMATCH');
+            const sheetIds=ev.slice(1).map(x=>String(x[0]||'')), neonIds=queue.map(x=>String(x.event_id||x.id));
+            if(sheetIds.length!==neonIds.length||sheetIds.some((x,i)=>x!==neonIds[i])) throw new Error('EVENT_SEQUENCE_MISMATCH');
+            if(st.length!==issues.length+1) throw new Error('ISSUE_COUNT_MISMATCH');
+            if(us.length!==profiles.length+1) throw new Error('PROFILE_COUNT_MISMATCH');
+            status.ok=true; status.events=queue.length; status.issues=issues.length; status.profiles=profiles.length; status.eventSha256=crypto.createHash('sha256').update(neonIds.join('\n')).digest('hex');
+          } catch(e) { status.error=String(e&&e.message||e).slice(0,200); }
+          fs.mkdirSync('.ops',{recursive:true}); fs.writeFileSync('.ops/temp-canonical-sheet-status.json',JSON.stringify(status,null,2)+'\n');
+          NODE
+          node "$RUNNER_TEMP/verify.mjs"
+      - name: Commit verification proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .ops/temp-canonical-sheet-status.json
+          git diff --cached --quiet || git commit -m 'chore(temp): record canonical Sheet verification'
+          git pull --rebase origin main
+          git push origin HEAD:main
+          jq -e '.ok == true' .ops/temp-canonical-sheet-status.json >/dev/null
