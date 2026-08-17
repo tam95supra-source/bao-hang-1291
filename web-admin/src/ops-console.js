@@ -1,7 +1,7 @@
 import './ops-console.css';
 
-const SUPABASE_URL = 'https://oedasgcdjppjwidhlqdr.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_LGgDehtHMSyeJ1XyJDvQiQ_cdlqIKq7';
+const SUPABASE_URL = 'https://compat.bao-hang-1291.invalid';
+const SUPABASE_ANON_KEY = 'compat-public';
 const WEB_API = `${SUPABASE_URL}/functions/v1/web-api`;
 const ADMIN_OPS = `${SUPABASE_URL}/functions/v1/admin-ops`;
 const SESSION_KEY = 'bao-hang-1291-web-session';

@@ -1,8 +1,8 @@
 import '@fontsource-variable/inter/wght.css';
 import { createClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = 'https://oedasgcdjppjwidhlqdr.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_LGgDehtHMSyeJ1XyJDvQiQ_cdlqIKq7';
+const SUPABASE_URL = 'https://compat.bao-hang-1291.invalid';
+const SUPABASE_ANON_KEY = 'compat-public';
 const API_BASE = `${SUPABASE_URL}/functions/v1/web-api`;
 const SESSION_KEY = 'bao-hang-1291-web-session';
 const CONFIG_TOPIC = 'site:1291:config';

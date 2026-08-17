@@ -172,7 +172,7 @@ async function worker(action, body, init) {
 
 async function compatibilityFetch(input, init = {}) {
   const url = new URL(typeof input === 'string' ? input : input.url, location.href)
-  if (!url.hostname.endsWith('.supabase.co')) return originalFetch(input, init)
+  if (url.hostname !== 'compat.bao-hang-1291.invalid') return originalFetch(input, init)
 
   try {
     if (url.pathname === '/auth/v1/token') {
@@ -193,13 +193,18 @@ async function compatibilityFetch(input, init = {}) {
       headers.delete('apikey')
       return originalFetch(target, { ...init, headers })
     }
-    const functionMatch = url.pathname.match(/^\/functions\/v1\/(web-api|api|issue-withdraw)\/([^/]+)$/)
+    const functionMatch = url.pathname.match(/^\/functions\/v1\/(web-api|api|issue-withdraw|admin-ops)\/([^/]+)$/)
     if (functionMatch) {
       const family = functionMatch[1]
       let action = decodeURIComponent(functionMatch[2])
       const body = parseBody(init)
       if (family === 'issue-withdraw') {
         action = ({ board:'withdrawn-board', search:'picker-search-digits', my:'picker-my-issues', withdraw:'withdraw-shortage' })[action] || action
+      }
+      if (family === 'admin-ops') {
+        if (action === 'create-user') return worker('update-user', body, init)
+        if (action === 'update-user') return worker('update-user', body, init)
+        if (action === 'delete-user') return worker('user-disable', { user_id: body.id || body.user_id }, init)
       }
       if (['update-user', 'import-users', 'sync-google-sheet', 'staff-sync-now', 'upload-log', 'download-log', 'user-upsert', 'user-disable'].includes(action)) {
         return worker(action, body, init)

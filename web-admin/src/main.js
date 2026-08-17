@@ -7,8 +7,8 @@ async function getExcelJS() {
   return excelModulePromise;
 }
 
-const SUPABASE_URL = 'https://oedasgcdjppjwidhlqdr.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_LGgDehtHMSyeJ1XyJDvQiQ_cdlqIKq7';
+const SUPABASE_URL = 'https://compat.bao-hang-1291.invalid';
+const SUPABASE_ANON_KEY = 'compat-public';
 const API_BASE = `${SUPABASE_URL}/functions/v1/web-api`;
 const SESSION_KEY = 'bao-hang-1291-web-session';
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
