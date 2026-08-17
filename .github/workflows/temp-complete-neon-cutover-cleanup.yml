@@ -1,0 +1,410 @@
+name: Temp complete Neon cutover cleanup
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/temp-complete-neon-cutover-cleanup.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.9'
+          cache-disabled: true
+      - name: Remove retired provider operational paths
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p archive
+          if [ -d supabase/migrations ]; then
+            git mv supabase/migrations archive/supabase-migrations
+          fi
+          if [ -f supabase/seed.sql ]; then
+            git mv supabase/seed.sql archive/supabase-seed.sql
+          fi
+          git rm -rf --ignore-unmatch supabase
+          git rm -f --ignore-unmatch \
+            .github/workflows/configure-google-sheet.yml \
+            .github/workflows/deploy-backend.yml \
+            .github/workflows/maintenance.yml \
+            .github/workflows/sla.yml \
+            .github/workflows/patch-neon-runtime.yml \
+            .github/workflows/patch-neon-android.yml \
+            scripts/bootstrap_admin.sh \
+            scripts/patch_neon_runtime.py \
+            google-apps-script/Code.gs
+
+          cat > archive/supabase-migrations/README.md <<'EOF'
+          # Historical pre-Neon migrations
+
+          Các file trong thư mục này chỉ là lịch sử PostgreSQL trước cutover ngày 17/08/2026.
+          Không workflow production nào được phép áp dụng trực tiếp thư mục này.
+          Backend production hiện hành là Neon project `tiny-boat-19315489`, branch `br-broad-resonance-aznwrpea`.
+          Các thay đổi sau cutover phải đặt tại `ops/neon/` và được kiểm chứng trên Neon production/validation đúng scope.
+          EOF
+
+          cat > README.md <<'EOF'
+          # Báo hàng 1291
+
+          Ứng dụng Android nội bộ hỗ trợ Picker báo SKU hết hàng và nhóm Invent nhận, tìm, châm hàng, phản hồi hoặc cho phép skip theo SLA cấu hình.
+
+          ## Kiến trúc production
+
+          - **Neon PostgreSQL + Data API**: nguồn dữ liệu nghiệp vụ duy nhất.
+          - **Firebase Auth**: đăng nhập và identity; Firebase JWT được Neon RLS/RPC kiểm tra.
+          - **Firestore + FCM HTTP v1**: realtime delta và thông báo thiết bị.
+          - **Google Apps Script**: worker nền, Google Sheet, staff sync và Drive diagnostic log.
+          - **Firebase Hosting**: Web Admin tại `bao-hang-1291.web.app`.
+          - **GitHub Actions**: CI/CD, production signing và OTA; repo public nên tuyệt đối không commit server secret/private key/keystore.
+
+          Android package production: `vn.pickpack1291.baohang`.
+
+          ## Build và phát hành
+
+          1. `Android CI` chạy unit test và build APK debug trên standard GitHub-hosted runner.
+          2. Android/Web chỉ nhận client-visible config; quyền dữ liệu do Firebase Auth + Neon RLS/RPC kiểm soát.
+          3. Server secret, Firebase service account và signing material chỉ nằm trong secret store/Script Properties, không nằm trong source hoặc APK.
+          4. Web deploy có billing guard và scope guard; release Beta/Stable chỉ chạy khi có yêu cầu phát hành.
+
+          Mã nguồn không chứa dữ liệu SKU/nhân sự thật, mật khẩu, service-account private key hoặc keystore.
+
+          Xem [Kiến trúc](docs/ARCHITECTURE.md), [Nghiệp vụ](docs/BUSINESS_RULES.md) và [Triển khai](docs/DEPLOYMENT.md).
+          EOF
+
+          cat > docs/ARCHITECTURE.md <<'EOF'
+          # Kiến trúc production — Báo hàng 1291
+
+          ## Thành phần
+
+          1. Android APK: Kotlin/XML, local cache/outbox, FCM, WorkManager và overlay service.
+          2. Neon: PostgreSQL nghiệp vụ, RLS/RPC và Data API; đây là authority duy nhất cho dữ liệu vận hành.
+          3. Firebase: Auth, Firestore realtime control-plane, FCM HTTP v1 và Hosting Web.
+          4. Google Apps Script: worker nền, ghi Google Sheet, staff sync và Drive diagnostic log.
+          5. GitHub Actions: test/build/sign/release APK, deploy Web và các quality/security guard.
+
+          ## Luồng báo SKU
+
+          1. App lấy Firebase ID token và gửi mutation tới Neon Data API/RPC với `client_request_id` duy nhất.
+          2. Neon xử lý ticket/lượt báo trong transaction và ghi audit/outbox.
+          3. Apps Script worker đọc các worker RPC trên Neon, phát FCM/Firestore và ghi Google Sheet.
+          4. Web theo dõi Firestore để cập nhật realtime; Android nhận FCM realtime delta rồi đối chiếu trạng thái với Neon.
+          5. Database là authority; FCM/Firestore chỉ là tín hiệu delta.
+
+          ## Chống trùng và sai thứ tự
+
+          - `client_request_id` unique chống replay sau timeout/mất mạng.
+          - Ticket active có ràng buộc theo SKU.
+          - Trạng thái và thời gian quyết định ở server.
+          - Client luôn đối chiếu `issue_version/status` trước khi chấp nhận delta.
+
+          ## Bảo mật public source
+
+          - Không commit dữ liệu vận hành, service account, mật khẩu, private key hoặc keystore.
+          - Client không có database password/service credential.
+          - Firebase JWT + Neon RLS/RPC quyết định quyền truy cập.
+          - Admin/worker mutation chỉ đi qua RPC được cấp quyền tối thiểu.
+          - Firebase Auth quản lý credential người dùng; Google Sheet không lưu mật khẩu.
+          EOF
+
+          cat > docs/DEPLOYMENT.md <<'EOF'
+          # Triển khai production
+
+          ## Scope cố định
+
+          - Repo: `tam95supra-source/bao-hang-1291`
+          - Neon project: `tiny-boat-19315489`
+          - Neon production branch: `br-broad-resonance-aznwrpea`
+          - Firebase project: `bao-hang-1291`
+          - Android package: `vn.pickpack1291.baohang`
+          - Hosting: `bao-hang-1291.web.app`
+
+          ## Secret/config cần thiết
+
+          - `FIREBASE_SERVICE_ACCOUNT`
+          - `GOOGLE_SHEET_WEBHOOK_URL`, `GOOGLE_SHEET_WEBHOOK_SECRET`
+          - Android production signing secrets
+          - Client-visible `NEON_DATA_API` / Firebase Web API key có thể được build từ config production; không phải server secret.
+
+          Không lưu database password, Firebase private key hoặc signing key trong repo/public artifact.
+
+          ## Thứ tự triển khai
+
+          1. Kiểm tra Neon production schema/RLS/RPC và Firebase project đúng scope.
+          2. Kiểm tra Apps Script worker đã có Script Properties cần thiết và trigger an toàn.
+          3. Chạy quality/security gate cho Web + Android.
+          4. Deploy Web lên Firebase Hosting sau billing guard.
+          5. Phát hành APK Beta, kiểm tra signer/SHA/runtime; Stable chỉ sau Beta PASS.
+
+          ## Vận hành
+
+          - Apps Script worker gọi Neon worker RPC để xử lý SLA, notification, realtime, Sheet queue, cleanup và staff sync.
+          - Google Sheet là báo cáo/đối soát, không quyết định trạng thái realtime.
+          - Firestore/FCM chỉ truyền delta; Neon là authority.
+          - Không bật billing. Nếu có nguy cơ chuyển sang phương án có phí, dừng trước khi phát sinh phí.
+          EOF
+
+          cat > google-apps-script/README.md <<'EOF'
+          # Google Apps Script worker — Báo hàng 1291
+
+          Worker production sử dụng **Neon + Firebase + Google services**.
+
+          - Neon giữ dữ liệu nghiệp vụ và worker outbox.
+          - Firebase Auth/FCM/Firestore phục vụ identity, push và realtime delta.
+          - Apps Script ghi Google Sheet, đồng bộ nhân sự, lưu/đọc diagnostic log trên Drive và chạy worker tick.
+          - Secret nằm trong Apps Script Script Properties; không commit vào repo.
+          - Web App deployment phải giữ URL hiện hành để GitHub secret `GOOGLE_SHEET_WEBHOOK_URL` không đổi.
+
+          File source canonical: `DEPLOY_NEON.gs`.
+          EOF
+
+          cat > secrets.properties.example <<'EOF'
+          # Chỉ dùng local; sao chép thành secrets.properties và không commit file thật.
+          NEON_DATA_API=https://YOUR_NEON_DATA_API/neondb/rest/v1
+          FIREBASE_WEB_API_KEY=YOUR_FIREBASE_WEB_API_KEY
+          APPS_SCRIPT_WORKER_URL=https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec
+          UPDATE_MANIFEST_URL=https://raw.githubusercontent.com/tam95supra-source/bao-hang-1291/main/ota/stable/release-manifest.json
+          EOF
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re, json
+
+          p = Path('google-apps-script/DEPLOY_NEON.gs')
+          s = p.read_text()
+          s = re.sub(r"^const BH_SOURCE_REF = .*?;\n", '', s, flags=re.M)
+          s = re.sub(r"^const BH_BOOTSTRAP_URL = .*?;\n", '', s, flags=re.M)
+          pat = re.compile(r"function bootstrapNeonWorker\(\) \{.*?\n\}\n\nfunction doPost", re.S)
+          repl = '''function bootstrapNeonWorker() {
+            const props = PropertiesService.getScriptProperties();
+            const required = [
+              'WEBHOOK_SECRET',
+              'FIREBASE_SERVICE_ACCOUNT',
+              'STAFF_DEFAULT_PASSWORD',
+              'NEON_DATA_API',
+              'FIREBASE_WEB_API_KEY',
+              'FIREBASE_PROJECT_ID',
+              'WORKER_ADMIN_UID'
+            ];
+            required.forEach(function(key) {
+              const value = String(props.getProperty(key) || '');
+              if (!value) throw new Error(key + ' chưa được cấu hình');
+            });
+            if (String(props.getProperty('FIREBASE_PROJECT_ID')) !== BH_PROJECT) throw new Error('FIREBASE_SCOPE_MISMATCH');
+            const neonApi = String(props.getProperty('NEON_DATA_API') || '');
+            if (neonApi.indexOf('ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1') < 0) throw new Error('NEON_ENDPOINT_SCOPE_MISMATCH');
+            props.setProperties({
+              NEON_PROJECT_ID: BH_NEON_PROJECT,
+              NEON_BRANCH_ID: BH_NEON_BRANCH,
+              BOOTSTRAP_VERSION: 'NEON_ONLY_V1',
+              BOOTSTRAP_AT: new Date().toISOString()
+            }, false);
+            assertScope_();
+            installWorkerTriggers_();
+            setupBaoHang1291();
+            return {ok:true, project:BH_PROJECT, neon_project:BH_NEON_PROJECT, neon_branch:BH_NEON_BRANCH};
+          }
+
+          function doPost'''
+          s, n = pat.subn(repl, s, count=1)
+          if n != 1:
+              raise SystemExit('bootstrapNeonWorker replacement failed')
+          if 'supabase' in s.lower() or 'oedasgcdjppjwidhlqdr' in s:
+              raise SystemExit('retired provider reference remains in DEPLOY_NEON.gs')
+          p.write_text(s)
+
+          p = Path('app/src/main/java/vn/pickpack1291/baohang/realtime/RealtimeClient.kt')
+          s = p.read_text().replace('Android no longer maintains a Supabase WebSocket. Firebase Cloud Messaging', 'Android uses no database WebSocket. Firebase Cloud Messaging')
+          p.write_text(s)
+
+          p = Path('web-admin/src/ops-console.js')
+          s = p.read_text().replace('<div class="good"><b>Supabase rollback</b><span>Chỉ giữ khả năng rollback; Web không có target mạng Supabase và cron nghiệp vụ cũ đã tắt.</span></div>', '<div class="good"><b>Apps Script worker</b><span>Worker nền xử lý SLA, FCM/Firestore, Google Sheet, log và đồng bộ nhân sự từ Neon.</span></div>')
+          p.write_text(s)
+
+          p = Path('docs/BUSINESS_RULES.md')
+          s = p.read_text().replace('`Website/Cron → Supabase Edge Function → Supra API → staging → atomic finalize → inventory_current`', '`Website/Apps Script worker → Neon RPC/Data API → nguồn inventory đã được xác minh → staging → atomic finalize → inventory_current`')
+          s = s.replace('Foreground ưu tiên private Realtime Broadcast; polling chỉ fallback.', 'Foreground ưu tiên Firestore realtime delta; polling chỉ fallback.')
+          s = s.replace('Private Realtime Broadcast khi tab visible; dừng khi tab hidden; polling 30 giây chỉ fallback.', 'Firestore realtime listener khi tab visible; dừng khi tab hidden; polling 30 giây chỉ fallback.')
+          p.write_text(s)
+
+          for name in ['ops/release-request.json','ota/stable/release-manifest.json']:
+              p = Path(name)
+              if p.exists():
+                  data = json.loads(p.read_text())
+                  note = data.get('releaseNotes')
+                  if isinstance(note, str) and 'Supabase' in note:
+                      data['releaseNotes'] = 'Stable 1.6.5: runtime production Báo hàng 1291 sử dụng Neon production + Firebase Auth/FCM/Firestore + Apps Script worker, giữ nguyên nghiệp vụ, production signing và OTA.'
+                      p.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n')
+          PY
+
+          cat > .github/workflows/quality-target.yml <<'EOF'
+          name: Target quality gate
+
+          on:
+            pull_request:
+              branches: [main]
+              paths: ['web-admin/**','app/**','ops/neon/**','google-apps-script/**','docs/**','.github/workflows/quality-target.yml']
+            push:
+              branches: [main]
+              paths: ['web-admin/**','app/**','ops/neon/**','google-apps-script/**','docs/**','.github/workflows/quality-target.yml']
+
+          permissions:
+            contents: read
+
+          concurrency:
+            group: target-quality-${{ github.ref }}
+            cancel-in-progress: true
+
+          jobs:
+            quality:
+              runs-on: ubuntu-latest
+              timeout-minutes: 20
+              steps:
+                - uses: actions/checkout@v6
+                - uses: actions/setup-node@v7
+                  with:
+                    node-version: '22'
+                    package-manager-cache: false
+                - uses: actions/setup-java@v5
+                  with:
+                    distribution: temurin
+                    java-version: '17'
+                - uses: gradle/actions/setup-gradle@v6
+                  with:
+                    gradle-version: '8.9'
+                    cache-disabled: true
+                - name: Build Web Admin
+                  run: |
+                    npm --prefix web-admin install --ignore-scripts --no-audit --no-fund --no-package-lock
+                    npm --prefix web-admin run build
+                - name: Enforce Neon-only runtime and public-source security
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    if grep -RInE '[.]supabase[.]co|oedasgcdjppjwidhlqdr|SUPABASE_URL|SUPABASE_ANON_KEY|/functions/v1/' app/src web-admin/src google-apps-script scripts 2>/dev/null; then
+                      echo 'Retired backend runtime reference found' >&2
+                      exit 1
+                    fi
+                    if grep -RInE '^[[:space:]]*-----BEGIN (RSA )?PRIVATE KEY-----|"private_key"[[:space:]]*:[[:space:]]*"-----BEGIN|RELEASE_STORE_PASSWORD[[:space:]]*=[[:space:]]*[^$[:space:]]' app web-admin google-apps-script ops docs 2>/dev/null; then
+                      echo 'Secret/private-key material detected' >&2
+                      exit 1
+                    fi
+                    grep -R -F 'ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech' web-admin/dist >/dev/null
+                    grep -F 'NEON_DATA_API' app/build.gradle.kts >/dev/null
+                    echo 'NEON_ONLY_SOURCE_GUARD=PASS'
+                - name: Verify Android dependency graph and tests
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    gradle --no-daemon :app:dependencies --configuration debugRuntimeClasspath > "$RUNNER_TEMP/android-deps.txt"
+                    if grep -iE 'supabase|postgrest|gotrue' "$RUNNER_TEMP/android-deps.txt"; then
+                      echo 'Retired backend Android dependency found' >&2
+                      exit 1
+                    fi
+                    gradle --no-daemon testDebugUnitTest assembleDebug
+                    echo 'ANDROID_NEON_ONLY_GATE=PASS'
+          EOF
+
+          cat > .github/workflows/verify-target-live.yml <<'EOF'
+          name: Verify production target live
+
+          on:
+            workflow_dispatch:
+
+          permissions:
+            contents: read
+
+          jobs:
+            verify:
+              runs-on: ubuntu-latest
+              timeout-minutes: 8
+              env:
+                NEON_DATA_API: https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1
+                APPS_SCRIPT_WORKER_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
+              steps:
+                - uses: actions/checkout@v6
+                - name: Scope and source guard
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
+                    case "$APPS_SCRIPT_WORKER_URL" in https://script.google.com/macros/s/*/exec) ;; *) exit 11;; esac
+                    if grep -RInE '[.]supabase[.]co|oedasgcdjppjwidhlqdr|SUPABASE_URL|SUPABASE_ANON_KEY|/functions/v1/' app/src web-admin/src google-apps-script scripts 2>/dev/null; then exit 12; fi
+                - name: Verify Neon auth boundary
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    code="$(curl -sS --retry 3 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/neon.json" -w '%{http_code}' -X POST "$NEON_DATA_API/rpc/api_session_profile_rpc" -H 'content-type: application/json' -d '{"p_test_role":null}')"
+                    case "$code" in 400|401|403) ;; *) cat "$RUNNER_TEMP/neon.json" >&2; exit 21;; esac
+                    echo 'NEON_AUTH_BOUNDARY=PASS'
+                - name: Verify Apps Script worker
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 -X POST "$APPS_SCRIPT_WORKER_URL" -H 'content-type: application/json' -d '{"action":"ping"}' > "$RUNNER_TEMP/worker.json"
+                    jq -e '.ok == true and .project == "bao-hang-1291" and .provider == "NEON_FIREBASE_GOOGLE"' "$RUNNER_TEMP/worker.json" >/dev/null
+                    echo 'APPS_SCRIPT_NEON_WORKER=PASS'
+                - name: Verify Web production bundle
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    python3 - <<'PY'
+                    import re, urllib.request
+                    base='https://bao-hang-1291.web.app'
+                    html=urllib.request.urlopen(base+'/', timeout=20).read().decode('utf-8','replace')
+                    assets=sorted(set(re.findall(r'/assets/[^"\']+\.js', html)))
+                    assert assets
+                    bundle='\n'.join(urllib.request.urlopen(base+a, timeout=20).read().decode('utf-8','replace') for a in assets)
+                    assert 'ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech' in bundle
+                    for bad in ['oedasgcdjppjwidhlqdr','supabase.co','/functions/v1/','/auth/v1/']:
+                        assert bad not in bundle, bad
+                    print('WEB_LIVE_NEON_ONLY=PASS')
+                    PY
+          EOF
+
+          git diff --check
+
+      - name: Validate cleaned source
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -RInE '[.]supabase[.]co|oedasgcdjppjwidhlqdr|SUPABASE_URL|SUPABASE_ANON_KEY|/functions/v1/' app/src web-admin/src google-apps-script scripts 2>/dev/null
+          ! grep -RInE 'Supabase là nguồn dữ liệu chính|Deploy Supabase backend|Supabase Edge Function' README.md docs google-apps-script 2>/dev/null
+          test ! -d supabase
+          test -d archive/supabase-migrations
+          npm --prefix web-admin install --ignore-scripts --no-audit --no-fund --no-package-lock
+          npm --prefix web-admin run build
+          grep -R -F 'ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech' web-admin/dist >/dev/null
+          ! grep -RInE '[.]supabase[.]co|oedasgcdjppjwidhlqdr|/functions/v1/' web-admin/dist
+          gradle --no-daemon :app:dependencies --configuration debugRuntimeClasspath > "$RUNNER_TEMP/android-deps.txt"
+          ! grep -iE 'supabase|postgrest|gotrue' "$RUNNER_TEMP/android-deps.txt"
+          gradle --no-daemon testDebugUnitTest assembleDebug
+          echo 'CUTOVER_SOURCE_CLEANUP_VALIDATION=PASS'
+
+      - name: Commit verified cutover cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'chore(cutover): retire Supabase operational runtime'
+          git pull --rebase origin main
+          git push origin HEAD:main
