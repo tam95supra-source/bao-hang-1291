@@ -13,11 +13,16 @@ async function firebaseRuntime() {
     ]).then(([appModule, authModule, firestoreModule]) => {
       const app = appModule.getApps().find((item) => item.name === '[DEFAULT]') || appModule.initializeApp({
         apiKey: FIREBASE_API_KEY,
-        authDomain: `${FIREBASE_PROJECT}.firebaseapp.com`,
+        authDomain: `${FIREBASE_PROJECT}.web.app`,
         projectId: FIREBASE_PROJECT,
       })
-      const auth = authModule.getAuth(app)
-      authModule.setPersistence(auth, authModule.browserLocalPersistence).catch(() => {})
+      let auth
+      try {
+        auth = authModule.initializeAuth(app, { persistence: authModule.browserLocalPersistence })
+      } catch (error) {
+        if (error?.code !== 'auth/already-initialized') throw error
+        auth = authModule.getAuth(app)
+      }
       return {
         auth,
         firestore: firestoreModule.getFirestore(app),
