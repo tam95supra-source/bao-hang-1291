@@ -6,6 +6,7 @@
 const BH_PROJECT = 'bao-hang-1291';
 const BH_NEON_PROJECT = 'tiny-boat-19315489';
 const BH_NEON_BRANCH = 'br-broad-resonance-aznwrpea';
+const BH_NEON_DATA_API = 'https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1';
 const BH_STAFF_SHEET_ID = '1FRROqCp1lmkuHc3lc4UBpVI5_ZrtiPI1thlEymv458E';
 const BH_STAFF_SHEET_NAME = 'DANH MỤC NHÂN SỰ';
 const BH_PROTECTED_ADMIN_CODE = '6281280';
@@ -53,6 +54,7 @@ function doPost(e) {
     const action = String(body.action || '').trim();
     if (!action) return json_({ok:false,error:'ACTION_REQUIRED'});
     if (action === 'ping') return json_({ok:true,project:BH_PROJECT,provider:'NEON_FIREBASE_GOOGLE'});
+    if (action === 'bootstrap-config') return json_(bootstrapConfig_(body));
     if (action === 'worker-kick') {
       requireUser_(String(body.id_token || ''), null);
       return json_(workerTick_('CLIENT_KICK'));
@@ -77,6 +79,58 @@ function doPost(e) {
   } catch (error) {
     return json_({ok:false,error:safeError_(error)});
   }
+}
+
+function bootstrapConfig_(body) {
+  const props = PropertiesService.getScriptProperties();
+  if (String(props.getProperty('BOOTSTRAP_LOCKED') || '') === '1') throw new Error('BOOTSTRAP_LOCKED');
+  const idToken = String(body.id_token || '');
+  if (!idToken) throw new Error('AUTH_REQUIRED');
+  const authRes = UrlFetchApp.fetch(BH_NEON_DATA_API + '/rpc/api_session_profile_rpc', {
+    method:'post',
+    contentType:'application/json',
+    headers:{Authorization:'Bearer ' + idToken},
+    payload:JSON.stringify({p_test_role:null}),
+    muteHttpExceptions:true
+  });
+  if (authRes.getResponseCode() < 200 || authRes.getResponseCode() >= 300) throw new Error('BOOTSTRAP_AUTH_FAILED');
+  const session = JSON.parse(authRes.getContentText() || '{}');
+  const profile = session && session.profile ? session.profile : {};
+  if (String(session.effective_role || '').toUpperCase() !== 'ADMIN' || String(profile.employee_code || '') !== BH_PROTECTED_ADMIN_CODE || !profile.protected_account) {
+    throw new Error('BOOTSTRAP_ADMIN_REQUIRED');
+  }
+  const cfg = body && body.config ? body.config : {};
+  const neonApi = String(cfg.neon_data_api || '');
+  const firebaseProject = String(cfg.firebase_project_id || '');
+  const workerUid = String(cfg.worker_admin_uid || '');
+  const webhookSecret = String(cfg.webhook_secret || '');
+  const serviceAccount = String(cfg.firebase_service_account || '');
+  const staffPassword = String(cfg.staff_default_password || '');
+  const firebaseApiKey = String(cfg.firebase_web_api_key || '');
+  if (neonApi !== BH_NEON_DATA_API || firebaseProject !== BH_PROJECT) throw new Error('BOOTSTRAP_SCOPE_MISMATCH');
+  if (workerUid !== String(profile.id || '')) throw new Error('BOOTSTRAP_ADMIN_UID_MISMATCH');
+  if (webhookSecret.length < 20 || !staffPassword || !firebaseApiKey) throw new Error('BOOTSTRAP_CONFIG_INCOMPLETE');
+  let sa = {};
+  try { sa = JSON.parse(serviceAccount); } catch (error) { throw new Error('BOOTSTRAP_SERVICE_ACCOUNT_INVALID'); }
+  if (String(sa.project_id || '') !== BH_PROJECT || !sa.client_email || !sa.private_key) throw new Error('BOOTSTRAP_SERVICE_ACCOUNT_SCOPE_MISMATCH');
+  props.setProperties({
+    WEBHOOK_SECRET:webhookSecret,
+    FIREBASE_SERVICE_ACCOUNT:serviceAccount,
+    STAFF_DEFAULT_PASSWORD:staffPassword,
+    NEON_DATA_API:BH_NEON_DATA_API,
+    FIREBASE_WEB_API_KEY:firebaseApiKey,
+    FIREBASE_PROJECT_ID:BH_PROJECT,
+    WORKER_ADMIN_UID:workerUid,
+    NEON_PROJECT_ID:BH_NEON_PROJECT,
+    NEON_BRANCH_ID:BH_NEON_BRANCH,
+    BOOTSTRAP_VERSION:'NEON_ONLY_V2',
+    BOOTSTRAP_AT:new Date().toISOString(),
+    BOOTSTRAP_LOCKED:'1'
+  }, false);
+  assertScope_();
+  installWorkerTriggers_();
+  setupBaoHang1291();
+  return {ok:true,project:BH_PROJECT,provider:'NEON_FIREBASE_GOOGLE',locked:true};
 }
 
 function workerSafetyTick() { return workerTick_('SAFETY_30M'); }
