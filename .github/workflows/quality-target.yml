@@ -1,3 +1,4 @@
+# Neon-only production gate; refreshed after full Supabase source retirement.
 name: Target quality gate
 
 on:
