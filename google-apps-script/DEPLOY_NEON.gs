@@ -6,7 +6,7 @@
 const BH_PROJECT = 'bao-hang-1291';
 const BH_SOURCE_REF = 'oedasgcdjppjwidhlqdr';
 const BH_NEON_PROJECT = 'tiny-boat-19315489';
-const BH_NEON_BRANCH = 'br-delicate-scene-azdfkigf';
+const BH_NEON_BRANCH = 'br-broad-resonance-aznwrpea';
 const BH_BOOTSTRAP_URL = 'https://oedasgcdjppjwidhlqdr.supabase.co/functions/v1/migration-apps-script-bootstrap';
 const BH_STAFF_SHEET_ID = '1FRROqCp1lmkuHc3lc4UBpVI5_ZrtiPI1thlEymv458E';
 const BH_STAFF_SHEET_NAME = 'DANH MỤC NHÂN SỰ';
@@ -485,141 +485,126 @@ function downloadLog_(body) {
   const bytes=file.getBlob().getBytes();
   if(bytes.length>2097152)throw new Error('LOG_SIZE_INVALID');
   if(sha256HexBytes_(bytes)!==String(meta.sha256||'').toLowerCase())throw new Error('LOG_SHA_MISMATCH');
-  return {ok:true,id:String(meta.id||body.id),file_name:file.getName(),gzip_base64:Utilities.base64Encode(bytes),sha256:meta.sha256,compressed_bytes:bytes.length};
+  return {ok:true,id:String(meta.id),filename:file.getName(),mime_type:'application/gzip',gzip_base64:Utilities.base64Encode(bytes)};
 }
 
-function getLogFolder_() {
-  const props=PropertiesService.getScriptProperties();
-  const existing=props.getProperty('LOG_FOLDER_ID');
-  if(existing){try{return DriveApp.getFolderById(existing);}catch(ignore){}}
-  const book=SpreadsheetApp.getActiveSpreadsheet();
-  const file=DriveApp.getFileById(book.getId());
-  const parents=file.getParents();
-  const parent=parents.hasNext()?parents.next():DriveApp.getRootFolder();
-  const iter=parent.getFoldersByName(BH_LOG_FOLDER);
-  const folder=iter.hasNext()?iter.next():parent.createFolder(BH_LOG_FOLDER);
-  props.setProperty('LOG_FOLDER_ID',folder.getId());
-  return folder;
-}
-
-function requireUser_(idToken,allowed) {
+function requireUser_(idToken, allowedRoles) {
   if(!idToken)throw new Error('AUTH_REQUIRED');
-  const result=neonRpc_('api_session_profile_rpc',{p_test_role:null},idToken);
-  const profile=result&&result.profile?result.profile:null;
-  if(!profile||profile.active===false)throw new Error('USER_INACTIVE');
-  if(allowed&&allowed.indexOf(String(profile.role))<0)throw new Error('FORBIDDEN');
-  return {profile:profile,effective_role:result.effective_role};
+  const payload=verifyFirebaseIdToken_(idToken);
+  const profile=neonRpc_('api_session_profile_rpc',{p_test_role:null},idToken);
+  if(!profile||!profile.profile||profile.profile.active!==true)throw new Error('USER_INACTIVE');
+  const role=String(profile.profile.role||'PICKER');
+  if(allowedRoles&&allowedRoles.indexOf(role)<0)throw new Error('FORBIDDEN');
+  return {uid:String(payload.sub||''),profile:profile.profile};
 }
 
-function neonRpc_(name,payload,idToken) {
-  assertScope_();
+function neonRpc_(name, payload, idToken) {
+  const allowed=/^(api_|worker_|diagnostic_)[a-z0-9_]+_rpc$/.test(name)||name==='report_shortage_rpc';
+  if(!allowed)throw new Error('RPC_NOT_ALLOWED');
   const base=requiredProp_('NEON_DATA_API').replace(/\/$/,'');
-  if(base.indexOf('ep-flat-feather-azdi44be')<0||base.indexOf('ap-southeast-1')<0)throw new Error('NEON_ENDPOINT_SCOPE_MISMATCH');
-  const token=idToken||workerAdminIdToken_();
-  const res=UrlFetchApp.fetch(base+'/rpc/'+encodeURIComponent(name),{method:'post',contentType:'application/json',headers:{Authorization:'Bearer '+token},payload:JSON.stringify(payload||{}),muteHttpExceptions:true});
+  const res=UrlFetchApp.fetch(base+'/rpc/'+name,{method:'post',contentType:'application/json',headers:{Authorization:'Bearer '+idToken},payload:JSON.stringify(payload||{}),muteHttpExceptions:true});
+  const code=res.getResponseCode();
   const text=res.getContentText();
-  if(res.getResponseCode()<200||res.getResponseCode()>=300)throw new Error('NEON_'+name+'_'+res.getResponseCode()+': '+text.slice(0,500));
-  return text?JSON.parse(text):null;
+  let parsed=null;try{parsed=text?JSON.parse(text):null}catch(ignore){}
+  if(code<200||code>=300)throw new Error('NEON_'+code+': '+String(parsed&&parsed.message?parsed.message:text).slice(0,500));
+  return parsed;
 }
 
 function workerAdminIdToken_() {
-  const cache=CacheService.getScriptCache();
-  const cached=cache.get('WORKER_ADMIN_ID_TOKEN');
-  if(cached)return cached;
-  const sa=serviceAccount_(),uid=requiredProp_('WORKER_ADMIN_UID');
+  const uid=requiredProp_('WORKER_ADMIN_UID');
+  const sa=serviceAccount_();
   const now=Math.floor(Date.now()/1000);
   const custom=signJwt_(sa,{iss:sa.client_email,sub:sa.client_email,aud:'https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit',iat:now,exp:now+3600,uid:uid});
-  const url='https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key='+encodeURIComponent(requiredProp_('FIREBASE_WEB_API_KEY'));
-  const r=fetchJson_(url,{method:'post',contentType:'application/json',payload:JSON.stringify({token:custom,returnSecureToken:true}),muteHttpExceptions:true});
-  if(!r.idToken)throw new Error('WORKER_FIREBASE_TOKEN_FAILED');
-  cache.put('WORKER_ADMIN_ID_TOKEN',String(r.idToken),3300);
-  return String(r.idToken);
+  const data=fetchJson_('https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key='+encodeURIComponent(requiredProp_('FIREBASE_WEB_API_KEY')),{method:'post',contentType:'application/json',payload:JSON.stringify({token:custom,returnSecureToken:true}),muteHttpExceptions:true});
+  if(!data.idToken)throw new Error('FIREBASE_CUSTOM_TOKEN_FAILED');
+  return String(data.idToken);
+}
+
+function verifyFirebaseIdToken_(token) {
+  const parts=String(token||'').split('.');if(parts.length!==3)throw new Error('INVALID_TOKEN');
+  const header=JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(parts[0])).getDataAsString());
+  const payload=JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(parts[1])).getDataAsString());
+  if(payload.aud!==BH_PROJECT||payload.iss!=='https://securetoken.google.com/'+BH_PROJECT||Number(payload.exp||0)<=Math.floor(Date.now()/1000))throw new Error('INVALID_TOKEN_CLAIMS');
+  const keys=fetchJson_('https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com',{muteHttpExceptions:false});
+  const cert=keys[header.kid];if(!cert)throw new Error('TOKEN_KEY_NOT_FOUND');
+  const signature=Utilities.base64DecodeWebSafe(parts[2]);
+  if(!Utilities.verifyRsaSha256Signature(signature,parts[0]+'.'+parts[1],cert))throw new Error('INVALID_TOKEN_SIGNATURE');
+  return payload;
 }
 
 function firebaseOAuthAccessToken_(scope) {
-  const cache=CacheService.getScriptCache(),key='GOOGLE_OAUTH_'+sha256Hex_(scope).slice(0,12),cached=cache.get(key);
-  if(cached)return cached;
-  const sa=serviceAccount_(),now=Math.floor(Date.now()/1000);
+  const sa=serviceAccount_();
+  const now=Math.floor(Date.now()/1000);
   const assertion=signJwt_(sa,{iss:sa.client_email,scope:scope,aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+3600});
-  const res=UrlFetchApp.fetch('https://oauth2.googleapis.com/token',{method:'post',payload:{grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:assertion},muteHttpExceptions:true});
-  if(res.getResponseCode()!==200)throw new Error('GOOGLE_OAUTH_FAILED_'+res.getResponseCode());
-  const json=JSON.parse(res.getContentText());
-  if(!json.access_token)throw new Error('GOOGLE_OAUTH_NO_TOKEN');
-  cache.put(key,String(json.access_token),3300);
-  return String(json.access_token);
+  const response=UrlFetchApp.fetch('https://oauth2.googleapis.com/token',{method:'post',payload:{grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:assertion},muteHttpExceptions:true});
+  const body=JSON.parse(response.getContentText()||'{}');
+  if(response.getResponseCode()!==200||!body.access_token)throw new Error('GOOGLE_OAUTH_FAILED');
+  return String(body.access_token);
 }
 
-function firebaseAdminCreate_(localId,email,password,displayName,disabled) {
+function firebaseAdminCreate_(uid,email,password,displayName,disabled) {
+  return firebaseIdentityPost_('projects/'+BH_PROJECT+'/accounts',{localId:uid,email:email,password:password,displayName:displayName,emailVerified:true,disabled:!!disabled});
+}
+function firebaseAdminUpdate_(uid,patch) {
+  const body={localId:uid};
+  if(patch.email!==undefined)body.email=patch.email;
+  if(patch.password)body.password=patch.password;
+  if(patch.displayName!==undefined)body.displayName=patch.displayName;
+  if(patch.emailVerified!==undefined)body.emailVerified=!!patch.emailVerified;
+  if(patch.disableUser!==undefined)body.disableUser=!!patch.disableUser;
+  if(patch.customAttributes!==undefined)body.customAttributes=JSON.stringify(patch.customAttributes);
+  return firebaseIdentityPost_('projects/'+BH_PROJECT+'/accounts:update',body);
+}
+function firebaseAdminDelete_(uid) { return firebaseIdentityPost_('projects/'+BH_PROJECT+'/accounts:delete',{localId:uid}); }
+function firebaseIdentityPost_(path,body) {
   const access=firebaseOAuthAccessToken_('https://www.googleapis.com/auth/identitytoolkit');
-  const url='https://identitytoolkit.googleapis.com/v1/projects/'+BH_PROJECT+'/accounts';
-  const body={localId:String(localId),email:String(email),password:String(password),displayName:String(displayName||''),emailVerified:true,disabled:!!disabled};
-  const res=UrlFetchApp.fetch(url,{method:'post',contentType:'application/json',headers:{Authorization:'Bearer '+access},payload:JSON.stringify(body),muteHttpExceptions:true});
-  if(res.getResponseCode()<200||res.getResponseCode()>=300)throw new Error('FIREBASE_CREATE_'+res.getResponseCode()+': '+res.getContentText().slice(0,400));
-  return JSON.parse(res.getContentText());
+  const res=UrlFetchApp.fetch('https://identitytoolkit.googleapis.com/v1/'+path,{method:'post',contentType:'application/json',headers:{Authorization:'Bearer '+access},payload:JSON.stringify(body),muteHttpExceptions:true});
+  const text=res.getContentText();if(res.getResponseCode()<200||res.getResponseCode()>=300)throw new Error('FIREBASE_ADMIN_'+res.getResponseCode()+': '+text.slice(0,500));return text?JSON.parse(text):{};
 }
 
-function firebaseAdminUpdate_(localId,patch) {
-  const access=firebaseOAuthAccessToken_('https://www.googleapis.com/auth/identitytoolkit');
-  const url='https://identitytoolkit.googleapis.com/v1/projects/'+BH_PROJECT+'/accounts:update';
-  const body={localId:String(localId),returnSecureToken:false};
-  Object.keys(patch||{}).forEach(function(k){if(patch[k]!==undefined&&patch[k]!==null&&patch[k]!=='')body[k]=patch[k];});
-  const res=UrlFetchApp.fetch(url,{method:'post',contentType:'application/json',headers:{Authorization:'Bearer '+access},payload:JSON.stringify(body),muteHttpExceptions:true});
-  if(res.getResponseCode()<200||res.getResponseCode()>=300)throw new Error('FIREBASE_UPDATE_'+res.getResponseCode()+': '+res.getContentText().slice(0,400));
-  CacheService.getScriptCache().remove('WORKER_ADMIN_ID_TOKEN');
-  return JSON.parse(res.getContentText());
+function claims_(employeeCode, role) { return {role:'authenticated',employee_code:String(employeeCode),app_role:String(role)}; }
+function employeeEmail_(code) { return String(code).toLowerCase()+'@bao-hang-1291.local'; }
+function staffRole_(position,code) {
+  if(String(code)===BH_PROTECTED_ADMIN_CODE)return 'ADMIN';
+  const p=String(position||'').toUpperCase();
+  if(p.indexOf('INVENT')>=0)return 'INVENT';
+  return 'PICKER';
 }
-
-function firebaseAdminDelete_(localId) {
-  if(String(localId)===requiredProp_('WORKER_ADMIN_UID'))throw new Error('PROTECTED_ADMIN');
-  const access=firebaseOAuthAccessToken_('https://www.googleapis.com/auth/identitytoolkit');
-  const url='https://identitytoolkit.googleapis.com/v1/projects/'+BH_PROJECT+'/accounts:delete';
-  const res=UrlFetchApp.fetch(url,{method:'post',contentType:'application/json',headers:{Authorization:'Bearer '+access},payload:JSON.stringify({localId:String(localId)}),muteHttpExceptions:true});
-  if(res.getResponseCode()<200||res.getResponseCode()>=300)throw new Error('FIREBASE_DELETE_'+res.getResponseCode());
-}
-
-function claims_(employeeCode,appRole) { return JSON.stringify({role:'authenticated',employee_code:String(employeeCode),app_role:String(appRole)}); }
-function employeeEmail_(code) { const raw=String(code||'').trim().toLowerCase(); if(!/^[a-z0-9._-]+$/.test(raw))throw new Error('INVALID_EMPLOYEE_CODE'); return raw+'@bao-hang-1291.local'; }
-function staffRole_(position,code) { if(String(code)===BH_PROTECTED_ADMIN_CODE)return 'ADMIN'; const p=normalize_(position); return ['chuyen vien','truong nhom','truong kho'].indexOf(p)>=0?'ADMIN_INVENT':'PICKER'; }
-function normalize_(value) { return String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/đ/g,'d').replace(/\s+/g,' ').trim(); }
-
-function signJwt_(sa,claims) {
-  const header=base64WebSafeText_(JSON.stringify({alg:'RS256',typ:'JWT'}));
-  const payload=base64WebSafeText_(JSON.stringify(claims));
-  const unsigned=header+'.'+payload;
-  const signature=Utilities.computeRsaSha256Signature(unsigned,String(sa.private_key));
-  return unsigned+'.'+Utilities.base64EncodeWebSafe(signature).replace(/=+$/,'');
-}
-function base64WebSafeText_(text){return Utilities.base64EncodeWebSafe(Utilities.newBlob(String(text)).getBytes()).replace(/=+$/,'');}
-function serviceAccount_(){const raw=requiredProp_('FIREBASE_SERVICE_ACCOUNT');const sa=JSON.parse(raw);if(sa.project_id!==BH_PROJECT)throw new Error('FIREBASE_SCOPE_MISMATCH');return sa;}
-function requiredProp_(name){const v=PropertiesService.getScriptProperties().getProperty(name)||'';if(!v)throw new Error(name+'_MISSING');return v;}
-function assertScope_(){const p=PropertiesService.getScriptProperties();if(p.getProperty('FIREBASE_PROJECT_ID')!==BH_PROJECT||p.getProperty('NEON_PROJECT_ID')!==BH_NEON_PROJECT||p.getProperty('NEON_BRANCH_ID')!==BH_NEON_BRANCH)throw new Error('WORKER_SCOPE_MISMATCH');}
 
 function sheetWebhook_(body) {
   const expected=PropertiesService.getScriptProperties().getProperty('WEBHOOK_SECRET');
   if(!expected||String(body.secret)!==expected)return {ok:false,error:'Unauthorized'};
-  const lock=LockService.getScriptLock(); lock.waitLock(25000);
-  try{
-    const events=Array.isArray(body.events)?body.events:[],state=PropertiesService.getScriptProperties();
-    let lastId=Number(state.getProperty('LAST_QUEUE_ID')||0),processed=0;
-    events.sort(function(a,b){return Number(a.id)-Number(b.id);}).forEach(function(event){const id=Number(event.id);if(!id||id<=lastId)return;applyEvent_(event);lastId=id;state.setProperty('LAST_QUEUE_ID',String(lastId));processed++;});
-    return {ok:true,processed:processed,lastId:lastId};
-  } finally {lock.releaseLock();}
+  const lock=LockService.getScriptLock();lock.waitLock(25000);
+  try{(body.events||[]).forEach(applyEvent_);return {ok:true,processed:(body.events||[]).length};}finally{lock.releaseLock();}
 }
 
 function applyEvent_(event) {
-  const payload=event.payload||{};
-  getOrCreateSheet_('SU_KIEN',BH_EVENT_HEADERS).appendRow([event.id,new Date(event.created_at||Date.now()),event.event_type||'',payload.id||'',payload.sku||'',payload.product_name||'',payload.status||'',payload.report_count||'',payload.reporter_id||payload.actor_id||'',JSON.stringify(payload)]);
-  if(event.event_type==='USER_UPSERT'){
-    upsertByKey_(getOrCreateSheet_('NHAN_SU',BH_USER_HEADERS),1,payload.employee_code,[payload.employee_code||'',payload.full_name||'',payload.contractor||'',payload.role||'',payload.active?'HOẠT ĐỘNG':'NGỪNG HOẠT ĐỘNG',new Date(payload.updated_at||Date.now())]); return;
-  }
-  if(payload.id&&payload.sku)upsertByKey_(getOrCreateSheet_('TRANG_THAI_SKU',BH_ISSUE_HEADERS),1,payload.id,[payload.id,payload.sku,payload.product_name||'',payload.status||'',payload.report_count||1,new Date(payload.reported_at||event.created_at||Date.now()),new Date(payload.updated_at||event.created_at||Date.now()),payload.assigned_name||'',payload.reopen_count||0]);
+  const tab=event.type==='USER'?'NHAN_SU':event.type==='ISSUE'?'TRANG_THAI_SKU':'SU_KIEN';
+  const sheet=SpreadsheetApp.getActiveSpreadsheet().getSheetByName(tab);
+  if(!sheet)throw new Error('Thiếu tab '+tab);
+  if(tab==='NHAN_SU')upsertByKey_(sheet,1,event.employee_code,[event.employee_code,event.full_name,event.contractor,event.role,event.active?'Đang hoạt động':'Ngừng',event.updated_at]);
+  else if(tab==='TRANG_THAI_SKU')upsertByKey_(sheet,1,event.issue_id,[event.issue_id,event.sku,event.product_name,event.status,event.report_count,event.first_reported_at,event.last_reported_at,event.invent_assignee_id,event.reopen_count]);
+  else sheet.appendRow([event.queue_id,event.created_at,event.event_type,event.issue_id,event.sku,event.product_name,event.status,event.report_count,event.actor_user_id,JSON.stringify(event.payload||{})]);
 }
-function getOrCreateSheet_(name,headers){const book=SpreadsheetApp.getActiveSpreadsheet();let s=book.getSheetByName(name);if(!s)s=book.insertSheet(name);if(s.getLastRow()===0){s.getRange(1,1,1,headers.length).setValues([headers]);s.getRange(1,1,1,headers.length).setBackground('#123B5D').setFontColor('#FFFFFF').setFontWeight('bold');s.setFrozenRows(1);s.autoResizeColumns(1,headers.length);}return s;}
-function upsertByKey_(sheet,keyColumn,key,rowValues){if(!key)return;const last=sheet.getLastRow();let row=last+1;if(last>=2){const match=sheet.getRange(2,keyColumn,last-1,1).createTextFinder(String(key)).matchEntireCell(true).findNext();if(match)row=match.getRow();}sheet.getRange(row,1,1,rowValues.length).setValues([rowValues]);}
 
-function parseBody_(e){try{return JSON.parse(e&&e.postData&&e.postData.contents?e.postData.contents:'{}');}catch(error){return {};}}
-function fetchJson_(url,options){const res=UrlFetchApp.fetch(url,options||{}),text=res.getContentText();let value={};try{value=text?JSON.parse(text):{};}catch(ignore){value={raw:text};}value.__http=res.getResponseCode();return value;}
-function json_(value){return ContentService.createTextOutput(JSON.stringify(value)).setMimeType(ContentService.MimeType.JSON);}
-function safeError_(error){return String(error&&error.message?error.message:error).slice(0,700);}
-function sha256Hex_(text){return sha256HexBytes_(Utilities.newBlob(String(text)).getBytes());}
-function sha256HexBytes_(bytes){return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,bytes).map(function(b){const n=(b+256)%256;return ('0'+n.toString(16)).slice(-2);}).join('');}
+function upsertByKey_(sheet,keyCol,key,values) {
+  const last=sheet.getLastRow();let row=0;
+  if(last>=2){const found=sheet.getRange(2,keyCol,last-1,1).createTextFinder(String(key)).matchEntireCell(true).findNext();if(found)row=found.getRow();}
+  if(row)sheet.getRange(row,1,1,values.length).setValues([values]);else sheet.appendRow(values);
+}
+
+function getOrCreateSheet_(name,headers) {
+  const ss=SpreadsheetApp.getActiveSpreadsheet();let s=ss.getSheetByName(name);if(!s)s=ss.insertSheet(name);if(s.getLastRow()===0)s.appendRow(headers);return s;
+}
+function getLogFolder_(){const it=DriveApp.getFoldersByName(BH_LOG_FOLDER);return it.hasNext()?it.next():DriveApp.createFolder(BH_LOG_FOLDER);}
+function parseBody_(e){if(!e||!e.postData||!e.postData.contents)return{};try{return JSON.parse(e.postData.contents)}catch(ignore){return{}}}
+function fetchJson_(url,opts){const r=UrlFetchApp.fetch(url,opts||{});const t=r.getContentText();try{return t?JSON.parse(t):{}}catch(ignore){return{ok:false,error:'INVALID_JSON',http:r.getResponseCode()}}}
+function safeError_(e){return String(e&&e.message?e.message:e).slice(0,1000)}
+function json_(obj){return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON)}
+function sha256Hex_(text){return sha256HexBytes_(Utilities.newBlob(text).getBytes())}
+function sha256HexBytes_(bytes){return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,bytes).map(function(b){const n=(b+256)%256;return('0'+n.toString(16)).slice(-2)}).join('')}
+function signJwt_(sa,claims){const h=base64WebSafeText_(JSON.stringify({alg:'RS256',typ:'JWT'}));const p=base64WebSafeText_(JSON.stringify(claims));const unsigned=h+'.'+p;const signature=Utilities.computeRsaSha256Signature(unsigned,sa.private_key);return unsigned+'.'+Utilities.base64EncodeWebSafe(signature).replace(/=+$/,'')}
+function base64WebSafeText_(text){return Utilities.base64EncodeWebSafe(Utilities.newBlob(String(text)).getBytes()).replace(/=+$/,'')}
+function serviceAccount_(){const raw=requiredProp_('FIREBASE_SERVICE_ACCOUNT');const sa=JSON.parse(raw);if(sa.project_id!==BH_PROJECT)throw new Error('FIREBASE_SCOPE_MISMATCH');return sa;}
+function requiredProp_(name){const v=PropertiesService.getScriptProperties().getProperty(name)||'';if(!v)throw new Error(name+'_MISSING');return v;}
+function assertScope_(){const p=PropertiesService.getScriptProperties();if(p.getProperty('FIREBASE_PROJECT_ID')!==BH_PROJECT||p.getProperty('NEON_PROJECT_ID')!==BH_NEON_PROJECT||p.getProperty('NEON_BRANCH_ID')!==BH_NEON_BRANCH)throw new Error('WORKER_SCOPE_MISMATCH');}
