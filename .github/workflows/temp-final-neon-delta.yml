@@ -1,4 +1,4 @@
-name: Temp final Neon delta probe
+name: Temp final Supabase to Neon delta
 on:
   push:
     branches: [migration/neon-cutover]
@@ -6,22 +6,27 @@ on:
 permissions:
   contents: read
 jobs:
-  probe:
+  delta:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 12
     env:
       MIGRATION_SECRET: ${{ secrets.GOOGLE_SHEET_WEBHOOK_SECRET }}
       URL: https://oedasgcdjppjwidhlqdr.supabase.co/functions/v1/migration-neon-production-push
     steps:
-      - name: Probe exact BÁO HÀNG production target
+      - name: Final authoritative sync of all 33 source-owned tables
         shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
           test -n "${MIGRATION_SECRET:-}"; test ${#MIGRATION_SECRET} -ge 32
-          body='{"project":"bao-hang-1291","supabase_ref":"oedasgcdjppjwidhlqdr","neon_project":"tiny-boat-19315489","neon_branch":"br-broad-resonance-aznwrpea","action":"probe"}'
-          code="$(curl -sS --retry 2 --max-time 60 -o "$RUNNER_TEMP/probe.json" -w '%{http_code}' -X POST "$URL" -H "x-migration-secret: $MIGRATION_SECRET" -H 'content-type: application/json' -d "$body")"
-          echo "PROBE_HTTP=$code"; jq '{ok,target_project,target_branch,source_ref,error}' "$RUNNER_TEMP/probe.json"
-          test "$code" = 200
-          jq -e '.ok==true and .target_project=="tiny-boat-19315489" and .target_branch=="br-broad-resonance-aznwrpea" and .source_ref=="oedasgcdjppjwidhlqdr"' "$RUNNER_TEMP/probe.json" >/dev/null
-          echo FINAL_DELTA_PROBE_OK
+          base='{"project":"bao-hang-1291","supabase_ref":"oedasgcdjppjwidhlqdr","neon_project":"tiny-boat-19315489","neon_branch":"br-broad-resonance-aznwrpea","action":"import_group"'
+          for group in 0 1 2 3; do
+            out="$RUNNER_TEMP/final-group-${group}.json"
+            body="${base},\"group\":${group}}"
+            code="$(curl -sS --retry 2 --max-time 180 -o "$out" -w '%{http_code}' -X POST "$URL" -H "x-migration-secret: $MIGRATION_SECRET" -H 'content-type: application/json' -d "$body")"
+            echo "FINAL_GROUP=$group HTTP=$code"
+            jq '{ok,group,error,results:[.results[]? | {table,copied,source_count,target_count}]}' "$out"
+            test "$code" = 200
+            jq -e '.ok==true and ([.results[] | select(.source_count != .target_count)] | length)==0' "$out" >/dev/null
+          done
+          echo FINAL_DELTA_COUNTS_PASS
