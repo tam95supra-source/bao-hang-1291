@@ -1,4 +1,4 @@
-name: Neon production initial data import
+name: Neon production notification delta reconcile
 
 on:
   push:
@@ -9,28 +9,23 @@ permissions:
   contents: read
 
 jobs:
-  import:
+  reconcile:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     env:
       MIGRATION_SECRET: ${{ secrets.GOOGLE_SHEET_WEBHOOK_SECRET }}
       URL: https://oedasgcdjppjwidhlqdr.supabase.co/functions/v1/migration-neon-production-push
     steps:
-      - name: Import all 33 source-owned tables
+      - name: Reconcile active group 1 delta
         shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
-          test -n "${MIGRATION_SECRET:-}" || { echo 'Missing migration secret' >&2; exit 1; }
+          test -n "${MIGRATION_SECRET:-}"
           test ${#MIGRATION_SECRET} -ge 32
-          base='{"project":"bao-hang-1291","supabase_ref":"oedasgcdjppjwidhlqdr","neon_project":"tiny-boat-19315489","neon_branch":"br-broad-resonance-aznwrpea","action":"import_group"'
-          for group in 0 1 2 3; do
-            out="$RUNNER_TEMP/group-${group}.json"
-            body="${base},\"group\":${group}}"
-            code="$(curl -sS --retry 2 --max-time 150 -o "$out" -w '%{http_code}' -X POST "$URL" -H "x-migration-secret: $MIGRATION_SECRET" -H 'content-type: application/json' -d "$body")"
-            echo "group=$group http=$code"
-            jq '{ok,group,error,results:[.results[]? | {table,copied,source_count,target_count}]}' "$out"
-            test "$code" = 200
-            jq -e '.ok==true and ([.results[] | select(.source_count != .target_count)] | length)==0' "$out" >/dev/null
-          done
-          echo 'P3_INITIAL_IMPORT_PASS'
+          body='{"project":"bao-hang-1291","supabase_ref":"oedasgcdjppjwidhlqdr","neon_project":"tiny-boat-19315489","neon_branch":"br-broad-resonance-aznwrpea","action":"import_group","group":1}'
+          code="$(curl -sS --retry 2 --max-time 150 -o "$RUNNER_TEMP/group1.json" -w '%{http_code}' -X POST "$URL" -H "x-migration-secret: $MIGRATION_SECRET" -H 'content-type: application/json' -d "$body")"
+          jq '{ok,group,error,results:[.results[]? | {table,copied,source_count,target_count}]}' "$RUNNER_TEMP/group1.json"
+          test "$code" = 200
+          jq -e '.ok==true and ([.results[] | select(.source_count != .target_count)] | length)==0' "$RUNNER_TEMP/group1.json" >/dev/null
+          echo 'P3_GROUP1_DELTA_PASS'
