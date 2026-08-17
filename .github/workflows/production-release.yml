@@ -19,6 +19,7 @@ jobs:
     timeout-minutes: 30
     env:
       FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      APPS_SCRIPT_WORKER_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v6
@@ -35,36 +36,34 @@ jobs:
           gradle-version: '8.9'
           cache-disabled: true
 
-      - name: Validate release request and channel monotonicity
+      - name: Validate release request and scope
         id: request
         shell: bash
         run: |
           set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
+          test -n "${APPS_SCRIPT_WORKER_URL:-}" || { echo 'Missing Apps Script worker URL' >&2; exit 1; }
+          case "$APPS_SCRIPT_WORKER_URL" in https://script.google.com/macros/s/*/exec) ;; *) echo 'Invalid Apps Script worker URL' >&2; exit 1;; esac
+
           request='ops/release-request.json'
           test -s "$request"
           jq -e . "$request" >/dev/null
-          jq -e '(.channel | type) == "string"' "$request" >/dev/null
-          jq -e '(.versionName | type) == "string"' "$request" >/dev/null
-          jq -e '(.versionCode | type) == "number" and (.versionCode > 0) and (.versionCode == (.versionCode | floor))' "$request" >/dev/null
-          jq -e '(.mandatory | type) == "boolean"' "$request" >/dev/null
-          jq -e '((.releaseNotes // "") | type) == "string"' "$request" >/dev/null
-          jq -e '((.action // "publish") | type) == "string"' "$request" >/dev/null
+          jq -e '(.channel | type) == "string" and (.versionName | type) == "string" and (.versionCode | type) == "number" and (.versionCode > 0) and (.versionCode == (.versionCode | floor)) and (.mandatory | type) == "boolean" and (((.releaseNotes // "") | type) == "string") and (((.action // "publish") | type) == "string")' "$request" >/dev/null
 
           action="$(jq -r '.action // "publish"' "$request")"
           channel="$(jq -r '.channel' "$request" | tr '[:upper:]' '[:lower:]')"
           version_name="$(jq -r '.versionName' "$request")"
           version_code="$(jq -r '.versionCode' "$request")"
           mandatory="$(jq -r '.mandatory' "$request")"
-
-          [[ "$action" = 'validate' || "$action" = 'publish' ]] || { echo 'action must be validate or publish' >&2; exit 1; }
-          [[ "$channel" = 'stable' || "$channel" = 'beta' ]] || { echo 'channel must be stable or beta' >&2; exit 1; }
+          [[ "$action" = validate || "$action" = publish ]]
+          [[ "$channel" = stable || "$channel" = beta ]]
           [[ "$version_name" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [[ "$version_code" =~ ^[1-9][0-9]*$ ]]
 
           tag="$channel-v$version_name"
           apk_name="bao-hang-1291-$channel-$version_name.apk"
           pointer="ota/$channel/release-manifest.json"
-          if test "$action" = 'publish' && gh release view "$tag" >/dev/null 2>&1; then
+          if test "$action" = publish && gh release view "$tag" >/dev/null 2>&1; then
             echo "Release $tag already exists; refusing overwrite." >&2
             exit 1
           fi
@@ -75,7 +74,6 @@ jobs:
             [[ "$previous_code" =~ ^[0-9]+$ ]]
             (( version_code > previous_code )) || { echo "versionCode must be greater than current $channel $previous_code" >&2; exit 1; }
           fi
-
           {
             echo "action=$action"
             echo "channel=$channel"
@@ -102,8 +100,8 @@ jobs:
           firebase_private_key="$(jq -er '.private_key' <<<"$FIREBASE_SERVICE_ACCOUNT")"
           wrap_key="$({ printf '%s\0' "$firebase_private_key"; printf '%s' "$GITHUB_REPOSITORY"; } | sha256sum | awk '{print $1}')"
           echo "::add-mask::$wrap_key"
-          WRAP_KEY="$wrap_key" openssl enc -d -aes-256-cbc -pbkdf2 -iter 250000 -md sha256 \
-            -pass env:WRAP_KEY -in signing/production-signing.bundle.enc -out "$work/signing.tar"
+          WRAP_KEY="$wrap_key" openssl enc -d -aes-256-cbc -pbkdf2 -iter 250000 -md sha256 -pass env:WRAP_KEY \
+            -in signing/production-signing.bundle.enc -out "$work/signing.tar"
           tar -C "$work/plain" -xf "$work/signing.tar"
           test -s "$work/plain/bao-hang-1291-production.p12"
           test -s "$work/plain/signing.properties"
@@ -116,11 +114,9 @@ jobs:
           actual="$(sed -n 's/^.*SHA256: //p' "$work/keytool.txt" | sed -n '1p' | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')"
           [[ "$pinned" =~ ^[0-9a-f]{64}$ ]]
           test "$actual" = "$pinned"
-          {
-            echo "store_file=$work/plain/bao-hang-1291-production.p12"
-            echo "key_alias=$RELEASE_KEY_ALIAS"
-            echo "pinned_fingerprint=$pinned"
-          } >> "$GITHUB_OUTPUT"
+          echo "store_file=$work/plain/bao-hang-1291-production.p12" >> "$GITHUB_OUTPUT"
+          echo "key_alias=$RELEASE_KEY_ALIAS" >> "$GITHUB_OUTPUT"
+          echo "pinned_fingerprint=$pinned" >> "$GITHUB_OUTPUT"
           printf '%s' "$RELEASE_STORE_PASSWORD" > "$RUNNER_TEMP/release-store-password"
           printf '%s' "$RELEASE_KEY_PASSWORD" > "$RUNNER_TEMP/release-key-password"
           chmod 600 "$RUNNER_TEMP/release-store-password" "$RUNNER_TEMP/release-key-password"
@@ -146,16 +142,20 @@ jobs:
             gradle --no-daemon testReleaseUnitTest assembleRelease \
               -PVERSION_NAME="$VERSION_NAME" -PVERSION_CODE="$VERSION_CODE" -POTA_CHANNEL="$OTA_CHANNEL"
 
+          generated='app/build/generated/source/buildConfig/release/vn/pickpack1291/baohang/BuildConfig.java'
+          test -s "$generated"
+          grep -F 'ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech' "$generated" >/dev/null
+          grep -F 'script.google.com/macros/s/' "$generated" >/dev/null
+          ! grep -F 'oedasgcdjppjwidhlqdr.supabase.co' "$generated"
+
           apk='app/build/outputs/apk/release/app-release.apk'
           test -s "$apk"
           apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n1)"
           apkanalyzer="$(find "$ANDROID_HOME/cmdline-tools" -type f -name apkanalyzer -perm -111 | sort -V | tail -n1)"
-          test -x "$apksigner"
-          test -x "$apkanalyzer"
+          test -x "$apksigner"; test -x "$apkanalyzer"
           "$apksigner" verify --verbose --print-certs "$apk" | tee "$RUNNER_TEMP/apksigner.txt"
           actual_fingerprint="$(sed -n 's/^.*certificate SHA-256 digest: //p' "$RUNNER_TEMP/apksigner.txt" | sed -n '1p' | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')"
           test "$actual_fingerprint" = "$PINNED_FINGERPRINT"
-
           package_name="$("$apkanalyzer" manifest application-id "$apk")"
           apk_version_code="$("$apkanalyzer" manifest version-code "$apk")"
           apk_version_name="$("$apkanalyzer" manifest version-name "$apk")"
@@ -213,36 +213,24 @@ jobs:
           apk_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$APK_NAME"
           manifest="$RELEASE_DIR/release-manifest.json"
           jq -n \
-            --arg channel "$CHANNEL" \
-            --argjson versionCode "$VERSION_CODE" \
-            --arg versionName "$VERSION_NAME" \
-            --arg apkUrl "$apk_url" \
-            --arg sha256 "$APK_SHA256" \
-            --argjson mandatory "$MANDATORY" \
-            --arg releaseNotes "$(cat "$notes")" \
-            --arg signerSha256 "$SIGNER_SHA256" \
-            --arg sourceSha "$GITHUB_SHA" \
+            --arg channel "$CHANNEL" --argjson versionCode "$VERSION_CODE" --arg versionName "$VERSION_NAME" \
+            --arg apkUrl "$apk_url" --arg sha256 "$APK_SHA256" --argjson mandatory "$MANDATORY" \
+            --arg releaseNotes "$(cat "$notes")" --arg signerSha256 "$SIGNER_SHA256" --arg sourceSha "$GITHUB_SHA" \
             '{channel:$channel,versionCode:$versionCode,versionName:$versionName,apkUrl:$apkUrl,sha256:$sha256,mandatory:$mandatory,releaseNotes:$releaseNotes,signerSha256:$signerSha256,sourceSha:$sourceSha}' > "$manifest"
           jq -e . "$manifest" >/dev/null
 
           cleanup_failed_release() {
-            if gh release view "$TAG" >/dev/null 2>&1; then
-              gh release delete "$TAG" --cleanup-tag --yes >/dev/null 2>&1 || true
-            fi
+            if gh release view "$TAG" >/dev/null 2>&1; then gh release delete "$TAG" --cleanup-tag --yes >/dev/null 2>&1 || true; fi
           }
           trap cleanup_failed_release ERR
-          if test "$CHANNEL" = 'stable'; then
-            gh release create "$TAG" "$RELEASE_DIR/$APK_NAME" "$manifest" \
-              --target "$GITHUB_SHA" --title "Báo hàng 1291 Stable $VERSION_NAME" --notes-file "$notes" --latest
+          if test "$CHANNEL" = stable; then
+            gh release create "$TAG" "$RELEASE_DIR/$APK_NAME" "$manifest" --target "$GITHUB_SHA" --title "Báo hàng 1291 Stable $VERSION_NAME" --notes-file "$notes" --latest
           else
-            gh release create "$TAG" "$RELEASE_DIR/$APK_NAME" "$manifest" \
-              --target "$GITHUB_SHA" --title "Báo hàng 1291 Beta $VERSION_NAME" --notes-file "$notes" --prerelease
+            gh release create "$TAG" "$RELEASE_DIR/$APK_NAME" "$manifest" --target "$GITHUB_SHA" --title "Báo hàng 1291 Beta $VERSION_NAME" --notes-file "$notes" --prerelease
           fi
-
           gh release download "$TAG" --pattern "$APK_NAME" --dir "$work/published"
           gh release download "$TAG" --pattern 'release-manifest.json' --dir "$work/published"
-          published_sha="$(sha256sum "$work/published/$APK_NAME" | awk '{print $1}')"
-          test "$published_sha" = "$APK_SHA256"
+          test "$(sha256sum "$work/published/$APK_NAME" | awk '{print $1}')" = "$APK_SHA256"
           cmp -s "$manifest" "$work/published/release-manifest.json"
 
           mkdir -p "$(dirname "$POINTER")"
@@ -251,17 +239,18 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add "$POINTER"
           git commit -m "Update $CHANNEL OTA manifest to $VERSION_NAME"
-
           pushed=false
           for attempt in 1 2 3; do
             git fetch origin main
             git rebase origin/main
-            if git push origin HEAD:main; then
-              pushed=true
-              break
-            fi
+            if git push origin HEAD:main; then pushed=true; break; fi
             echo "OTA pointer push race on attempt $attempt; retrying." >&2
           done
           test "$pushed" = true
           trap - ERR
           echo "Published $CHANNEL OTA $VERSION_NAME code=$VERSION_CODE sha256=$APK_SHA256"
+
+      - name: Cleanup sensitive build files
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/production-signing" "$RUNNER_TEMP/release-store-password" "$RUNNER_TEMP/release-key-password" "$RUNNER_TEMP/apksigner.txt" "$RUNNER_TEMP/manifest.xml"
