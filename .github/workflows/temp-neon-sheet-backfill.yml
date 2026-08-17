@@ -1,0 +1,150 @@
+name: Temp Neon canonical Sheet backfill
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/temp-neon-sheet-backfill.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+    steps:
+      - name: Authenticate Google and Firebase without exposing credentials
+        id: auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
+          test -n "${FIREBASE_SERVICE_ACCOUNT:-}"
+          work="$RUNNER_TEMP/neon-sheet-backfill"
+          mkdir -p "$work"
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | jq -er '.private_key' > "$work/key.pem"
+          client_email="$(printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | jq -er '.client_email')"
+          project_id="$(printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | jq -er '.project_id')"
+          test "$project_id" = 'bao-hang-1291'
+          now="$(date +%s)"; exp="$((now+3600))"
+          b64url(){ openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+          sign_jwt(){
+            local payload_json="$1" name="$2"
+            local header payload unsigned sig
+            header="$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)"
+            payload="$(printf '%s' "$payload_json" | b64url)"
+            unsigned="$header.$payload"
+            printf '%s' "$unsigned" > "$work/$name.unsigned"
+            openssl dgst -sha256 -sign "$work/key.pem" -out "$work/$name.sig" "$work/$name.unsigned"
+            sig="$(cat "$work/$name.sig" | b64url)"
+            printf '%s' "$unsigned.$sig"
+          }
+
+          google_payload="$(jq -cn --arg iss "$client_email" --arg scope 'https://www.googleapis.com/auth/spreadsheets' --arg aud 'https://oauth2.googleapis.com/token' --argjson iat "$now" --argjson exp "$exp" '{iss:$iss,scope:$scope,aud:$aud,iat:$iat,exp:$exp}')"
+          google_assertion="$(sign_jwt "$google_payload" google)"
+          google_access="$(curl -fsS -X POST 'https://oauth2.googleapis.com/token' -H 'Content-Type: application/x-www-form-urlencoded' --data-urlencode 'grant_type=urn:ietf:params:oauth-grant-type:jwt-bearer' --data-urlencode "assertion=$google_assertion" | jq -er '.access_token')" || true
+          if test -z "${google_access:-}"; then
+            google_access="$(curl -fsS -X POST 'https://oauth2.googleapis.com/token' -H 'Content-Type: application/x-www-form-urlencoded' --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer' --data-urlencode "assertion=$google_assertion" | jq -er '.access_token')"
+          fi
+          echo "::add-mask::$google_access"
+
+          fb_payload="$(jq -cn --arg iss "$client_email" --arg sub "$client_email" --arg aud 'https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit' --arg uid '44fae0a2-09eb-4226-8412-0f1a1f5d7ef8' --argjson iat "$now" --argjson exp "$exp" '{iss:$iss,sub:$sub,aud:$aud,iat:$iat,exp:$exp,uid:$uid}')"
+          fb_custom="$(sign_jwt "$fb_payload" firebase)"
+          fb_id="$(curl -fsS -X POST 'https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=AIzaSyB-n368fntzxsuuLlvte9NXhcuX0DDbTXM' -H 'Content-Type: application/json' --data "$(jq -cn --arg token "$fb_custom" '{token:$token,returnSecureToken:true}')" | jq -er '.idToken')"
+          echo "::add-mask::$fb_id"
+          printf '%s' "$google_access" > "$work/google.token"
+          printf '%s' "$fb_id" > "$work/firebase.token"
+          chmod 600 "$work"/*.token "$work/key.pem"
+          echo "work=$work" >> "$GITHUB_OUTPUT"
+
+      - name: Backfill canonical Sheet from Neon authority and ACK written pending events
+        shell: bash
+        env:
+          WORK: ${{ steps.auth.outputs.work }}
+        run: |
+          set -euo pipefail
+          export GOOGLE_ACCESS_TOKEN="$(cat "$WORK/google.token")"
+          export FIREBASE_ID_TOKEN="$(cat "$WORK/firebase.token")"
+          echo "::add-mask::$GOOGLE_ACCESS_TOKEN"
+          echo "::add-mask::$FIREBASE_ID_TOKEN"
+          python3 <<'PY'
+          import os, json, urllib.request, urllib.error, time
+          SHEET='15_AJ8oB7cEeQjeM6Jb6dm0ki6NcqyxPRVRTAvQPHVM0'
+          NEON='https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1'
+          G=os.environ['GOOGLE_ACCESS_TOKEN']; F=os.environ['FIREBASE_ID_TOKEN']
+          def req(url, method='GET', body=None, bearer=None):
+              data=None if body is None else json.dumps(body,ensure_ascii=False,separators=(',',':')).encode()
+              h={'Accept':'application/json'}
+              if data is not None: h['Content-Type']='application/json'
+              if bearer: h['Authorization']='Bearer '+bearer
+              r=urllib.request.Request(url,data=data,headers=h,method=method)
+              try:
+                  with urllib.request.urlopen(r,timeout=40) as x:
+                      raw=x.read().decode()
+                      return json.loads(raw) if raw else None
+              except urllib.error.HTTPError as e:
+                  msg=e.read().decode()[:800]
+                  raise RuntimeError(f'HTTP {e.code}: {msg}')
+          def rpc(name,payload): return req(NEON+'/rpc/'+name,'POST',payload,F)
+          def all_kind(kind):
+              out=[]; off=0
+              while True:
+                  rows=rpc('diagnostic_sheet_backfill_rpc',{'p_kind':kind,'p_offset':off,'p_limit':200}) or []
+                  out.extend(rows)
+                  if len(rows)<200: break
+                  off += len(rows)
+              return out
+          def s(v):
+              if v is None: return ''
+              if isinstance(v,bool): return 'TRUE' if v else 'FALSE'
+              return str(v)
+          def refresh():
+              profiles=all_kind('PROFILES'); issues=all_kind('ISSUES'); events=all_kind('EVENTS')
+              if len(profiles)<1 or len(issues)<1 or len(events)<1: raise RuntimeError('BACKFILL_DATA_EMPTY')
+              event_values=[['Queue ID','Thời gian','Loại sự kiện','Ticket ID','SKU','Tên sản phẩm','Trạng thái','Số lượt báo','Người báo/Actor ID','Dữ liệu JSON']]
+              for e in events:
+                  event_values.append([s(e.get('id')),s(e.get('created_at')),s(e.get('event_type')),s(e.get('issue_id')),s(e.get('sku')),s(e.get('product_name')),s(e.get('status')),s(e.get('report_count')),s(e.get('actor_id')),json.dumps(e.get('payload') or {},ensure_ascii=False,separators=(',',':'))])
+              issue_values=[['Ticket ID','SKU','Tên sản phẩm','Trạng thái','Số lượt báo','Báo lần đầu','Cập nhật cuối','Invent xử lý','Số lần mở lại']]
+              for x in issues:
+                  issue_values.append([s(x.get('id')),s(x.get('sku')),s(x.get('product_name')),s(x.get('status')),s(x.get('report_count')),s(x.get('first_reported_at')),s(x.get('updated_at')),s(x.get('assigned_name')),s(x.get('reopen_count'))])
+              profile_values=[['Mã nhân viên','Họ tên','Nhà thầu','Vai trò','Trạng thái','Cập nhật cuối']]
+              for p in profiles:
+                  profile_values.append([s(p.get('employee_code')),s(p.get('full_name')),s(p.get('contractor')),s(p.get('role')),'HOẠT ĐỘNG' if p.get('active') else 'NGỪNG HOẠT ĐỘNG',s(p.get('updated_at'))])
+              info=[['Mục','Giá trị'],['Nguồn dữ liệu','Neon PostgreSQL — BÁO HÀNG 1291'],['Đăng nhập / thông báo','Firebase Auth + FCM — bao-hang-1291'],['Sheet báo cáo chính',SHEET],['Luồng lưu lịch sử','App/Web → Neon sheet_export_queue → Apps Script → SU_KIEN'],['Snapshot nghiệp vụ','TRANG_THAI_SKU + NHAN_SU cập nhật theo khóa, không tạo trùng'],['Mật khẩu','KHÔNG đồng bộ vào Google Sheet'],['Cập nhật',time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())]]
+              base=f'https://sheets.googleapis.com/v4/spreadsheets/{SHEET}'
+              req(base+'/values:batchClear','POST',{'ranges':['SU_KIEN!A:Z','TRANG_THAI_SKU!A:Z','NHAN_SU!A:Z','THONG_TIN!A:B']},G)
+              req(base+'/values:batchUpdate','POST',{'valueInputOption':'RAW','data':[{'range':'SU_KIEN!A1','majorDimension':'ROWS','values':event_values},{'range':'TRANG_THAI_SKU!A1','majorDimension':'ROWS','values':issue_values},{'range':'NHAN_SU!A1','majorDimension':'ROWS','values':profile_values},{'range':'THONG_TIN!A1','majorDimension':'ROWS','values':info}]},G)
+              pending=[int(e['id']) for e in events if e.get('pending')]
+              if pending:
+                  ack=rpc('worker_sheet_ack_rpc',{'p_ids':pending})
+                  if int(ack or 0) < len(pending): raise RuntimeError(f'SHEET_ACK_SHORT {ack}/{len(pending)}')
+              return len(profiles),len(issues),len(events),pending
+          prev=None
+          for attempt in range(3):
+              counts=refresh()
+              print(f'BACKFILL_PASS attempt={attempt+1} profiles={counts[0]} issues={counts[1]} events={counts[2]} acked_pending={len(counts[3])}')
+              if prev and counts[2]==prev: break
+              prev=counts[2]
+              time.sleep(2)
+          # Read back first columns and assert exact row counts.
+          ranges=['SU_KIEN!A:A','TRANG_THAI_SKU!A:A','NHAN_SU!A:A']
+          q='&'.join('ranges='+urllib.parse.quote(r,safe='!:$') for r in ranges)
+          got=req(f'https://sheets.googleapis.com/v4/spreadsheets/{SHEET}/values:batchGet?{q}','GET',None,G)
+          lens=[len(v.get('values',[])) for v in got.get('valueRanges',[])]
+          expected=[prev+1,counts[1]+1,counts[0]+1]
+          if lens!=expected: raise RuntimeError(f'SHEET_ROWCOUNT_MISMATCH got={lens} expected={expected}')
+          # Strong spot checks on canonical data.
+          prof=all_kind('PROFILES')
+          by={str(p.get('employee_code')):p for p in prof}
+          for code in ('6281280','6282909','6319416','6330290','baohang1'):
+              if code not in by: raise RuntimeError('MISSING_PROFILE_'+code)
+          if by['6281280'].get('role')!='ADMIN' or not by['6281280'].get('active'): raise RuntimeError('PROTECTED_ADMIN_MISMATCH')
+          print(f'CANONICAL_SHEET_VERIFY_PASS events={prev} issues={counts[1]} profiles={counts[0]}')
+          PY
+
+      - name: Cleanup sensitive runtime files
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/neon-sheet-backfill"
