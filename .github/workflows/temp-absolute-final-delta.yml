@@ -1,4 +1,4 @@
-# Final authoritative sync after reconciling Neon-only zero-effect cleanup audit row.
+# Final authoritative sync after reconciling Neon-only worker SLA notifications.
 name: Temp absolute final Supabase to Neon delta
 
 on:
