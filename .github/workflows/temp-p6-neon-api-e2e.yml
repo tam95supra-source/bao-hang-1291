@@ -1,0 +1,112 @@
+name: Temp P6 isolated Neon API E2E
+
+on:
+  push:
+    branches:
+      - migration/neon-cutover
+    paths:
+      - '.github/workflows/temp-p6-neon-api-e2e.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      TEST_UID: '99af8370-d114-4b47-a5c0-b52f432f4933'
+      TEST_EMAIL: 'p6-isolated-99af8370@example.invalid'
+      FIREBASE_API_KEY: 'AIzaSyB-n368fntzxsuuLlvte9NXhcuX0DDbTXM'
+      NEON_API: 'https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1'
+      TEST_SKU: '10005315'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: migration/neon-cutover
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Firebase Admin without cache
+        run: npm install --no-save --no-audit --no-fund firebase-admin@13
+
+      - name: Create isolated Firebase PICKER and exercise Neon Data API
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${FIREBASE_SERVICE_ACCOUNT:-}"
+          password="$(openssl rand -base64 30 | tr -d '\n')Aa1!"
+          echo "::add-mask::$password"
+          export TEST_PASSWORD="$password"
+
+          cleanup() {
+            node <<'NODE' >/dev/null 2>&1 || true
+          const admin = require('firebase-admin');
+          if (!admin.apps.length) admin.initializeApp({credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT))});
+          admin.auth().deleteUser(process.env.TEST_UID).catch(()=>{}).finally(()=>process.exit(0));
+          NODE
+            rm -f login.json session.json search.json report.json mine.json admin.json direct.json
+          }
+          trap cleanup EXIT
+
+          node <<'NODE'
+          const admin = require('firebase-admin');
+          admin.initializeApp({credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT))});
+          (async()=>{
+            try { await admin.auth().deleteUser(process.env.TEST_UID); } catch (_) {}
+            await admin.auth().createUser({uid:process.env.TEST_UID,email:process.env.TEST_EMAIL,password:process.env.TEST_PASSWORD,emailVerified:true,disabled:false});
+            await admin.auth().setCustomUserClaims(process.env.TEST_UID,{role:'authenticated',app_role:'PICKER'});
+            console.log('TEMP_FIREBASE_PICKER_CREATED');
+          })().catch(e=>{console.error(e.message);process.exit(1)});
+          NODE
+
+          http="$(curl --silent --show-error --output login.json --write-out '%{http_code}' \
+            --header 'Content-Type: application/json' \
+            --data "$(jq -nc --arg email "$TEST_EMAIL" --arg password "$password" '{email:$email,password:$password,returnSecureToken:true}')" \
+            "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$FIREBASE_API_KEY")"
+          test "$http" = '200'
+          token="$(jq -er '.idToken' login.json)"
+          echo "::add-mask::$token"
+          test -n "$token"
+
+          call_rpc() {
+            local name="$1" body="$2" out="$3"
+            curl --silent --show-error --output "$out" --write-out '%{http_code}' \
+              --header 'Content-Type: application/json' \
+              --header "Authorization: Bearer $token" \
+              --data "$body" "$NEON_API/rpc/$name"
+          }
+
+          http="$(call_rpc api_session_profile_rpc '{"p_test_role":null}' session.json)"
+          test "$http" = '200'
+          jq -e --arg uid "$TEST_UID" '.profile.id==$uid and .profile.role=="PICKER" and .effective_role=="PICKER"' session.json >/dev/null
+
+          http="$(call_rpc api_search_skus_rpc "$(jq -nc --arg q "$TEST_SKU" '{p_query:$q,p_limit:5,p_test_role:null}')" search.json)"
+          test "$http" = '200'
+          jq -e --arg sku "$TEST_SKU" 'tostring | contains($sku)' search.json >/dev/null
+
+          client_request="p6-$(date +%s)-$RANDOM"
+          http="$(call_rpc report_shortage_rpc "$(jq -nc --arg sku "$TEST_SKU" --arg req "$client_request" '{p_sku:$sku,p_client_request_id:$req}')" report.json)"
+          test "$http" = '200'
+          jq -e --arg sku "$TEST_SKU" '.issue.sku==$sku and (.issue.id|type)=="string"' report.json >/dev/null
+          issue_id="$(jq -er '.issue.id' report.json)"
+          echo "P6_TEST_ISSUE_ID=$issue_id"
+
+          http="$(call_rpc api_picker_my_issues_rpc '{"p_test_role":null}' mine.json)"
+          test "$http" = '200'
+          jq -e --arg issue "$issue_id" 'tostring | contains($issue)' mine.json >/dev/null
+
+          http="$(call_rpc api_admin_summary_rpc '{"p_test_role":null}' admin.json)"
+          test "$http" != '200'
+
+          http="$(curl --silent --show-error --output direct.json --write-out '%{http_code}' \
+            --header "Authorization: Bearer $token" \
+            "$NEON_API/issues?select=id&limit=1")"
+          if test "$http" = '200' && test "$(jq 'length' direct.json)" != '0'; then
+            echo 'Direct issues table unexpectedly readable by PICKER' >&2
+            exit 1
+          fi
+
+          echo 'P6_NEON_API_E2E_OK auth=session+search+report+my_issues role_gate=blocked direct_table=blocked'
