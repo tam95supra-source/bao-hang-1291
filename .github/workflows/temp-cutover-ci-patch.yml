@@ -21,22 +21,26 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           p=Path('.github/workflows/production-release.yml')
-          s=p.read_text(encoding='utf-8')
-          old="""    env:\n      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}\n      GH_TOKEN: ${{ github.token }}\n"""
-          new="""    env:\n      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}\n      APPS_SCRIPT_WORKER_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}\n      GH_TOKEN: ${{ github.token }}\n"""
-          if s.count(old)!=1:
-              raise SystemExit('release job env anchor mismatch')
-          s=s.replace(old,new)
-          anchor="""          RELEASE_STORE_PASSWORD=\"$(cat \"$RUNNER_TEMP/release-store-password\")\"\n          RELEASE_KEY_PASSWORD=\"$(cat \"$RUNNER_TEMP/release-key-password\")\"\n          echo \"::add-mask::$RELEASE_STORE_PASSWORD\"\n          echo \"::add-mask::$RELEASE_KEY_PASSWORD\"\n"""
-          repl=anchor+"""          test -n \"${APPS_SCRIPT_WORKER_URL:-}\" || { echo 'Missing Apps Script worker URL' >&2; exit 1; }\n          case \"$APPS_SCRIPT_WORKER_URL\" in https://script.google.com/macros/s/*/exec) ;; *) echo 'Invalid Apps Script worker URL' >&2; exit 1;; esac\n"""
+          lines=p.read_text(encoding='utf-8').splitlines()
+          if any('APPS_SCRIPT_WORKER_URL:' in x for x in lines):
+              raise SystemExit('worker URL env already present unexpectedly')
+          idx=[i for i,x in enumerate(lines) if x.startswith('      FIREBASE_SERVICE_ACCOUNT:')]
+          if len(idx)!=1:
+              raise SystemExit(f'expected one Firebase job env, got {len(idx)}')
+          expression='$'+'{{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}'
+          lines.insert(idx[0]+1, '      APPS_SCRIPT_WORKER_URL: '+expression)
+          s='\n'.join(lines)+'\n'
+          anchor='          echo "::add-mask::$RELEASE_KEY_PASSWORD"\n'
+          check='''          test -n "${APPS_SCRIPT_WORKER_URL:-}" || { echo 'Missing Apps Script worker URL' >&2; exit 1; }\n          case "$APPS_SCRIPT_WORKER_URL" in https://script.google.com/macros/s/*/exec) ;; *) echo 'Invalid Apps Script worker URL' >&2; exit 1;; esac\n'''
           if s.count(anchor)!=1:
               raise SystemExit('release build anchor mismatch')
-          s=s.replace(anchor,repl)
+          s=s.replace(anchor,anchor+check)
           p.write_text(s,encoding='utf-8')
           PY
           git diff --check
-          grep -Fq 'APPS_SCRIPT_WORKER_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}' .github/workflows/production-release.yml
-          grep -Fq "Missing Apps Script worker URL" .github/workflows/production-release.yml
+          grep -Fq 'APPS_SCRIPT_WORKER_URL:' .github/workflows/production-release.yml
+          grep -Fq 'GOOGLE_SHEET_WEBHOOK_URL' .github/workflows/production-release.yml
+          grep -Fq 'Missing Apps Script worker URL' .github/workflows/production-release.yml
       - name: Commit cutover CI fix
         shell: bash
         run: |
