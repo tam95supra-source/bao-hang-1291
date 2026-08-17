@@ -3,7 +3,7 @@ import { createClient } from './backend-runtime.js';
 
 const BACKEND_BRIDGE_URL = 'https://backend.bao-hang-1291.invalid';
 const BRIDGE_PUBLIC_KEY = 'compat-public';
-const API_BASE = `${BACKEND_BRIDGE_URL}/functions/v1/web-api`;
+const API_BASE = `${BACKEND_BRIDGE_URL}/api/web-api`;
 const SESSION_KEY = 'bao-hang-1291-web-session';
 const CONFIG_TOPIC = 'site:1291:config';
 const CONFIG_ROLES = new Set(['ADMIN', 'ADMIN_INVENT']);

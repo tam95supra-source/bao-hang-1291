@@ -9,7 +9,7 @@ async function getExcelJS() {
 
 const BACKEND_BRIDGE_URL = 'https://backend.bao-hang-1291.invalid';
 const BRIDGE_PUBLIC_KEY = 'compat-public';
-const API_BASE = `${BACKEND_BRIDGE_URL}/functions/v1/web-api`;
+const API_BASE = `${BACKEND_BRIDGE_URL}/api/web-api`;
 const SESSION_KEY = 'bao-hang-1291-web-session';
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const ROLES = {
@@ -104,13 +104,13 @@ async function parseResponse(response) {
   return data;
 }
 async function authToken(payload, grantType = 'password') {
-  return parseResponse(await fetch(`${BACKEND_BRIDGE_URL}/auth/v1/token?grant_type=${grantType}`, {
+  return parseResponse(await fetch(`${BACKEND_BRIDGE_URL}/auth/token?grant_type=${grantType}`, {
     method: 'POST', headers: { 'content-type': 'application/json', apikey: BRIDGE_PUBLIC_KEY }, body: JSON.stringify(payload),
   }));
 }
 async function fetchProfile(accessToken, userId) {
   const q = new URLSearchParams({ id: `eq.${userId}`, select: 'id,employee_code,full_name,contractor,role,active' });
-  const rows = await parseResponse(await fetch(`${BACKEND_BRIDGE_URL}/rest/v1/profiles?${q}`, {
+  const rows = await parseResponse(await fetch(`${BACKEND_BRIDGE_URL}/data/profiles?${q}`, {
     headers: { apikey: BRIDGE_PUBLIC_KEY, authorization: `Bearer ${accessToken}` },
   }));
   if (!Array.isArray(rows) || !rows.length) throw new Error('Tài khoản chưa có hồ sơ nhân sự.');
@@ -140,7 +140,7 @@ async function issueWithdraw(action, payload = {}) {
   await refreshSessionIfNeeded();
   const headers = { 'content-type': 'application/json', apikey: BRIDGE_PUBLIC_KEY, authorization: `Bearer ${state.session.access_token}` };
   if (state.testRole) headers['x-admin-test-role'] = state.testRole;
-  const response = await fetch(`${BACKEND_BRIDGE_URL}/functions/v1/issue-withdraw/${encodeURIComponent(action)}`, { method: 'POST', headers, body: JSON.stringify(payload) });
+  const response = await fetch(`${BACKEND_BRIDGE_URL}/api/issue-withdraw/${encodeURIComponent(action)}`, { method: 'POST', headers, body: JSON.stringify(payload) });
   return parseResponse(response);
 }
 function setBusy(busy, text = 'Đang xử lý…') {

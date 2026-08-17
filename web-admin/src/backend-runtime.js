@@ -186,31 +186,31 @@ async function worker(action, body, init) {
   })
 }
 
-async function compatibilityFetch(input, init = {}) {
+async function backendFetchAdapter(input, init = {}) {
   const url = new URL(typeof input === 'string' ? input : input.url, location.href)
   if (url.hostname !== 'backend.bao-hang-1291.invalid') return originalFetch(input, init)
 
   try {
-    if (url.pathname === '/auth/v1/token') {
+    if (url.pathname === '/auth/token') {
       const body = parseBody(init)
       const grant = url.searchParams.get('grant_type') || ''
       if (grant === 'password') return jsonResponse(await firebasePasswordLogin(body))
       if (grant === 'refresh_token') return jsonResponse(await refreshFirebase(body))
       return jsonResponse({ error: 'UNSUPPORTED_GRANT' }, 400)
     }
-    if (url.pathname === '/auth/v1/logout') {
+    if (url.pathname === '/auth/logout') {
       const { auth, signOut } = await firebaseRuntime()
       await signOut(auth).catch(() => {})
       realtimeToken = ''
       return jsonResponse({}, 204)
     }
-    if (url.pathname.startsWith('/rest/v1/')) {
-      const target = new URL(NEON_API + url.pathname.slice('/rest/v1'.length) + url.search)
+    if (url.pathname.startsWith('/data/')) {
+      const target = new URL(NEON_API + url.pathname.slice('/data'.length) + url.search)
       const headers = new Headers(init.headers || {})
       headers.delete('apikey')
       return originalFetch(target, { ...init, headers })
     }
-    const functionMatch = url.pathname.match(/^\/functions\/v1\/(web-api|api|issue-withdraw|admin-ops)\/([^/]+)$/)
+    const functionMatch = url.pathname.match(/^\/api\/(web-api|api|issue-withdraw|admin-ops)\/([^/]+)$/)
     if (functionMatch) {
       const family = functionMatch[1]
       let action = decodeURIComponent(functionMatch[2])
@@ -228,7 +228,7 @@ async function compatibilityFetch(input, init = {}) {
       }
       const response = await neonRpc(action, body, init)
       if (response) return response
-      return jsonResponse({ error: `MIGRATION_ACTION_UNSUPPORTED:${action}` }, 400)
+      return jsonResponse({ error: `BACKEND_ACTION_UNSUPPORTED:${action}` }, 400)
     }
     return jsonResponse({ error: 'LEGACY_ENDPOINT_RETIRED' }, 410)
   } catch (error) {
@@ -241,10 +241,10 @@ async function compatibilityFetch(input, init = {}) {
 function installFetchAdapter() {
   if (installed) return
   installed = true
-  globalThis.fetch = compatibilityFetch
+  globalThis.fetch = backendFetchAdapter
 }
 
-class ChannelShim {
+class BackendChannel {
   constructor(name) {
     this.name = name
     this.handlers = []
@@ -296,7 +296,7 @@ export function createClient() {
     realtime: {
       setAuth(token) { realtimeToken = String(token || '') },
     },
-    channel(name) { return new ChannelShim(String(name || '')) },
+    channel(name) { return new BackendChannel(String(name || '')) },
     removeChannel(channel) { channel?.close?.(); return Promise.resolve('ok') },
   }
 }

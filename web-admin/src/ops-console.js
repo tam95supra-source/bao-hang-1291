@@ -2,8 +2,8 @@ import './ops-console.css';
 
 const BACKEND_BRIDGE_URL = 'https://backend.bao-hang-1291.invalid';
 const BRIDGE_PUBLIC_KEY = 'compat-public';
-const WEB_API = `${BACKEND_BRIDGE_URL}/functions/v1/web-api`;
-const ADMIN_OPS = `${BACKEND_BRIDGE_URL}/functions/v1/admin-ops`;
+const WEB_API = `${BACKEND_BRIDGE_URL}/api/web-api`;
+const ADMIN_OPS = `${BACKEND_BRIDGE_URL}/api/admin-ops`;
 const SESSION_KEY = 'bao-hang-1291-web-session';
 const ROLE_LABELS = {
   ADMIN: 'Admin hệ thống',
@@ -56,7 +56,7 @@ async function refreshSessionIfNeeded() {
   if (!session) throw new Error('Phiên đăng nhập không tồn tại.');
   const now = Math.floor(Date.now() / 1000);
   if ((session.expires_at || 0) > now + 90) return session;
-  const response = await fetch(`${BACKEND_BRIDGE_URL}/auth/v1/token?grant_type=refresh_token`, {
+  const response = await fetch(`${BACKEND_BRIDGE_URL}/auth/token?grant_type=refresh_token`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', apikey: BRIDGE_PUBLIC_KEY },
     body: JSON.stringify({ refresh_token: session.refresh_token }),
