@@ -14,61 +14,40 @@ jobs:
       WEBHOOK_SECRET: ${{ secrets.GOOGLE_SHEET_WEBHOOK_SECRET }}
       FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
       ADMIN_UID: 44fae0a2-09eb-4226-8412-0f1a1f5d7ef8
+      NEON_API: https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1
     steps:
       - uses: actions/checkout@v4
-      - name: Verify live deployment and worker
+      - name: Inspect token and Neon auth
         shell: bash
         run: |
           set -euo pipefail
           node <<'NODE'
-          const fs = require('fs');
-          const crypto = require('crypto');
-          const assert = require('assert');
-          const webhook = process.env.WEBHOOK_URL;
-          const secret = process.env.WEBHOOK_SECRET;
-          const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-          assert(webhook && webhook.includes('/exec'), 'WEBHOOK_URL_MISSING');
-          assert(secret && secret.length >= 20, 'WEBHOOK_SECRET_MISSING');
-          assert(sa.project_id === 'bao-hang-1291', 'FIREBASE_SCOPE_MISMATCH');
-          const cfg = JSON.parse(fs.readFileSync('app/google-services.json','utf8'));
-          const apiKey = cfg.client[0].api_key[0].current_key;
-          const b64u = (v) => Buffer.from(typeof v === 'string' ? v : JSON.stringify(v)).toString('base64url');
-          const now = Math.floor(Date.now()/1000);
-          const input = b64u({alg:'RS256',typ:'JWT'}) + '.' + b64u({iss:sa.client_email,sub:sa.client_email,aud:'https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit',iat:now,exp:now+3600,uid:process.env.ADMIN_UID});
-          const sig = crypto.sign('RSA-SHA256', Buffer.from(input), sa.private_key).toString('base64url');
-          const customToken = input + '.' + sig;
-          async function post(url, body) {
-            const r = await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
-            const text = await r.text();
-            let json; try { json = JSON.parse(text); } catch { json = {raw:text}; }
-            return {status:r.status,json};
-          }
+          const fs=require('fs'),crypto=require('crypto'),assert=require('assert');
+          const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+          const cfg=JSON.parse(fs.readFileSync('app/google-services.json','utf8'));
+          const apiKey=cfg.client[0].api_key[0].current_key;
+          const b64u=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');
+          const now=Math.floor(Date.now()/1000);
+          const input=b64u({alg:'RS256',typ:'JWT'})+'.'+b64u({iss:sa.client_email,sub:sa.client_email,aud:'https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit',iat:now,exp:now+3600,uid:process.env.ADMIN_UID});
+          const custom=input+'.'+crypto.sign('RSA-SHA256',Buffer.from(input),sa.private_key).toString('base64url');
+          async function post(url,body,headers={}){const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(body)});const text=await r.text();let json;try{json=JSON.parse(text)}catch{json={raw:text}}return{status:r.status,json}}
           (async()=>{
-            const ping = await post(webhook,{action:'ping'});
-            assert.equal(ping.status,200,'PING_HTTP_'+ping.status);
-            assert.equal(ping.json.ok,true,'PING_NOT_OK');
-            assert.equal(ping.json.project,'bao-hang-1291','PING_PROJECT_MISMATCH');
-            assert.equal(ping.json.provider,'NEON_FIREBASE_GOOGLE','PING_PROVIDER_MISMATCH');
-
-            const markerId = crypto.randomUUID();
-            const marker = await post(webhook,{secret,events:[{event_id:markerId,event_type:'TEST_MARKER',created_at:new Date().toISOString(),payload:{marker:'APPS_SCRIPT_NEON_LIVE_VERIFY'}}]});
-            assert.equal(marker.status,200,'MARKER_HTTP_'+marker.status);
-            assert.equal(marker.json.ok,true,'MARKER_NOT_OK');
-            assert.equal(marker.json.processed,1,'MARKER_COUNT_MISMATCH');
-
-            const sign = await post('https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key='+encodeURIComponent(apiKey),{token:customToken,returnSecureToken:true});
-            assert.equal(sign.status,200,'FIREBASE_SIGNIN_HTTP_'+sign.status);
-            assert(sign.json.idToken,'FIREBASE_ID_TOKEN_MISSING');
-
-            const kick = await post(webhook,{action:'worker-kick',id_token:sign.json.idToken});
-            assert.equal(kick.status,200,'KICK_HTTP_'+kick.status);
-            assert.equal(kick.json.ok,true,'KICK_NOT_OK_'+JSON.stringify(kick.json));
-            console.log('APPS_SCRIPT_LIVE_PASS');
-            console.log('MARKER_ID='+markerId);
-            console.log('WORKER_SOURCE='+String(kick.json.source||kick.json.skipped||''));
-            console.log('SHEET_COUNT='+String(kick.json.sheet && kick.json.sheet.count || 0));
-            console.log('SHEET_ACKED='+String(kick.json.sheet && kick.json.sheet.acked || 0));
-            console.log('REALTIME_COUNT='+String(kick.json.realtime && kick.json.realtime.count || 0));
-            console.log('NOTIFICATION_COUNT='+String(kick.json.notifications && kick.json.notifications.count || 0));
-          })().catch(e=>{console.error('VERIFY_FAIL='+e.message);process.exit(1)});
+            const ping=await post(process.env.WEBHOOK_URL,{action:'ping'});
+            assert.equal(ping.status,200); assert.equal(ping.json.provider,'NEON_FIREBASE_GOOGLE');
+            const sign=await post('https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key='+encodeURIComponent(apiKey),{token:custom,returnSecureToken:true});
+            assert.equal(sign.status,200,'SIGNIN_'+sign.status); assert(sign.json.idToken);
+            const claims=JSON.parse(Buffer.from(sign.json.idToken.split('.')[1],'base64url').toString());
+            console.log('TOKEN_SUB_OK='+(claims.sub===process.env.ADMIN_UID));
+            console.log('TOKEN_AUD='+String(claims.aud||''));
+            console.log('TOKEN_ISS='+String(claims.iss||''));
+            console.log('TOKEN_ROLE='+String(claims.role||''));
+            console.log('TOKEN_APP_ROLE='+String(claims.app_role||''));
+            console.log('TOKEN_PROVIDER='+String(claims.firebase&&claims.firebase.sign_in_provider||''));
+            const session=await post(process.env.NEON_API+'/rpc/api_session_profile_rpc',{p_test_role:null},{Authorization:'Bearer '+sign.json.idToken});
+            console.log('NEON_SESSION_HTTP='+session.status);
+            console.log('NEON_SESSION_OK='+(session.status>=200&&session.status<300));
+            if(session.status>=200&&session.status<300){console.log('NEON_EFFECTIVE_ROLE='+String(session.json.effective_role||''));}
+            else console.log('NEON_SESSION_ERROR='+String(session.json.message||session.json.raw||'').slice(0,200));
+            if(session.status<200||session.status>=300) process.exit(2);
+          })().catch(e=>{console.error('INSPECT_FAIL='+e.message);process.exit(1)});
           NODE
