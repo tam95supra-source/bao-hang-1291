@@ -1,4 +1,4 @@
-name: Temp P6 isolated business flow E2E
+name: Temp P6 alert restore diagnostic
 
 on:
   push:
@@ -13,7 +13,7 @@ permissions:
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 8
     env:
       FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
       PICKER_UID: '24c03a64-83f1-4ff7-ae2d-0d96beb1224e'
@@ -22,6 +22,7 @@ jobs:
       INVENT_EMAIL: 'p6-invent2@example.invalid'
       FIREBASE_API_KEY: 'AIzaSyB-n368fntzxsuuLlvte9NXhcuX0DDbTXM'
       NEON_API: 'https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1'
+      ISSUE_A: '0fcc12ff-6c5b-45ce-964c-59729a27d284'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,9 +30,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install Firebase Admin without cache
-        run: npm install --no-save --no-audit --no-fund firebase-admin@13
-      - name: Exercise claim, SKIP, restore, alerts and withdraw window
+      - run: npm install --no-save --no-audit --no-fund firebase-admin@13
+      - name: Diagnose alert then restore existing isolated issue
         shell: bash
         run: |
           set -euo pipefail
@@ -51,62 +51,35 @@ jobs:
           const admin=require('firebase-admin');
           admin.initializeApp({credential:admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT))});
           (async()=>{
-            for (const uid of [process.env.PICKER_UID,process.env.INVENT_UID]) { try { await admin.auth().deleteUser(uid); } catch(_){} }
+            for(const uid of [process.env.PICKER_UID,process.env.INVENT_UID]){try{await admin.auth().deleteUser(uid)}catch(_){}}
             await admin.auth().createUser({uid:process.env.PICKER_UID,email:process.env.PICKER_EMAIL,password:process.env.TEST_PASSWORD,emailVerified:true});
             await admin.auth().setCustomUserClaims(process.env.PICKER_UID,{role:'authenticated',app_role:'PICKER'});
             await admin.auth().createUser({uid:process.env.INVENT_UID,email:process.env.INVENT_EMAIL,password:process.env.TEST_PASSWORD,emailVerified:true});
             await admin.auth().setCustomUserClaims(process.env.INVENT_UID,{role:'authenticated',app_role:'INVENT'});
-            console.log('TEMP_FIREBASE_USERS_CREATED');
           })().catch(e=>{console.error(e.message);process.exit(1)});
           NODE
           sleep 2
-          signin() {
-            local email="$1" out="$2"
-            local code
-            code="$(curl --silent --show-error --output "$out" --write-out '%{http_code}' --header 'Content-Type: application/json' \
-              --data "$(jq -nc --arg email "$email" --arg password "$password" '{email:$email,password:$password,returnSecureToken:true}')" \
-              "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$FIREBASE_API_KEY")"
-            test "$code" = '200'
+          signin(){
+            local email="$1" out="$2" code
+            code="$(curl -sS -o "$out" -w '%{http_code}' -H 'Content-Type: application/json' --data "$(jq -nc --arg email "$email" --arg password "$password" '{email:$email,password:$password,returnSecureToken:true}')" "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$FIREBASE_API_KEY")"
+            echo "SIGNIN_${email%%@*}_HTTP=$code" >&2
+            test "$code" = 200
             jq -er '.idToken' "$out"
           }
           picker_token="$(signin "$PICKER_EMAIL" picker-login.p6.json)"
           invent_token="$(signin "$INVENT_EMAIL" invent-login.p6.json)"
-          echo "::add-mask::$picker_token"
-          echo "::add-mask::$invent_token"
-          rpc() {
-            local token="$1" name="$2" body="$3" out="$4"
-            curl --silent --show-error --output "$out" --write-out '%{http_code}' --header 'Content-Type: application/json' --header "Authorization: Bearer $token" --data "$body" "$NEON_API/rpc/$name"
-          }
-          # Flow A: report -> claim -> SKIP -> pending alert -> restore AVAILABLE.
-          code="$(rpc "$picker_token" report_shortage_rpc '{"p_sku":"10005315","p_client_request_id":"p6-flow-a"}' report-a.p6.json)"; test "$code" = 200
-          issue_a="$(jq -er '.issue.id' report-a.p6.json)"; echo "P6_ISSUE_A=$issue_a"
-          req="$(cat /proc/sys/kernel/random/uuid)"
-          code="$(rpc "$invent_token" api_claim_issue_rpc "$(jq -nc --arg id "$issue_a" --arg req "$req" '{p_issue_id:$id,p_client_request_id:$req,p_test_role:null}')" claim-a.p6.json)"; test "$code" = 200
-          jq -e '.issue.status=="CLAIMED"' claim-a.p6.json >/dev/null
-          req="$(cat /proc/sys/kernel/random/uuid)"
-          code="$(rpc "$invent_token" api_update_issue_rpc "$(jq -nc --arg id "$issue_a" --arg req "$req" '{p_issue_id:$id,p_action:"NOT_FOUND",p_client_request_id:$req,p_test_role:null}')" skip-a.p6.json)"; test "$code" = 200
-          jq -e '.issue.status=="SKIP_ALLOWED"' skip-a.p6.json >/dev/null
-          code="$(rpc "$picker_token" api_pending_alerts_rpc '{"p_test_role":null}' alerts-a.p6.json)"; test "$code" = 200
-          jq -e --arg id "$issue_a" 'tostring | contains($id) and contains("SKIP_ALLOWED")' alerts-a.p6.json >/dev/null
-          code="$(rpc "$invent_token" api_restore_skipped_issue_rpc "$(jq -nc --arg id "$issue_a" '{p_issue_id:$id,p_reason:"P6 isolated restore",p_test_role:null}')" restore-a.p6.json)"; test "$code" = 200
-          jq -e '.issue.status=="AVAILABLE" and .issue.restored_from_skip==true' restore-a.p6.json >/dev/null
-          echo 'FLOW_A_OK claim+skip+alert+restore'
+          echo "::add-mask::$picker_token"; echo "::add-mask::$invent_token"
+          rpc(){ local token="$1" name="$2" body="$3" out="$4"; curl -sS -o "$out" -w '%{http_code}' -H 'Content-Type: application/json' -H "Authorization: Bearer $token" --data "$body" "$NEON_API/rpc/$name"; }
 
-          # Flow B: picker withdraws own report inside the 30-second window.
-          code="$(rpc "$picker_token" report_shortage_rpc '{"p_sku":"10007278","p_client_request_id":"p6-flow-b"}' report-b.p6.json)"; test "$code" = 200
-          issue_b="$(jq -er '.issue.id' report-b.p6.json)"; echo "P6_ISSUE_B=$issue_b"
-          code="$(rpc "$picker_token" api_withdraw_shortage_rpc "$(jq -nc --arg id "$issue_b" '{p_issue_id:$id,p_test_role:null}')" withdraw-b.p6.json)"; test "$code" = 200
-          jq -e '.issue.status=="CLOSED" and .remaining_report_count==0 and .already_withdrawn==false' withdraw-b.p6.json >/dev/null
-          code="$(rpc "$picker_token" api_withdraw_shortage_rpc "$(jq -nc --arg id "$issue_b" '{p_issue_id:$id,p_test_role:null}')" withdraw-b2.p6.json)"; test "$code" = 200
-          jq -e '.already_withdrawn==true' withdraw-b2.p6.json >/dev/null
-          echo 'FLOW_B_OK withdraw-within-window+idempotency'
+          code="$(rpc "$picker_token" api_pending_alerts_rpc '{"p_test_role":null}' alerts.p6.json)"
+          echo "PENDING_ALERTS_HTTP=$code"
+          if test "$code" != 200; then jq -c '{code,message,details,hint}' alerts.p6.json || true; exit 1; fi
+          echo "PENDING_ALERT_COUNT=$(jq '.events|length' alerts.p6.json)"
+          jq -e --arg id "$ISSUE_A" '.events | any(.issue_id==$id and .status=="SKIP_ALLOWED" and .critical==true)' alerts.p6.json >/dev/null
+          echo 'PENDING_ALERT_MATCH_OK'
 
-          # Flow C: the same withdrawal is rejected after 30 seconds.
-          code="$(rpc "$picker_token" report_shortage_rpc '{"p_sku":"10007280","p_client_request_id":"p6-flow-c"}' report-c.p6.json)"; test "$code" = 200
-          issue_c="$(jq -er '.issue.id' report-c.p6.json)"; echo "P6_ISSUE_C=$issue_c"
-          sleep 31
-          code="$(rpc "$picker_token" api_withdraw_shortage_rpc "$(jq -nc --arg id "$issue_c" '{p_issue_id:$id,p_test_role:null}')" withdraw-c.p6.json)"
-          test "$code" != 200
-          grep -q 'WITHDRAW_WINDOW_EXPIRED' withdraw-c.p6.json
-          echo 'FLOW_C_OK withdraw-window-expired-blocked'
-          echo 'P6_BUSINESS_FLOW_E2E_OK'
+          code="$(rpc "$invent_token" api_restore_skipped_issue_rpc "$(jq -nc --arg id "$ISSUE_A" '{p_issue_id:$id,p_reason:"P6 isolated restore",p_test_role:null}')" restore.p6.json)"
+          echo "RESTORE_HTTP=$code"
+          if test "$code" != 200; then jq -c '{code,message,details,hint}' restore.p6.json || true; exit 1; fi
+          jq -e '.issue.status=="AVAILABLE" and .issue.restored_from_skip==true' restore.p6.json >/dev/null
+          echo 'P6_ALERT_RESTORE_OK'
