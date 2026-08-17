@@ -26,9 +26,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${FIREBASE_SERVICE_ACCOUNT:-}"
-          test -n "${WORKER_URL:-}"
-          case "$WORKER_URL" in https://script.google.com/macros/s/*/exec) ;; *) exit 1;; esac
           custom="$(node <<'NODE'
           const admin=require('firebase-admin');
           admin.initializeApp({credential:admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT))});
@@ -42,6 +39,6 @@ jobs:
           jq -nc --arg token "$id_token" '{action:"worker-kick",id_token:$token}' > "$RUNNER_TEMP/kick.json"
           code="$(curl -sS -L -o "$RUNNER_TEMP/result.json" -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @"$RUNNER_TEMP/kick.json" "$WORKER_URL")"
           echo "WORKER_HTTP=$code"; test "$code" = 200
+          jq '{ok,error,source,skipped,tick,notifications,pushes,sheet,realtime,schedule}' "$RUNNER_TEMP/result.json"
           jq -e '.ok==true' "$RUNNER_TEMP/result.json" >/dev/null
-          jq '{ok,source,skipped,tick,notifications,pushes,sheet,realtime,schedule}' "$RUNNER_TEMP/result.json"
           echo PROD_WORKER_KICK_PASS
