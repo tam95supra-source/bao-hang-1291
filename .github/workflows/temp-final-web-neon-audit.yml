@@ -17,20 +17,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          root="$RUNNER_TEMP/root.html"
-          bundle="$RUNNER_TEMP/live-js.txt"
-          curl -fsS --retry 4 --retry-all-errors --retry-delay 2 https://bao-hang-1291.web.app/ -o "$root"
-          : > "$bundle"
-          grep -oE '/assets/[^"'"']+\.js' "$root" | sort -u | while read -r asset; do
-            curl -fsS --retry 3 "https://bao-hang-1291.web.app${asset}" >> "$bundle"
-            printf '\n' >> "$bundle"
-          done
-          test -s "$bundle"
-          grep -F 'tiny-boat-19315489' "$bundle" >/dev/null
-          grep -F 'Neon production' "$bundle" >/dev/null
-          grep -F 'ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech' "$bundle" >/dev/null
-          ! grep -E 'oedasgcdjppjwidhlqdr|ap-northeast-2|Supabase production|Supabase: <b>ACTIVE|supabase\.co|/auth/v1|/functions/v1|compat\.bao-hang-1291\.invalid' "$bundle" >/dev/null
-          echo LIVE_BUNDLE_NEON_ONLY_PASS
+          python3 <<'PY'
+          import re, urllib.request
+          base = 'https://bao-hang-1291.web.app'
+          html = urllib.request.urlopen(base + '/', timeout=20).read().decode('utf-8', 'replace')
+          assets = sorted(set(re.findall(r'/assets/[^"\']+\.js', html)))
+          if not assets:
+              raise SystemExit('NO_JS_ASSETS')
+          bundle = '\n'.join(urllib.request.urlopen(base + a, timeout=20).read().decode('utf-8', 'replace') for a in assets)
+          required = ['tiny-boat-19315489', 'Neon production', 'ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech']
+          for token in required:
+              if token not in bundle:
+                  raise SystemExit('MISSING_LIVE_TOKEN:' + token)
+          forbidden = ['oedasgcdjppjwidhlqdr', 'ap-northeast-2', 'Supabase production', 'Supabase: <b>ACTIVE', 'supabase.co', '/auth/v1', '/functions/v1', 'compat.bao-hang-1291.invalid']
+          found = [x for x in forbidden if x in bundle]
+          if found:
+              raise SystemExit('FORBIDDEN_LIVE_TOKENS:' + ','.join(found))
+          print('LIVE_BUNDLE_NEON_ONLY_PASS')
+          PY
 
           browser="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || true)"
           test -n "$browser"
