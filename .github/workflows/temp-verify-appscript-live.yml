@@ -15,15 +15,17 @@ jobs:
       FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
       ADMIN_UID: 44fae0a2-09eb-4226-8412-0f1a1f5d7ef8
       NEON_API: https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1
+      BOOTSTRAP_URL: https://oedasgcdjppjwidhlqdr.supabase.co/functions/v1/migration-apps-script-bootstrap
     steps:
       - uses: actions/checkout@v4
-      - name: Inspect token and Neon auth
+      - name: Repair config and verify worker
         shell: bash
         run: |
           set -euo pipefail
           node <<'NODE'
           const fs=require('fs'),crypto=require('crypto'),assert=require('assert');
           const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+          assert.equal(sa.project_id,'bao-hang-1291');
           const cfg=JSON.parse(fs.readFileSync('app/google-services.json','utf8'));
           const apiKey=cfg.client[0].api_key[0].current_key;
           const b64u=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');
@@ -33,21 +35,39 @@ jobs:
           async function post(url,body,headers={}){const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(body)});const text=await r.text();let json;try{json=JSON.parse(text)}catch{json={raw:text}}return{status:r.status,json}}
           (async()=>{
             const ping=await post(process.env.WEBHOOK_URL,{action:'ping'});
-            assert.equal(ping.status,200); assert.equal(ping.json.provider,'NEON_FIREBASE_GOOGLE');
+            assert.equal(ping.status,200,'PING_'+ping.status); assert.equal(ping.json.provider,'NEON_FIREBASE_GOOGLE');
             const sign=await post('https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key='+encodeURIComponent(apiKey),{token:custom,returnSecureToken:true});
             assert.equal(sign.status,200,'SIGNIN_'+sign.status); assert(sign.json.idToken);
-            const claims=JSON.parse(Buffer.from(sign.json.idToken.split('.')[1],'base64url').toString());
-            console.log('TOKEN_SUB_OK='+(claims.sub===process.env.ADMIN_UID));
-            console.log('TOKEN_AUD='+String(claims.aud||''));
-            console.log('TOKEN_ISS='+String(claims.iss||''));
-            console.log('TOKEN_ROLE='+String(claims.role||''));
-            console.log('TOKEN_APP_ROLE='+String(claims.app_role||''));
-            console.log('TOKEN_PROVIDER='+String(claims.firebase&&claims.firebase.sign_in_provider||''));
-            const session=await post(process.env.NEON_API+'/rpc/api_session_profile_rpc',{p_test_role:null},{Authorization:'Bearer '+sign.json.idToken});
-            console.log('NEON_SESSION_HTTP='+session.status);
-            console.log('NEON_SESSION_OK='+(session.status>=200&&session.status<300));
-            if(session.status>=200&&session.status<300){console.log('NEON_EFFECTIVE_ROLE='+String(session.json.effective_role||''));}
-            else console.log('NEON_SESSION_ERROR='+String(session.json.message||session.json.raw||'').slice(0,200));
-            if(session.status<200||session.status>=300) process.exit(2);
-          })().catch(e=>{console.error('INSPECT_FAIL='+e.message);process.exit(1)});
+            const direct=await post(process.env.NEON_API+'/rpc/api_session_profile_rpc',{p_test_role:null},{Authorization:'Bearer '+sign.json.idToken});
+            assert.equal(direct.status,200,'DIRECT_NEON_'+direct.status); assert.equal(direct.json.effective_role,'ADMIN');
+
+            const boot=await post(process.env.BOOTSTRAP_URL,{}, {'x-bootstrap-secret':process.env.WEBHOOK_SECRET});
+            assert.equal(boot.status,200,'BOOTSTRAP_SOURCE_'+boot.status); assert.equal(boot.json.ok,true,'BOOTSTRAP_SOURCE_NOT_OK');
+            assert(boot.json.staff_default_password && String(boot.json.staff_default_password).length>=8,'STAFF_PASSWORD_MISSING');
+
+            const repair=await post(process.env.WEBHOOK_URL,{action:'bootstrap-config',id_token:sign.json.idToken,config:{
+              neon_data_api:process.env.NEON_API,
+              firebase_project_id:'bao-hang-1291',
+              worker_admin_uid:process.env.ADMIN_UID,
+              webhook_secret:process.env.WEBHOOK_SECRET,
+              firebase_service_account:process.env.FIREBASE_SERVICE_ACCOUNT,
+              staff_default_password:boot.json.staff_default_password,
+              firebase_web_api_key:apiKey
+            }});
+            console.log('BOOTSTRAP_CONFIG_HTTP='+repair.status);
+            console.log('BOOTSTRAP_CONFIG_OK='+String(repair.json && repair.json.ok===true));
+            console.log('BOOTSTRAP_CONFIG_ERROR='+String(repair.json && repair.json.error || ''));
+            if(!(repair.json && (repair.json.ok===true || repair.json.error==='BOOTSTRAP_LOCKED'))) throw new Error('BOOTSTRAP_CONFIG_FAILED');
+
+            const kick=await post(process.env.WEBHOOK_URL,{action:'worker-kick',id_token:sign.json.idToken});
+            console.log('WORKER_KICK_HTTP='+kick.status);
+            console.log('WORKER_KICK_OK='+String(kick.json&&kick.json.ok===true));
+            console.log('WORKER_KICK_ERROR='+String(kick.json&&kick.json.error||''));
+            if(!(kick.json&&kick.json.ok===true)) throw new Error('WORKER_KICK_FAILED');
+            console.log('SHEET_COUNT='+String(kick.json.sheet&&kick.json.sheet.count||0));
+            console.log('SHEET_ACKED='+String(kick.json.sheet&&kick.json.sheet.acked||0));
+            console.log('REALTIME_COUNT='+String(kick.json.realtime&&kick.json.realtime.count||0));
+            console.log('NOTIFICATION_COUNT='+String(kick.json.notifications&&kick.json.notifications.count||0));
+            console.log('APPS_SCRIPT_NEON_WORKER_PASS');
+          })().catch(e=>{console.error('VERIFY_FAIL='+e.message);process.exit(1)});
           NODE
