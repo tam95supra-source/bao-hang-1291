@@ -1,0 +1,60 @@
+name: Temp P5 runtime validation
+
+on:
+  push:
+    branches:
+      - migration/neon-cutover
+    paths:
+      - '.github/workflows/temp-p5-runtime-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: migration/neon-cutover
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+          cache-disabled: true
+      - name: Fail-closed Android production scope scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -RInE 'ep-flat-feather-azdi44be|ttwftrooaizxmjovkbaz|pick-pack-1291\.web\.app|pick-pack-1291-primary|19a7c8e9-9fc0-4b04-a545-bcbe84b1bcb1' app/src app/build.gradle.kts
+          grep -Fq 'ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1' app/build.gradle.kts
+      - name: Unit tests and debug compile
+        run: gradle --no-daemon testDebugUnitTest assembleDebug
+
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: web-admin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: migration/neon-cutover
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Fail-closed Web production scope scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -RInE 'ep-flat-feather-azdi44be|ttwftrooaizxmjovkbaz|pick-pack-1291\.web\.app|pick-pack-1291-primary|19a7c8e9-9fc0-4b04-a545-bcbe84b1bcb1' src package.json vite.config.js
+          grep -Fq 'ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1' src/supabase-shim.js
+      - name: Install dependencies without cache or artifacts
+        run: npm install --no-audit --no-fund
+      - name: Build web
+        run: npm run build
