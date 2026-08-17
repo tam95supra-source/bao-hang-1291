@@ -12,7 +12,7 @@ const BH_STAFF_SHEET_ID = '1FRROqCp1lmkuHc3lc4UBpVI5_ZrtiPI1thlEymv458E';
 const BH_STAFF_SHEET_NAME = 'DANH MỤC NHÂN SỰ';
 const BH_PROTECTED_ADMIN_CODE = '6281280';
 const BH_LOG_FOLDER = 'Báo hàng 1291 - Diagnostic Logs';
-const BH_EVENT_HEADERS = ['Queue ID','Thời gian','Loại sự kiện','Ticket ID','SKU','Tên sản phẩm','Trạng thái','Số lượt báo','Người báo/Actor ID','Dữ liệu JSON'];
+const BH_EVENT_HEADERS = ['Mã sự kiện','Thời gian','Loại sự kiện','Ticket ID','SKU','Tên sản phẩm','Trạng thái','Số lượt báo','Người báo/Actor ID','Dữ liệu JSON'];
 const BH_ISSUE_HEADERS = ['Ticket ID','SKU','Tên sản phẩm','Trạng thái','Số lượt báo','Báo lần đầu','Cập nhật cuối','Invent xử lý','Số lần mở lại'];
 const BH_USER_HEADERS = ['Mã nhân viên','Họ tên','Nhà thầu','Vai trò','Trạng thái','Cập nhật cuối'];
 
@@ -619,8 +619,8 @@ function applyEvent_(event) {
   if(!event || typeof event !== 'object') throw new Error('SHEET_EVENT_INVALID');
   const payload=(event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)) ? event.payload : {};
   const eventType=String(event.event_type || event.type || '').trim().toUpperCase();
-  const queueId=String(event.id !== undefined && event.id !== null ? event.id : (event.queue_id !== undefined && event.queue_id !== null ? event.queue_id : (event.event_id || ''))).trim();
-  if(!queueId) throw new Error('SHEET_QUEUE_ID_REQUIRED');
+  const eventId=String(event.event_id || event.queue_id || event.id || '').trim();
+  if(!eventId) throw new Error('SHEET_EVENT_ID_REQUIRED');
 
   const issueId=String(event.issue_id || payload.id || event.ticket_id || '').trim();
   const sku=String(event.sku || payload.sku || '').trim();
@@ -632,7 +632,7 @@ function applyEvent_(event) {
 
   const eventSheet=reportSpreadsheet_().getSheetByName('SU_KIEN');
   if(!eventSheet) throw new Error('Thiếu tab SU_KIEN');
-  upsertByKey_(eventSheet,1,queueId,[queueId,eventTime,eventType,issueId,sku,productName,status,reportCount,actorId,JSON.stringify(payload)]);
+  upsertByKey_(eventSheet,1,eventId,[eventId,eventTime,eventType,issueId,sku,productName,status,reportCount,actorId,JSON.stringify(payload)]);
 
   if(eventType === 'USER_UPSERT' || eventType === 'USER') {
     const employeeCode=String(payload.employee_code || event.employee_code || '').trim();
