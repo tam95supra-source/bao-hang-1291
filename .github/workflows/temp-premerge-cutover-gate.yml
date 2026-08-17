@@ -81,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           gradle --no-daemon testDebugUnitTest assembleDebug
-          generated='app/build/generated/source/buildConfig/debug/vn/pickpack1291/baohang/debug/BuildConfig.java'
+          generated='app/build/generated/source/buildConfig/debug/vn/pickpack1291/baohang/BuildConfig.java'
           test -s "$generated"
           grep -F 'ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech' "$generated" >/dev/null
           grep -F 'script.google.com/macros/s/' "$generated" >/dev/null
