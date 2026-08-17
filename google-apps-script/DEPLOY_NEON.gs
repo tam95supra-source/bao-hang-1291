@@ -521,14 +521,20 @@ function workerAdminIdToken_() {
 }
 
 function verifyFirebaseIdToken_(token) {
-  const parts=String(token||'').split('.');if(parts.length!==3)throw new Error('INVALID_TOKEN');
-  const header=JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(parts[0])).getDataAsString());
-  const payload=JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(parts[1])).getDataAsString());
-  if(payload.aud!==BH_PROJECT||payload.iss!=='https://securetoken.google.com/'+BH_PROJECT||Number(payload.exp||0)<=Math.floor(Date.now()/1000))throw new Error('INVALID_TOKEN_CLAIMS');
-  const keys=fetchJson_('https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com',{muteHttpExceptions:false});
-  const cert=keys[header.kid];if(!cert)throw new Error('TOKEN_KEY_NOT_FOUND');
-  const signature=Utilities.base64DecodeWebSafe(parts[2]);
-  if(!Utilities.verifyRsaSha256Signature(signature,parts[0]+'.'+parts[1],cert))throw new Error('INVALID_TOKEN_SIGNATURE');
+  const raw=String(token||'');
+  const parts=raw.split('.');
+  if(parts.length!==3)throw new Error('INVALID_TOKEN');
+  let payload=null;
+  try { payload=JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(parts[1])).getDataAsString()); }
+  catch(ignore) { throw new Error('INVALID_TOKEN'); }
+  const now=Math.floor(Date.now()/1000);
+  if(!payload||payload.aud!==BH_PROJECT||payload.iss!=='https://securetoken.google.com/'+BH_PROJECT||!payload.sub||Number(payload.exp||0)<=now||Number(payload.iat||0)>now+60)throw new Error('INVALID_TOKEN_CLAIMS');
+  const res=UrlFetchApp.fetch('https://identitytoolkit.googleapis.com/v1/accounts:lookup?key='+encodeURIComponent(requiredProp_('FIREBASE_WEB_API_KEY')),{method:'post',contentType:'application/json',payload:JSON.stringify({idToken:raw}),muteHttpExceptions:true});
+  let body={};try{body=JSON.parse(res.getContentText()||'{}')}catch(ignore){}
+  const user=body&&Array.isArray(body.users)&&body.users.length?body.users[0]:null;
+  if(res.getResponseCode()!==200||!user||String(user.localId||'')!==String(payload.sub)||user.disabled===true)throw new Error('INVALID_TOKEN');
+  const validSince=Number(user.validSince||0), authTime=Number(payload.auth_time||payload.iat||0);
+  if(validSince&&authTime<validSince)throw new Error('TOKEN_REVOKED');
   return payload;
 }
 
