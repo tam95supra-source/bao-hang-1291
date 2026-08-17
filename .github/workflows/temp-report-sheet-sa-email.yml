@@ -1,0 +1,24 @@
+name: Temp resolve report Sheet service account
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/temp-report-sheet-sa-email.yml']
+permissions:
+  contents: read
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+    steps:
+      - name: Resolve non-secret client email
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${FIREBASE_SERVICE_ACCOUNT:-}"
+          email="$(jq -er '.client_email' <<<"$FIREBASE_SERVICE_ACCOUNT")"
+          project="$(jq -er '.project_id' <<<"$FIREBASE_SERVICE_ACCOUNT")"
+          test "$project" = 'bao-hang-1291'
+          [[ "$email" = *@*.iam.gserviceaccount.com ]]
+          printf 'SERVICE_ACCOUNT_EMAIL=%s\n' "$email"
