@@ -1,0 +1,36 @@
+name: Temp patch Sheet backfill
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/temp-patch-backfill.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Patch authenticated admin claims and URL parser
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          p=Path('.github/workflows/temp-neon-sheet-backfill.yml')
+          s=p.read_text()
+          s=s.replace("'{iss:$iss,sub:$sub,aud:$aud,iat:$iat,exp:$exp,uid:$uid}'", "'{iss:$iss,sub:$sub,aud:$aud,iat:$iat,exp:$exp,uid:$uid,claims:{role:\"authenticated\",app_role:\"ADMIN\",employee_code:\"6281280\"}}'")
+          s=s.replace('import os, json, urllib.request, urllib.error, time','import os, json, urllib.request, urllib.error, urllib.parse, time')
+          p.write_text(s)
+          PY
+          grep -F 'role:\"authenticated\"' .github/workflows/temp-neon-sheet-backfill.yml >/dev/null
+          grep -F 'urllib.parse' .github/workflows/temp-neon-sheet-backfill.yml >/dev/null
+      - name: Commit patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/temp-neon-sheet-backfill.yml
+          git commit -m 'fix(ci): preserve Firebase admin claims for Neon backfill'
+          git push origin HEAD:main
