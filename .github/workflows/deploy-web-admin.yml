@@ -21,8 +21,18 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      NEON_DATA_API: https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1
     steps:
       - uses: actions/checkout@v6
+
+      - name: Enforce BÁO HÀNG scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
+          test "$NEON_DATA_API" = 'https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1'
+          ! grep -RInE 'ttwftrooaizxmjovkbaz|pick-pack-1291\.web\.app|pick-pack-1291-primary' web-admin firebase.json
 
       - name: Enforce zero-cost Firebase billing guard
         shell: bash
@@ -33,7 +43,7 @@ jobs:
           node <<'NODE'
           const crypto = require('crypto');
           const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
-          if (!sa.client_email || !sa.private_key) throw new Error('Firebase service account secret is incomplete');
+          if (!sa.client_email || !sa.private_key || sa.project_id !== 'bao-hang-1291') throw new Error('Firebase service account secret is incomplete or out of scope');
           const enc = (v) => Buffer.from(typeof v === 'string' ? v : JSON.stringify(v)).toString('base64url');
           async function token() {
             const now = Math.floor(Date.now() / 1000);
@@ -79,7 +89,7 @@ jobs:
         shell: bash
         run: npm --prefix web-admin run build
 
-      - name: Reject secret material from static build
+      - name: Reject Supabase runtime and secret material from static build
         shell: bash
         run: |
           set -euo pipefail
@@ -87,8 +97,28 @@ jobs:
             echo 'Secret-like material found in static build' >&2
             exit 1
           fi
+          if grep -R -F 'oedasgcdjppjwidhlqdr.supabase.co' web-admin/dist; then
+            echo 'Supabase runtime URL found in production Web Admin build' >&2
+            exit 1
+          fi
+          grep -R -F 'ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech' web-admin/dist >/dev/null
           test -f web-admin/dist/index.html
           test -f web-admin/dist/MAU_NHAN_SU_BAO_HANG_1291.xlsx
+
+      - name: Verify Neon production auth boundary before deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --retry 3 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/neon-unauth.json" -w '%{http_code}' \
+            -X POST "$NEON_DATA_API/rpc/api_session_profile_rpc" \
+            -H 'Content-Type: application/json' \
+            -d '{"p_test_role":null}')"
+          echo "NEON_UNAUTH_HTTP=$code"
+          case "$code" in
+            401|403) ;;
+            *) echo "Unexpected unauthenticated Neon response: HTTP $code" >&2; cat "$RUNNER_TEMP/neon-unauth.json" >&2; exit 1 ;;
+          esac
+          echo 'NEON_AUTH_BOUNDARY_SMOKE=PASS'
 
       - name: Prepare Firebase deployment credential
         shell: bash
@@ -117,25 +147,7 @@ jobs:
           grep -qi '^x-content-type-options: nosniff' "$RUNNER_TEMP/web-headers.txt"
           echo 'WEB_ADMIN_LIVE_SMOKE=PASS'
 
-      - name: Verify Web Admin API CORS and auth boundary
-        shell: bash
-        run: |
-          set -euo pipefail
-          API_URL="https://oedasgcdjppjwidhlqdr.supabase.co/functions/v1/web-api/admin-summary"
-          ORIGIN="https://bao-hang-1291.web.app"
-          curl -sS -D "$RUNNER_TEMP/cors-headers.txt" -o /dev/null -X OPTIONS "$API_URL" \
-            -H "Origin: $ORIGIN" \
-            -H 'Access-Control-Request-Method: POST' \
-            -H 'Access-Control-Request-Headers: authorization,apikey,content-type'
-          grep -qi '^access-control-allow-origin: https://bao-hang-1291.web.app' "$RUNNER_TEMP/cors-headers.txt"
-          CODE="$(curl -sS -D "$RUNNER_TEMP/api-headers.txt" -o "$RUNNER_TEMP/api-body.json" -w '%{http_code}' \
-            -X POST "$API_URL" -H "Origin: $ORIGIN" -H 'Content-Type: application/json' -d '{}')"
-          test "$CODE" = '401'
-          grep -qi '^access-control-allow-origin: https://bao-hang-1291.web.app' "$RUNNER_TEMP/api-headers.txt"
-          grep -q 'Phiên đăng nhập' "$RUNNER_TEMP/api-body.json"
-          echo 'WEB_API_CORS_AUTH_SMOKE=PASS'
-
       - name: Cleanup credential files
         if: always()
         shell: bash
-        run: rm -f "$RUNNER_TEMP/firebase-sa.json" "$RUNNER_TEMP/web-index.html" "$RUNNER_TEMP/web-headers.txt" "$RUNNER_TEMP/cors-headers.txt" "$RUNNER_TEMP/api-headers.txt" "$RUNNER_TEMP/api-body.json"
+        run: rm -f "$RUNNER_TEMP/firebase-sa.json" "$RUNNER_TEMP/web-index.html" "$RUNNER_TEMP/web-headers.txt" "$RUNNER_TEMP/neon-unauth.json"
