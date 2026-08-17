@@ -70,7 +70,7 @@ function testRole(init) {
   return ['ADMIN_INVENT', 'INVENT', 'PICKER'].includes(raw) ? raw : null
 }
 
-async function supabaseLikeLogin(body) {
+async function firebasePasswordLogin(body) {
   const { auth, signInWithEmailAndPassword } = await firebaseRuntime()
   const credential = await signInWithEmailAndPassword(auth, String(body.email || ''), String(body.password || ''))
   const token = await credential.user.getIdToken()
@@ -188,13 +188,13 @@ async function worker(action, body, init) {
 
 async function compatibilityFetch(input, init = {}) {
   const url = new URL(typeof input === 'string' ? input : input.url, location.href)
-  if (url.hostname !== 'compat.bao-hang-1291.invalid') return originalFetch(input, init)
+  if (url.hostname !== 'backend.bao-hang-1291.invalid') return originalFetch(input, init)
 
   try {
     if (url.pathname === '/auth/v1/token') {
       const body = parseBody(init)
       const grant = url.searchParams.get('grant_type') || ''
-      if (grant === 'password') return jsonResponse(await supabaseLikeLogin(body))
+      if (grant === 'password') return jsonResponse(await firebasePasswordLogin(body))
       if (grant === 'refresh_token') return jsonResponse(await refreshFirebase(body))
       return jsonResponse({ error: 'UNSUPPORTED_GRANT' }, 400)
     }
@@ -230,7 +230,7 @@ async function compatibilityFetch(input, init = {}) {
       if (response) return response
       return jsonResponse({ error: `MIGRATION_ACTION_UNSUPPORTED:${action}` }, 400)
     }
-    return jsonResponse({ error: 'SUPABASE_ENDPOINT_RETIRED' }, 410)
+    return jsonResponse({ error: 'LEGACY_ENDPOINT_RETIRED' }, 410)
   } catch (error) {
     const message = String(error?.code || error?.message || error)
     const friendly = message.includes('auth/invalid-credential') ? 'Sai mã nhân viên hoặc mật khẩu' : message

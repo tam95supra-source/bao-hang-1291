@@ -1,5 +1,5 @@
 import './style.css';
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from './backend-runtime.js';
 
 let excelModulePromise;
 async function getExcelJS() {
@@ -7,9 +7,9 @@ async function getExcelJS() {
   return excelModulePromise;
 }
 
-const SUPABASE_URL = 'https://compat.bao-hang-1291.invalid';
-const SUPABASE_ANON_KEY = 'compat-public';
-const API_BASE = `${SUPABASE_URL}/functions/v1/web-api`;
+const BACKEND_BRIDGE_URL = 'https://backend.bao-hang-1291.invalid';
+const BRIDGE_PUBLIC_KEY = 'compat-public';
+const API_BASE = `${BACKEND_BRIDGE_URL}/functions/v1/web-api`;
 const SESSION_KEY = 'bao-hang-1291-web-session';
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const ROLES = {
@@ -18,7 +18,7 @@ const ROLES = {
   INVENT: 'Người báo hàng',
   PICKER: 'Người lấy hàng',
 };
-const realtimeClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+const realtimeClient = createClient(BACKEND_BRIDGE_URL, BRIDGE_PUBLIC_KEY, {
   auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   realtime: { params: { eventsPerSecond: 10 } },
 });
@@ -104,14 +104,14 @@ async function parseResponse(response) {
   return data;
 }
 async function authToken(payload, grantType = 'password') {
-  return parseResponse(await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=${grantType}`, {
-    method: 'POST', headers: { 'content-type': 'application/json', apikey: SUPABASE_ANON_KEY }, body: JSON.stringify(payload),
+  return parseResponse(await fetch(`${BACKEND_BRIDGE_URL}/auth/v1/token?grant_type=${grantType}`, {
+    method: 'POST', headers: { 'content-type': 'application/json', apikey: BRIDGE_PUBLIC_KEY }, body: JSON.stringify(payload),
   }));
 }
 async function fetchProfile(accessToken, userId) {
   const q = new URLSearchParams({ id: `eq.${userId}`, select: 'id,employee_code,full_name,contractor,role,active' });
-  const rows = await parseResponse(await fetch(`${SUPABASE_URL}/rest/v1/profiles?${q}`, {
-    headers: { apikey: SUPABASE_ANON_KEY, authorization: `Bearer ${accessToken}` },
+  const rows = await parseResponse(await fetch(`${BACKEND_BRIDGE_URL}/rest/v1/profiles?${q}`, {
+    headers: { apikey: BRIDGE_PUBLIC_KEY, authorization: `Bearer ${accessToken}` },
   }));
   if (!Array.isArray(rows) || !rows.length) throw new Error('Tài khoản chưa có hồ sơ nhân sự.');
   return rows[0];
@@ -126,7 +126,7 @@ async function refreshSessionIfNeeded() {
 }
 async function api(action, payload = {}) {
   await refreshSessionIfNeeded();
-  const headers = { 'content-type': 'application/json', apikey: SUPABASE_ANON_KEY, authorization: `Bearer ${state.session.access_token}` };
+  const headers = { 'content-type': 'application/json', apikey: BRIDGE_PUBLIC_KEY, authorization: `Bearer ${state.session.access_token}` };
   if (state.testRole) headers['x-admin-test-role'] = state.testRole;
   const response = await fetch(`${API_BASE}/${encodeURIComponent(action)}`, { method: 'POST', headers, body: JSON.stringify(payload) });
   if (response.status === 401) {
@@ -138,9 +138,9 @@ async function api(action, payload = {}) {
 }
 async function issueWithdraw(action, payload = {}) {
   await refreshSessionIfNeeded();
-  const headers = { 'content-type': 'application/json', apikey: SUPABASE_ANON_KEY, authorization: `Bearer ${state.session.access_token}` };
+  const headers = { 'content-type': 'application/json', apikey: BRIDGE_PUBLIC_KEY, authorization: `Bearer ${state.session.access_token}` };
   if (state.testRole) headers['x-admin-test-role'] = state.testRole;
-  const response = await fetch(`${SUPABASE_URL}/functions/v1/issue-withdraw/${encodeURIComponent(action)}`, { method: 'POST', headers, body: JSON.stringify(payload) });
+  const response = await fetch(`${BACKEND_BRIDGE_URL}/functions/v1/issue-withdraw/${encodeURIComponent(action)}`, { method: 'POST', headers, body: JSON.stringify(payload) });
   return parseResponse(response);
 }
 function setBusy(busy, text = 'Đang xử lý…') {

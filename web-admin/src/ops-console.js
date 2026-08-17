@@ -1,9 +1,9 @@
 import './ops-console.css';
 
-const SUPABASE_URL = 'https://compat.bao-hang-1291.invalid';
-const SUPABASE_ANON_KEY = 'compat-public';
-const WEB_API = `${SUPABASE_URL}/functions/v1/web-api`;
-const ADMIN_OPS = `${SUPABASE_URL}/functions/v1/admin-ops`;
+const BACKEND_BRIDGE_URL = 'https://backend.bao-hang-1291.invalid';
+const BRIDGE_PUBLIC_KEY = 'compat-public';
+const WEB_API = `${BACKEND_BRIDGE_URL}/functions/v1/web-api`;
+const ADMIN_OPS = `${BACKEND_BRIDGE_URL}/functions/v1/admin-ops`;
 const SESSION_KEY = 'bao-hang-1291-web-session';
 const ROLE_LABELS = {
   ADMIN: 'Admin hệ thống',
@@ -56,9 +56,9 @@ async function refreshSessionIfNeeded() {
   if (!session) throw new Error('Phiên đăng nhập không tồn tại.');
   const now = Math.floor(Date.now() / 1000);
   if ((session.expires_at || 0) > now + 90) return session;
-  const response = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+  const response = await fetch(`${BACKEND_BRIDGE_URL}/auth/v1/token?grant_type=refresh_token`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', apikey: SUPABASE_ANON_KEY },
+    headers: { 'content-type': 'application/json', apikey: BRIDGE_PUBLIC_KEY },
     body: JSON.stringify({ refresh_token: session.refresh_token }),
   });
   const data = await response.json().catch(() => ({}));
@@ -76,7 +76,7 @@ async function request(base, action, payload = {}) {
   const session = await refreshSessionIfNeeded();
   const headers = {
     'content-type': 'application/json',
-    apikey: SUPABASE_ANON_KEY,
+    apikey: BRIDGE_PUBLIC_KEY,
     authorization: `Bearer ${session.access_token}`,
   };
   const testRole = detectedTestRole();
@@ -283,7 +283,7 @@ async function renderOverviewView() {
         <article class="ops-panel ops-live"><div class="ops-panel-title"><div><h3>Đang diễn ra</h3><p>${activeIssues.length} đợt đang chờ hoặc đang xử lý</p></div><span class="ops-live-pill">LIVE</span></div>${issueList || '<div class="ops-empty">Không có đợt báo thiếu đang chờ xử lý.</div>'}</article>
         <article class="ops-panel"><div class="ops-panel-title"><div><h3>Nhịp báo thiếu 24 giờ</h3><p>Lượt báo theo giờ, cột đậm là giờ hiện tại</p></div></div><div class="ops-hour-chart">${hourly.map((value, hour) => `<div class="ops-hour ${hour === currentHour ? 'current' : ''}" title="${hour}:00 · ${Number(value)} lượt"><i style="height:${Math.max(4, Number(value) / maxHour * 100)}%"></i><span>${hour % 3 === 0 ? hour : ''}</span></div>`).join('')}</div></article>
         <article class="ops-panel"><div class="ops-panel-title"><div><h3>Hiệu suất xử lý</h3><p>24 giờ gần nhất và thời gian xử lý 30 ngày</p></div></div><div class="ops-kv"><span>Một nửa đợt được nhận trong</span><b>${reports.median_claim_minutes ?? '—'} phút</b><span>Một nửa đợt xử lý xong trong</span><b>${reports.median_resolution_minutes ?? '—'} phút</b><span>95% xử lý xong trong</span><b>${reports.p95_resolution_minutes ?? '—'} phút</b><span>Đợt báo lại trong 30 phút</span><b>${reports.recurrent_episodes || 0}</b></div></article>
-        <article class="ops-panel"><div class="ops-panel-title"><div><h3>Đồng bộ & dung lượng</h3><p>Thông tin nền đang ảnh hưởng vận hành</p></div></div>${progress('Dung lượng Supabase', db, dbLimit)}<div class="ops-kv compact"><span>Đồng bộ nhân sự</span><b>${staff ? `${staff.status} · ${formatTime(staff.finished_at)}` : 'Chưa có'}</b><span>Google Sheet chờ xuất</span><b>${summary.pending_sheet_count || 0}</b><span>Thiết bị FCM hoạt động</span><b>${service.usage?.active_device_tokens || 0}</b></div></article>
+        <article class="ops-panel"><div class="ops-panel-title"><div><h3>Đồng bộ & dung lượng</h3><p>Thông tin nền đang ảnh hưởng vận hành</p></div></div>${progress('Dung lượng Neon', db, dbLimit)}<div class="ops-kv compact"><span>Đồng bộ nhân sự</span><b>${staff ? `${staff.status} · ${formatTime(staff.finished_at)}` : 'Chưa có'}</b><span>Google Sheet chờ xuất</span><b>${summary.pending_sheet_count || 0}</b><span>Thiết bị FCM hoạt động</span><b>${service.usage?.active_device_tokens || 0}</b></div></article>
       </div>`;
     updateClock();
   } catch (error) {
@@ -468,38 +468,41 @@ async function renderServerView() {
     if ($('#content') !== content || content.dataset.opsRender !== 'server') return;
     const usage = service.usage || {};
     const limits = service.free_limits || {};
+    const provider = String(service.provider || 'NEON_FREE');
+    const region = String(service.region || 'aws-ap-southeast-1');
     const db = Number(usage.database_bytes || 0);
-    const dbLimit = Number(limits.database_bytes || 500 * 1024 * 1024);
+    const dbLimit = Number(limits.database_bytes || 512 * 1024 * 1024);
     const dbPct = dbLimit ? db / dbLimit * 100 : 0;
     const logBytes = Number(usage.diagnostic_log_bytes || 0);
-    const storageLimit = Number(limits.storage_bytes || 1024 * 1024 * 1024);
+    const computeGuard = Number(limits.compute_hours_month || 0);
     const risk = dbPct >= 90 || Number(summary.pending_sheet_count || 0) > 100;
     content.innerHTML = `${pageHeading('Hạ tầng & chi phí', 'Sức khỏe dịch vụ, dung lượng và hàng rào giữ mục tiêu vận hành 0 USD.', `<div class="ops-cost-target ${risk ? 'warn' : 'good'}"><span>CHI PHÍ DỰ KIẾN</span><strong>$0</strong><small>${risk ? 'Có chỉ số cần theo dõi' : 'Đang trong mục tiêu'}</small></div>`)}
       <section class="ops-status-strip">
-        <span><i class="dot good"></i>Supabase: <b>ACTIVE</b></span>
+        <span><i class="dot good"></i>Neon: <b>ACTIVE</b></span>
         <span><i class="dot ${document.body.dataset.ticketRealtime === 'online' ? 'good' : 'warn'}"></i>Cập nhật báo hàng: <b>${document.body.dataset.ticketRealtime === 'online' ? 'TRỰC TUYẾN' : 'TỰ LÀM MỚI/ĐANG KẾT NỐI'}</b></span>
         <span><i class="dot ${summary.pending_sheet_count ? 'warn' : 'good'}"></i>Google Sheet: <b>${summary.pending_sheet_count ? `${summary.pending_sheet_count} chờ` : 'OK'}</b></span>
         <span><i class="dot ${latency > 2500 ? 'warn' : 'good'}"></i>API: <b>${latency} ms</b></span>
       </section>
       <div class="ops-server-grid">
-        <article class="ops-panel"><div class="ops-panel-title"><div><h3>Supabase production</h3><p>Backend nghiệp vụ, PostgreSQL, Edge Functions và Realtime</p></div><span class="ops-service-badge">FREE TARGET</span></div>
-          <div class="ops-kv"><span>Mã dự án</span><b>oedasgcdjppjwidhlqdr</b><span>Khu vực máy chủ</span><b>ap-northeast-2 · Seoul</b><span>Tài khoản hoạt động</span><b>${usage.profiles_active || 0}</b><span>Tổng đợt báo thiếu</span><b>${usage.issues_total || 0}</b><span>Đợt đang xử lý</span><b>${usage.issues_active || 0}</b></div>
-          ${progress('Dung lượng dữ liệu', db, dbLimit)}
-          ${progress('Log chẩn đoán', logBytes, storageLimit, `${formatBytes(logBytes)} log chẩn đoán · giới hạn Storage Free ${formatBytes(storageLimit)}`)}
+        <article class="ops-panel"><div class="ops-panel-title"><div><h3>Neon production</h3><p>PostgreSQL nghiệp vụ + Data API; Firebase JWT được kiểm tra tại RLS/RPC</p></div><span class="ops-service-badge">FREE TARGET</span></div>
+          <div class="ops-kv"><span>Provider</span><b>${escapeHtml(provider)}</b><span>Mã dự án</span><b>tiny-boat-19315489</b><span>Nhánh chính</span><b>production · br-broad-resonance-aznwrpea</b><span>Khu vực</span><b>${escapeHtml(region)}</b><span>Tài khoản hoạt động</span><b>${usage.profiles_active || 0}</b><span>Tổng đợt báo thiếu</span><b>${usage.issues_total || 0}</b><span>Đợt đang xử lý</span><b>${usage.issues_active || 0}</b></div>
+          ${progress('Dung lượng dữ liệu Neon', db, dbLimit)}
+          <div class="ops-kv compact"><span>Log chẩn đoán đã ghi nhận</span><b>${usage.diagnostic_logs || 0} bản ghi · ${formatBytes(logBytes)}</b><span>Data API</span><b>Production</b></div>
         </article>
-        <article class="ops-panel"><div class="ops-panel-title"><div><h3>Realtime & Edge</h3><p>Hạn mức bảo vệ của gói miễn phí hiện hành</p></div></div><div class="ops-limit-grid">
-          ${metric('Lượt cập nhật thời gian thực', '2 triệu/tháng', 'không tự nâng gói')}
-          ${metric('Kết nối realtime', '200', 'đỉnh đồng thời')}
-          ${metric('Edge Functions', '500.000/tháng', 'invocations Free')}
-          ${metric('Egress', '5 GB/tháng', 'Free tier')}
-        </div><p class="ops-note">Web chỉ hiển thị số sử dụng mà hệ thống đo được an toàn. Các quota tháng không có telemetry trực tiếp sẽ không bị giả lập thành số “đã dùng”.</p></article>
-        <article class="ops-panel"><div class="ops-panel-title"><div><h3>Firebase</h3><p>Hosting Web + FCM HTTP v1</p></div><span class="ops-service-badge good">SPARK GUARD</span></div><div class="ops-kv"><span>Hosting</span><b>bao-hang-1291.web.app</b><span>FCM token hoạt động</span><b>${usage.active_device_tokens || 0}</b><span>Billing policy</span><b>Không tự bật</b><span>Deploy guard</span><b>Chặn nếu Cloud Billing được bật</b></div></article>
+        <article class="ops-panel"><div class="ops-panel-title"><div><h3>Neon Free & Data API</h3><p>Hạn mức guard mà server đang áp dụng; không giả lập số đã dùng nếu không có telemetry.</p></div></div><div class="ops-limit-grid">
+          ${metric('Database guard', formatBytes(dbLimit), `${dbPct.toFixed(1)}% đang dùng`)}
+          ${metric('Compute guard', computeGuard ? `${computeGuard} giờ/tháng` : '—', 'mốc bảo vệ cấu hình server')}
+          ${metric('Data API', 'BẬT', 'Firebase JWT + RLS/RPC')}
+          ${metric('Realtime nghiệp vụ', 'Firestore', 'Firebase control-plane')}
+        </div><p class="ops-note">Các chỉ số sử dụng ở trên được đọc từ Neon production. Quota không có telemetry trực tiếp không được hiển thị thành số “đã dùng”.</p></article>
+        <article class="ops-panel"><div class="ops-panel-title"><div><h3>Firebase</h3><p>Auth + Firestore realtime + FCM HTTP v1 + Hosting Web</p></div><span class="ops-service-badge good">SPARK GUARD</span></div><div class="ops-kv"><span>Project</span><b>bao-hang-1291</b><span>Hosting</span><b>bao-hang-1291.web.app</b><span>FCM token hoạt động</span><b>${usage.active_device_tokens || 0}</b><span>Billing policy</span><b>Không tự bật</b><span>Deploy guard</span><b>Chặn nếu Cloud Billing được bật</b></div></article>
         <article class="ops-panel"><div class="ops-panel-title"><div><h3>GitHub & phát hành</h3><p>Public source, CI/CD và OTA</p></div><span class="ops-service-badge good">PUBLIC</span></div><div class="ops-kv"><span>Repo</span><b>tam95supra-source/bao-hang-1291</b><span>Runner policy</span><b>Standard / self-hosted</b><span>Paid runner</span><b>Không dùng</b><span>Release</span><b>Chỉ chạy khi có yêu cầu Beta/Stable</b></div></article>
-        <article class="ops-panel span-two"><div class="ops-panel-title"><div><h3>Hàng rào mục tiêu $0</h3><p>Không phải ước lượng tiền mơ hồ: hệ thống ưu tiên dừng/giảm tải trước khi chuyển sang phương án có phí.</p></div></div><div class="ops-guard-list">
-          <div class="good"><b>Supabase</b><span>Free-limit telemetry + không cho phép paid services trong policy ứng dụng.</span></div>
+        <article class="ops-panel span-two"><div class="ops-panel-title"><div><h3>Hàng rào mục tiêu $0</h3><p>Hệ thống ưu tiên dừng/giảm tải trước khi chuyển sang phương án có phí.</p></div></div><div class="ops-guard-list">
+          <div class="good"><b>Neon</b><span>Production là backend nghiệp vụ; DB/compute dùng guard Free và không có cơ chế tự nâng gói.</span></div>
           <div class="good"><b>Firebase</b><span>CI kiểm tra billingEnabled=false trước mỗi lần deploy Hosting.</span></div>
           <div class="good"><b>GitHub</b><span>Repo public dùng runner chuẩn; không dùng larger runner trả phí.</span></div>
-          <div class="${dbPct >= 75 ? 'warn' : 'good'}"><b>Dung lượng DB</b><span>${dbPct.toFixed(1)}% giới hạn. Cảnh báo sớm từ 75%, ưu tiên cleanup trước 90%.</span></div>
+          <div class="good"><b>Supabase rollback</b><span>Chỉ giữ khả năng rollback; Web không có target mạng Supabase và cron nghiệp vụ cũ đã tắt.</span></div>
+          <div class="${dbPct >= 75 ? 'warn' : 'good'}"><b>Dung lượng DB</b><span>${dbPct.toFixed(1)}% giới hạn guard. Cảnh báo sớm từ 75%, ưu tiên cleanup trước 90%.</span></div>
         </div></article>
       </div>`;
   } catch (error) {

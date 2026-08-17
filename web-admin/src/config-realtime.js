@@ -1,9 +1,9 @@
 import '@fontsource-variable/inter/wght.css';
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from './backend-runtime.js';
 
-const SUPABASE_URL = 'https://compat.bao-hang-1291.invalid';
-const SUPABASE_ANON_KEY = 'compat-public';
-const API_BASE = `${SUPABASE_URL}/functions/v1/web-api`;
+const BACKEND_BRIDGE_URL = 'https://backend.bao-hang-1291.invalid';
+const BRIDGE_PUBLIC_KEY = 'compat-public';
+const API_BASE = `${BACKEND_BRIDGE_URL}/functions/v1/web-api`;
 const SESSION_KEY = 'bao-hang-1291-web-session';
 const ISSUE_TOPIC = 'site:1291:issues';
 const CONFIG_TOPIC = 'site:1291:config';
@@ -11,7 +11,7 @@ const CONFIG_ROLES = new Set(['ADMIN', 'ADMIN_INVENT']);
 const ISSUE_TABS = new Set(['events', 'overview', 'picker']);
 const FALLBACK_INTERVAL_MS = 6_000;
 
-const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+const client = createClient(BACKEND_BRIDGE_URL, BRIDGE_PUBLIC_KEY, {
   auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   realtime: { params: { eventsPerSecond: 6 } },
 });
@@ -80,7 +80,7 @@ async function api(action, accessToken) {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      apikey: SUPABASE_ANON_KEY,
+      apikey: BRIDGE_PUBLIC_KEY,
       authorization: `Bearer ${accessToken}`,
     },
     body: '{}',

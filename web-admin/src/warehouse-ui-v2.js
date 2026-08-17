@@ -1,10 +1,10 @@
 import './warehouse-ui-v2.css';
 
-const SUPABASE_URL = 'https://compat.bao-hang-1291.invalid';
-const SUPABASE_ANON_KEY = 'compat-public';
-const WEB_API = `${SUPABASE_URL}/functions/v1/web-api`;
-const ADMIN_OPS = `${SUPABASE_URL}/functions/v1/admin-ops`;
-const ISSUE_WITHDRAW = `${SUPABASE_URL}/functions/v1/issue-withdraw`;
+const BACKEND_BRIDGE_URL = 'https://backend.bao-hang-1291.invalid';
+const BRIDGE_PUBLIC_KEY = 'compat-public';
+const WEB_API = `${BACKEND_BRIDGE_URL}/functions/v1/web-api`;
+const ADMIN_OPS = `${BACKEND_BRIDGE_URL}/functions/v1/admin-ops`;
+const ISSUE_WITHDRAW = `${BACKEND_BRIDGE_URL}/functions/v1/issue-withdraw`;
 const SESSION_KEY = 'bao-hang-1291-web-session';
 const OWNER_TABS = new Set(['overview', 'events', 'reports']);
 const MANAGER_ROLES = new Set(['ADMIN', 'ADMIN_INVENT']);
@@ -28,12 +28,12 @@ function dayLabel() { const n = new Date(); const w = n.toLocaleDateString('vi-V
 async function refreshSessionIfNeeded() {
   const session = readSession(); if (!session) throw new Error('Phiên đăng nhập không tồn tại.');
   const now = Math.floor(Date.now()/1000); if ((session.expires_at || 0) > now + 90) return session;
-  const response = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, { method:'POST', headers:{'content-type':'application/json',apikey:SUPABASE_ANON_KEY}, body:JSON.stringify({refresh_token:session.refresh_token}) });
+  const response = await fetch(`${BACKEND_BRIDGE_URL}/auth/v1/token?grant_type=refresh_token`, { method:'POST', headers:{'content-type':'application/json',apikey:BRIDGE_PUBLIC_KEY}, body:JSON.stringify({refresh_token:session.refresh_token}) });
   const data = await response.json().catch(()=>({})); if (!response.ok) throw new Error(data.error_description || data.message || 'Phiên đăng nhập đã hết hạn.');
   const updated = {...session,access_token:data.access_token,refresh_token:data.refresh_token||session.refresh_token,expires_at:now+Number(data.expires_in||3600)}; sessionStorage.setItem(SESSION_KEY,JSON.stringify(updated)); return updated;
 }
 async function request(base, action, payload={}) {
-  const session = await refreshSessionIfNeeded(); const headers={'content-type':'application/json',apikey:SUPABASE_ANON_KEY,authorization:`Bearer ${session.access_token}`}; const testRole=detectedTestRole(); if(testRole)headers['x-admin-test-role']=testRole;
+  const session = await refreshSessionIfNeeded(); const headers={'content-type':'application/json',apikey:BRIDGE_PUBLIC_KEY,authorization:`Bearer ${session.access_token}`}; const testRole=detectedTestRole(); if(testRole)headers['x-admin-test-role']=testRole;
   const response=await fetch(`${base}/${encodeURIComponent(action)}`,{method:'POST',headers,body:JSON.stringify(payload)}); const text=await response.text(); let data={}; if(text){try{data=JSON.parse(text)}catch{data={error:text}}} if(!response.ok)throw new Error(data.error||data.message||`Lỗi máy chủ ${response.status}`); return data;
 }
 const webApi=(action,payload={})=>request(WEB_API,action,payload); const opsApi=(action,payload={})=>request(ADMIN_OPS,action,payload); const withdrawApi=(action,payload={})=>request(ISSUE_WITHDRAW,action,payload);
