@@ -1,0 +1,75 @@
+name: Temp browser auth hardening
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/temp-auth-browser-hardening.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Patch Firebase Auth browser initialization
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          p = Path('web-admin/src/supabase-shim.js')
+          s = p.read_text()
+          old = """      const app = appModule.getApps().find((item) => item.name === '[DEFAULT]') || appModule.initializeApp({
+        apiKey: FIREBASE_API_KEY,
+        authDomain: `${FIREBASE_PROJECT}.firebaseapp.com`,
+        projectId: FIREBASE_PROJECT,
+      })
+      const auth = authModule.getAuth(app)
+      authModule.setPersistence(auth, authModule.browserLocalPersistence).catch(() => {})
+"""
+          new = """      const app = appModule.getApps().find((item) => item.name === '[DEFAULT]') || appModule.initializeApp({
+        apiKey: FIREBASE_API_KEY,
+        authDomain: `${FIREBASE_PROJECT}.web.app`,
+        projectId: FIREBASE_PROJECT,
+      })
+      let auth
+      try {
+        // Password-only web auth does not need popup/redirect resolver. Avoid the
+        // cross-origin auth iframe so strict browser privacy policies cannot break login.
+        auth = authModule.initializeAuth(app, { persistence: authModule.browserLocalPersistence })
+      } catch (error) {
+        if (error?.code !== 'auth/already-initialized') throw error
+        auth = authModule.getAuth(app)
+      }
+"""
+          if old not in s:
+              raise SystemExit('expected auth initialization block not found')
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('firebase.json')
+          s = p.read_text()
+          old = "form-action 'self'"
+          new = "frame-src 'self' https://bao-hang-1291.firebaseapp.com https://bao-hang-1291.web.app; form-action 'self'"
+          if old not in s:
+              raise SystemExit('expected CSP tail not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git diff --check
+          grep -F "authDomain: \`${FIREBASE_PROJECT:-bao-hang-1291}.web.app\`" web-admin/src/supabase-shim.js >/dev/null || grep -F 'authDomain: `${FIREBASE_PROJECT}.web.app`' web-admin/src/supabase-shim.js >/dev/null
+          grep -F 'initializeAuth(app' web-admin/src/supabase-shim.js >/dev/null
+          grep -F "frame-src 'self' https://bao-hang-1291.firebaseapp.com https://bao-hang-1291.web.app" firebase.json >/dev/null
+      - name: Commit source fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add web-admin/src/supabase-shim.js firebase.json
+          git commit -m 'fix(web): remove cross-origin Firebase Auth resolver'
+          git pull --rebase origin main
+          git push origin HEAD:main
