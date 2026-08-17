@@ -1,0 +1,81 @@
+name: Temp fix Apps Script Firebase token verification
+
+on:
+  push:
+    branches:
+      - migration/neon-cutover
+    paths:
+      - '.github/workflows/temp-fix-apps-script-token-verification.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: migration/neon-cutover
+          fetch-depth: 0
+
+      - name: Replace unsupported local RSA verify with Firebase token lookup
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('google-apps-script/DEPLOY_NEON.gs')
+          text=p.read_text(encoding='utf-8')
+          old="""function verifyFirebaseIdToken_(token) {
+  const parts=String(token||'').split('.');if(parts.length!==3)throw new Error('INVALID_TOKEN');
+  const header=JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(parts[0])).getDataAsString());
+  const payload=JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(parts[1])).getDataAsString());
+  if(payload.aud!==BH_PROJECT||payload.iss!=='https://securetoken.google.com/'+BH_PROJECT||Number(payload.exp||0)<=Math.floor(Date.now()/1000))throw new Error('INVALID_TOKEN_CLAIMS');
+  const keys=fetchJson_('https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com',{muteHttpExceptions:false});
+  const cert=keys[header.kid];if(!cert)throw new Error('TOKEN_KEY_NOT_FOUND');
+  const signature=Utilities.base64DecodeWebSafe(parts[2]);
+  if(!Utilities.verifyRsaSha256Signature(signature,parts[0]+'.'+parts[1],cert))throw new Error('INVALID_TOKEN_SIGNATURE');
+  return payload;
+}
+"""
+          new="""function verifyFirebaseIdToken_(token) {
+  const raw=String(token||'');
+  const parts=raw.split('.');
+  if(parts.length!==3)throw new Error('INVALID_TOKEN');
+  let payload=null;
+  try { payload=JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(parts[1])).getDataAsString()); }
+  catch(ignore) { throw new Error('INVALID_TOKEN'); }
+  const now=Math.floor(Date.now()/1000);
+  if(!payload||payload.aud!==BH_PROJECT||payload.iss!=='https://securetoken.google.com/'+BH_PROJECT||!payload.sub||Number(payload.exp||0)<=now||Number(payload.iat||0)>now+60)throw new Error('INVALID_TOKEN_CLAIMS');
+  const res=UrlFetchApp.fetch('https://identitytoolkit.googleapis.com/v1/accounts:lookup?key='+encodeURIComponent(requiredProp_('FIREBASE_WEB_API_KEY')),{method:'post',contentType:'application/json',payload:JSON.stringify({idToken:raw}),muteHttpExceptions:true});
+  let body={};try{body=JSON.parse(res.getContentText()||'{}')}catch(ignore){}
+  const user=body&&Array.isArray(body.users)&&body.users.length?body.users[0]:null;
+  if(res.getResponseCode()!==200||!user||String(user.localId||'')!==String(payload.sub)||user.disabled===true)throw new Error('INVALID_TOKEN');
+  const validSince=Number(user.validSince||0), authTime=Number(payload.auth_time||payload.iat||0);
+  if(validSince&&authTime<validSince)throw new Error('TOKEN_REVOKED');
+  return payload;
+}
+"""
+          count=text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected one old verifier, found {count}')
+          text=text.replace(old,new)
+          if 'verifyRsaSha256Signature' in text:
+              raise SystemExit('unsupported verifier still present')
+          p.write_text(text,encoding='utf-8')
+          PY
+          git diff --check
+          grep -Fq 'identitytoolkit.googleapis.com/v1/accounts:lookup?key=' google-apps-script/DEPLOY_NEON.gs
+          ! grep -Fq 'verifyRsaSha256Signature' google-apps-script/DEPLOY_NEON.gs
+
+      - name: Commit source fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'tam95supra-source'
+          git config user.email 'tam95.supra@gmail.com'
+          git add google-apps-script/DEPLOY_NEON.gs
+          git commit -m 'fix(apps-script): verify Firebase ID tokens via Auth backend'
+          git push origin HEAD:migration/neon-cutover
