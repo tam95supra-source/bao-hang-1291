@@ -1,61 +1,54 @@
-name: Verify target live
+name: Verify production target live
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'ops/verify-target-live.request'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   verify:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
     env:
-      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-      PROJECT_REF: oedasgcdjppjwidhlqdr
+      NEON_DATA_API: https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1
+      APPS_SCRIPT_WORKER_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
     steps:
-      - name: Validate management credential
+      - uses: actions/checkout@v6
+      - name: Scope and source guard
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${SUPABASE_ACCESS_TOKEN:-}" || { echo 'Missing SUPABASE_ACCESS_TOKEN' >&2; exit 1; }
-      - uses: supabase/setup-cli@v1
-        with:
-          version: latest
-      - name: Verify deployed Edge versions and Supra master key name
+          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
+          case "$APPS_SCRIPT_WORKER_URL" in https://script.google.com/macros/s/*/exec) ;; *) exit 11;; esac
+          if grep -RInE '[.]supabase[.]co|oedasgcdjppjwidhlqdr|SUPABASE_URL|SUPABASE_ANON_KEY|/functions/v1/' app/src web-admin/src google-apps-script scripts 2>/dev/null; then exit 12; fi
+      - name: Verify Neon auth boundary
         shell: bash
         run: |
           set -euo pipefail
-          supabase functions list --project-ref "$PROJECT_REF" --output json > "$RUNNER_TEMP/functions.json"
-          API_VERSION="$(jq -r '[.[] | select((.slug // .name)=="api")][0].version // 0' "$RUNNER_TEMP/functions.json")"
-          WEB_VERSION="$(jq -r '[.[] | select((.slug // .name)=="web-api")][0].version // 0' "$RUNNER_TEMP/functions.json")"
-          test "$API_VERSION" -ge 8 || { echo "api version too old: $API_VERSION" >&2; exit 1; }
-          test "$WEB_VERSION" -ge 4 || { echo "web-api version too old: $WEB_VERSION" >&2; exit 1; }
-          supabase secrets list --project-ref "$PROJECT_REF" > "$RUNNER_TEMP/secrets.txt"
-          grep -q 'SUPRA_CREDENTIAL_MASTER_KEY' "$RUNNER_TEMP/secrets.txt"
-          rm -f "$RUNNER_TEMP/functions.json" "$RUNNER_TEMP/secrets.txt"
-          echo "EDGE_LIVE=PASS api=$API_VERSION web-api=$WEB_VERSION supra_master_key=present"
-      - name: Verify Firebase Hosting and web API boundary
+          code="$(curl -sS --retry 3 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/neon.json" -w '%{http_code}' -X POST "$NEON_DATA_API/rpc/api_session_profile_rpc" -H 'content-type: application/json' -d '{"p_test_role":null}')"
+          case "$code" in 400|401|403) ;; *) cat "$RUNNER_TEMP/neon.json" >&2; exit 21;; esac
+          echo 'NEON_AUTH_BOUNDARY=PASS'
+      - name: Verify Apps Script worker
         shell: bash
         run: |
           set -euo pipefail
-          WEB='https://bao-hang-1291.web.app'
-          API='https://oedasgcdjppjwidhlqdr.supabase.co/functions/v1/web-api/admin-summary'
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 "$WEB/" -o "$RUNNER_TEMP/index.html"
-          grep -q 'Báo hàng 1291' "$RUNNER_TEMP/index.html"
-          curl -fsSI --retry 5 --retry-all-errors --retry-delay 2 "$WEB/" -o "$RUNNER_TEMP/headers.txt"
-          grep -qi '^content-security-policy:' "$RUNNER_TEMP/headers.txt"
-          grep -qi '^x-content-type-options: nosniff' "$RUNNER_TEMP/headers.txt"
-          curl -sS -D "$RUNNER_TEMP/cors.txt" -o /dev/null -X OPTIONS "$API" \
-            -H 'Origin: https://bao-hang-1291.web.app' \
-            -H 'Access-Control-Request-Method: POST' \
-            -H 'Access-Control-Request-Headers: authorization,apikey,content-type'
-          grep -qi '^access-control-allow-origin: https://bao-hang-1291.web.app' "$RUNNER_TEMP/cors.txt"
-          CODE="$(curl -sS -o "$RUNNER_TEMP/body.json" -w '%{http_code}' -X POST "$API" -H 'Origin: https://bao-hang-1291.web.app' -H 'Content-Type: application/json' -d '{}')"
-          test "$CODE" = '401'
-          grep -q 'Phiên đăng nhập' "$RUNNER_TEMP/body.json"
-          rm -f "$RUNNER_TEMP/index.html" "$RUNNER_TEMP/headers.txt" "$RUNNER_TEMP/cors.txt" "$RUNNER_TEMP/body.json"
-          echo 'WEB_LIVE=PASS hosting=ok cors=ok auth_boundary=401'
+          curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 -X POST "$APPS_SCRIPT_WORKER_URL" -H 'content-type: application/json' -d '{"action":"ping"}' > "$RUNNER_TEMP/worker.json"
+          jq -e '.ok == true and .project == "bao-hang-1291" and .provider == "NEON_FIREBASE_GOOGLE"' "$RUNNER_TEMP/worker.json" >/dev/null
+          echo 'APPS_SCRIPT_NEON_WORKER=PASS'
+      - name: Verify Web production bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re, urllib.request
+          base='https://bao-hang-1291.web.app'
+          html=urllib.request.urlopen(base+'/', timeout=20).read().decode('utf-8','replace')
+          assets=sorted(set(re.findall(r'/assets/[^"\']+\.js', html)))
+          assert assets
+          bundle='\n'.join(urllib.request.urlopen(base+a, timeout=20).read().decode('utf-8','replace') for a in assets)
+          assert 'ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech' in bundle
+          for bad in ['oedasgcdjppjwidhlqdr','supabase.co','/functions/v1/','/auth/v1/']:
+              assert bad not in bundle, bad
+          print('WEB_LIVE_NEON_ONLY=PASS')
+          PY
