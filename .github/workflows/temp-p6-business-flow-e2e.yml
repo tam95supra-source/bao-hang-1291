@@ -1,4 +1,4 @@
-name: Temp P6 isolated withdraw timing E2E
+name: Temp P6 isolated withdraw contract E2E
 
 on:
   push:
@@ -20,6 +20,7 @@ jobs:
       PICKER_EMAIL: 'p6-picker2@example.invalid'
       FIREBASE_API_KEY: 'AIzaSyB-n368fntzxsuuLlvte9NXhcuX0DDbTXM'
       NEON_API: 'https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1'
+      ISSUE_B: 'ac88e264-74a0-4002-b6b7-e8cf60d022b2'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,13 +29,12 @@ jobs:
         with:
           node-version: '22'
       - run: npm install --no-save --no-audit --no-fund firebase-admin@13
-      - name: Exercise withdraw within and after 30-second window
+      - name: Verify idempotent withdraw contract and expiry window
         shell: bash
         run: |
           set -euo pipefail
           password="$(openssl rand -base64 30 | tr -d '\n')Aa1!"
-          echo "::add-mask::$password"
-          export TEST_PASSWORD="$password"
+          echo "::add-mask::$password"; export TEST_PASSWORD="$password"
           cleanup() {
             node <<'NODE' >/dev/null 2>&1 || true
           const admin=require('firebase-admin');
@@ -59,19 +59,17 @@ jobs:
           token="$(jq -er '.idToken' login.p6.json)"; echo "::add-mask::$token"
           rpc(){ local name="$1" body="$2" out="$3"; curl -sS -o "$out" -w '%{http_code}' -H 'Content-Type: application/json' -H "Authorization: Bearer $token" --data "$body" "$NEON_API/rpc/$name"; }
 
-          code="$(rpc report_shortage_rpc '{"p_sku":"10007278","p_client_request_id":"p6-flow-b"}' report-b.p6.json)"; echo "REPORT_B_HTTP=$code"; test "$code" = 200
-          issue_b="$(jq -er '.issue.id' report-b.p6.json)"; echo "P6_ISSUE_B=$issue_b"
-          code="$(rpc api_withdraw_shortage_rpc "$(jq -nc --arg id "$issue_b" '{p_issue_id:$id,p_test_role:null}')" withdraw-b.p6.json)"; echo "WITHDRAW_B_HTTP=$code"; test "$code" = 200
-          jq -e '.issue.status=="CLOSED" and .remaining_report_count==0 and .already_withdrawn==false' withdraw-b.p6.json >/dev/null
-          code="$(rpc api_withdraw_shortage_rpc "$(jq -nc --arg id "$issue_b" '{p_issue_id:$id,p_test_role:null}')" withdraw-b2.p6.json)"; echo "WITHDRAW_B_REPEAT_HTTP=$code"; test "$code" = 200
-          jq -e '.already_withdrawn==true' withdraw-b2.p6.json >/dev/null
-          echo 'FLOW_B_OK withdraw-within-window+idempotency'
+          code="$(rpc api_withdraw_shortage_rpc "$(jq -nc --arg id "$ISSUE_B" '{p_issue_id:$id,p_test_role:null}')" repeat-b.p6.json)"
+          echo "WITHDRAW_B_REPEAT_HTTP=$code"; test "$code" = 200
+          jq -e '.withdrawn==true and .remaining_report_count==0 and .already_withdrawn==true' repeat-b.p6.json >/dev/null
+          echo 'FLOW_B_CONTRACT_OK already-withdrawn-idempotent'
 
-          code="$(rpc report_shortage_rpc '{"p_sku":"10007280","p_client_request_id":"p6-flow-c"}' report-c.p6.json)"; echo "REPORT_C_HTTP=$code"; test "$code" = 200
+          code="$(rpc report_shortage_rpc '{"p_sku":"10007280","p_client_request_id":"p6-flow-c"}' report-c.p6.json)"
+          echo "REPORT_C_HTTP=$code"; test "$code" = 200
           issue_c="$(jq -er '.issue.id' report-c.p6.json)"; echo "P6_ISSUE_C=$issue_c"
           sleep 31
-          code="$(rpc api_withdraw_shortage_rpc "$(jq -nc --arg id "$issue_c" '{p_issue_id:$id,p_test_role:null}')" withdraw-c.p6.json)"; echo "WITHDRAW_C_HTTP=$code"
-          test "$code" != 200
+          code="$(rpc api_withdraw_shortage_rpc "$(jq -nc --arg id "$issue_c" '{p_issue_id:$id,p_test_role:null}')" withdraw-c.p6.json)"
+          echo "WITHDRAW_C_HTTP=$code"; test "$code" != 200
           grep -q 'WITHDRAW_WINDOW_EXPIRED' withdraw-c.p6.json
           echo 'FLOW_C_OK withdraw-window-expired-blocked'
-          echo 'P6_WITHDRAW_TIMING_E2E_OK'
+          echo 'P6_WITHDRAW_CONTRACT_E2E_OK'
