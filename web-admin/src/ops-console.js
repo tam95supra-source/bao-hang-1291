@@ -501,7 +501,7 @@ async function renderServerView() {
           <div class="good"><b>Neon</b><span>Production là backend nghiệp vụ; DB/compute dùng guard Free và không có cơ chế tự nâng gói.</span></div>
           <div class="good"><b>Firebase</b><span>CI kiểm tra billingEnabled=false trước mỗi lần deploy Hosting.</span></div>
           <div class="good"><b>GitHub</b><span>Repo public dùng runner chuẩn; không dùng larger runner trả phí.</span></div>
-          <div class="good"><b>Supabase rollback</b><span>Chỉ giữ khả năng rollback; Web không có target mạng Supabase và cron nghiệp vụ cũ đã tắt.</span></div>
+          <div class="good"><b>Apps Script worker</b><span>Worker nền xử lý SLA, FCM/Firestore, Google Sheet, log và đồng bộ nhân sự từ Neon.</span></div>
           <div class="${dbPct >= 75 ? 'warn' : 'good'}"><b>Dung lượng DB</b><span>${dbPct.toFixed(1)}% giới hạn guard. Cảnh báo sớm từ 75%, ưu tiên cleanup trước 90%.</span></div>
         </div></article>
       </div>`;

@@ -1,4 +1,0 @@
-project_id = "bao-hang-1291"
-
-[functions.api]
-verify_jwt = false

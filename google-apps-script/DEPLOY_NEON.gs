@@ -4,10 +4,8 @@
  * No secret is stored in source. Secrets are bootstrapped into Script Properties.
  */
 const BH_PROJECT = 'bao-hang-1291';
-const BH_SOURCE_REF = 'oedasgcdjppjwidhlqdr';
 const BH_NEON_PROJECT = 'tiny-boat-19315489';
 const BH_NEON_BRANCH = 'br-broad-resonance-aznwrpea';
-const BH_BOOTSTRAP_URL = 'https://oedasgcdjppjwidhlqdr.supabase.co/functions/v1/migration-apps-script-bootstrap';
 const BH_STAFF_SHEET_ID = '1FRROqCp1lmkuHc3lc4UBpVI5_ZrtiPI1thlEymv458E';
 const BH_STAFF_SHEET_NAME = 'DANH MỤC NHÂN SỰ';
 const BH_PROTECTED_ADMIN_CODE = '6281280';
@@ -34,40 +32,18 @@ function setupBaoHang1291() {
 
 function bootstrapNeonWorker() {
   const props = PropertiesService.getScriptProperties();
-  const secret = props.getProperty('WEBHOOK_SECRET') || '';
-  if (secret.length < 20) throw new Error('WEBHOOK_SECRET chưa được cấu hình');
-  const response = fetchJson_(BH_BOOTSTRAP_URL, {
-    method: 'post',
-    contentType: 'application/json',
-    payload: JSON.stringify({
-      project: BH_PROJECT,
-      supabase_ref: BH_SOURCE_REF,
-      neon_project: BH_NEON_PROJECT,
-      neon_branch: BH_NEON_BRANCH,
-      webhook_secret: secret
-    }),
-    muteHttpExceptions: true
+  const required = ['WEBHOOK_SECRET','FIREBASE_SERVICE_ACCOUNT','STAFF_DEFAULT_PASSWORD','NEON_DATA_API','FIREBASE_WEB_API_KEY','FIREBASE_PROJECT_ID','WORKER_ADMIN_UID'];
+  required.forEach(function(key) {
+    if (!String(props.getProperty(key) || '')) throw new Error(key + ' chưa được cấu hình');
   });
-  if (!response.ok) throw new Error('Bootstrap thất bại: ' + String(response.error || 'UNKNOWN'));
-  if (!response.scope || response.scope.project !== BH_PROJECT || response.scope.supabase_ref !== BH_SOURCE_REF || response.scope.neon_project !== BH_NEON_PROJECT || response.scope.neon_branch !== BH_NEON_BRANCH) {
-    throw new Error('BOOTSTRAP_SCOPE_MISMATCH');
-  }
-  props.setProperties({
-    FIREBASE_SERVICE_ACCOUNT: String(response.firebase_service_account || ''),
-    STAFF_DEFAULT_PASSWORD: String(response.staff_default_password || ''),
-    NEON_DATA_API: String(response.neon_data_api || ''),
-    FIREBASE_WEB_API_KEY: String(response.firebase_web_api_key || ''),
-    FIREBASE_PROJECT_ID: String(response.firebase_project_id || ''),
-    WORKER_ADMIN_UID: String(response.worker_admin_uid || ''),
-    NEON_PROJECT_ID: BH_NEON_PROJECT,
-    NEON_BRANCH_ID: BH_NEON_BRANCH,
-    BOOTSTRAP_VERSION: String(response.bootstrap_version || 1),
-    BOOTSTRAP_AT: new Date().toISOString()
-  }, false);
+  if (String(props.getProperty('FIREBASE_PROJECT_ID')) !== BH_PROJECT) throw new Error('FIREBASE_SCOPE_MISMATCH');
+  const neonApi = String(props.getProperty('NEON_DATA_API') || '');
+  if (neonApi.indexOf('ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1') < 0) throw new Error('NEON_ENDPOINT_SCOPE_MISMATCH');
+  props.setProperties({NEON_PROJECT_ID:BH_NEON_PROJECT,NEON_BRANCH_ID:BH_NEON_BRANCH,BOOTSTRAP_VERSION:'NEON_ONLY_V1',BOOTSTRAP_AT:new Date().toISOString()}, false);
   assertScope_();
   installWorkerTriggers_();
   setupBaoHang1291();
-  return {ok:true, project:BH_PROJECT, neon_project:BH_NEON_PROJECT, neon_branch:BH_NEON_BRANCH};
+  return {ok:true,project:BH_PROJECT,neon_project:BH_NEON_PROJECT,neon_branch:BH_NEON_BRANCH};
 }
 
 function doPost(e) {

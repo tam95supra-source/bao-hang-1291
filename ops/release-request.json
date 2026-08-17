@@ -4,5 +4,5 @@
   "versionName": "1.6.5",
   "versionCode": 14,
   "mandatory": true,
-  "releaseNotes": "Stable 1.6.5: hoàn tất chuyển runtime Báo hàng 1291 sang Neon production + Firebase Auth/FCM/Firestore và Apps Script worker; Supabase chuyển sang rollback-only, giữ nguyên nghiệp vụ, production signing và OTA."
+  "releaseNotes": "Stable 1.6.5: runtime production Báo hàng 1291 sử dụng Neon production + Firebase Auth/FCM/Firestore + Apps Script worker, giữ nguyên nghiệp vụ, production signing và OTA."
 }

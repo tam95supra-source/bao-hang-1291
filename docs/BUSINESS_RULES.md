@@ -56,7 +56,7 @@ và `SKIP_ALLOWED → AVAILABLE` nếu sau đó tìm thấy/châm bù.
 ## Notification, Realtime và ACK
 
 - Database là authority. FCM/Realtime chỉ báo delta; client phải đối chiếu `issue_version/status` trước khi coi notification là trạng thái hiện hành.
-- Foreground ưu tiên private Realtime Broadcast; polling chỉ fallback.
+- Foreground ưu tiên Firestore realtime delta; polling chỉ fallback.
 - Background/urgent dùng FCM high priority có TTL/collapse phù hợp.
 - FCM server accept không đồng nghĩa thiết bị đã nhận; theo dõi riêng `fcm_accepted_at`, `client_received_at`, `displayed_at`, `acknowledged_at`.
 - `AVAILABLE / SKIP_ALLOWED` critical phải ACK theo đúng target user + notification event + issue version.
@@ -76,7 +76,7 @@ và `SKIP_ALLOWED → AVAILABLE` nếu sau đó tìm thấy/châm bù.
 
 Đường mục tiêu:
 
-`Website/Cron → Supabase Edge Function → Supra API → staging → atomic finalize → inventory_current`
+`Website/Apps Script worker → Neon RPC/Data API → nguồn inventory đã được xác minh → staging → atomic finalize → inventory_current`
 
 Không phụ thuộc EXE/Excel/laptop chạy nền cho đường thường ngày. XLSX chỉ là recovery fallback có kiểm soát và phải dùng cùng staging/finalize contract.
 
@@ -103,7 +103,7 @@ Không phụ thuộc EXE/Excel/laptop chạy nền cho đường thường ngày
 
 - Mutation chỉ online; không dùng browser storage làm durable outbox trên thiết bị dùng chung.
 - Tách tab/action theo role; server vẫn từ chối API vượt quyền dù client gọi thủ công.
-- Private Realtime Broadcast khi tab visible; dừng khi tab hidden; polling 30 giây chỉ fallback.
+- Firestore realtime listener khi tab visible; dừng khi tab hidden; polling 30 giây chỉ fallback.
 - ExcelJS lazy-load riêng ở import.
 - Không để service-role key, signing key, Supra credential hay stack trace nhạy cảm vào static bundle.
 

@@ -6,7 +6,7 @@ import vn.pickpack1291.baohang.diagnostics.DiagnosticsLogger
 /**
  * Lightweight foreground realtime invalidation client.
  *
- * Android no longer maintains a Supabase WebSocket. Firebase Cloud Messaging
+ * Android uses no database WebSocket. Firebase Cloud Messaging
  * delivers small REALTIME_DELTA hints, and this client fans them into the same
  * callbacks used by the existing UI. Database state remains authoritative and
  * every callback refetches canonical state from Neon.
