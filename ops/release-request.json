@@ -1,8 +1,8 @@
 {
   "action": "publish",
   "channel": "beta",
-  "versionName": "1.6.4",
-  "versionCode": 12,
-  "mandatory": false,
-  "releaseNotes": "Beta 1.6.4: bỏ bước Chờ xử lý/Nhận xử lý, gộp toàn bộ SKU active vào Đang xử lý và vẫn ghi nhận chính xác người bấm Có hàng/Cho SKIP; App Người báo hàng còn 4 nhóm Đang xử lý, Đã có hàng, Đã bỏ qua, Picker thu hồi SKU, đưa nhóm xuống đáy, bỏ tiêu đề/count thừa, tên SKU và tên hàng in đậm, thêm ghi chú lịch sử trong ngày; App Picker căn trái gợi ý, đưa lịch sử/gợi ý lên trên và vùng nhập SKU + Báo thiếu xuống đáy; thanh App chỉ hiện họ tên + quyền, thêm Log cạnh Thoát và bỏ nút gửi log trong nội dung; cập nhật copyright App/Web thành Copyright 2026 - SUPRA DC HƯNG YÊN - tamnv2 - Chuyên viên Pick Pack 1291."
+  "versionName": "1.6.5",
+  "versionCode": 13,
+  "mandatory": true,
+  "releaseNotes": "Beta 1.6.5: chuyển runtime Báo hàng 1291 sang Neon production + Firebase Auth/FCM/Firestore và Apps Script worker; giữ nguyên luồng nghiệp vụ, signing production và OTA."
 }
