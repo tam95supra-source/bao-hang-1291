@@ -1,4 +1,4 @@
-# Migration window reopened only for this final authoritative sync.
+# Migration window reopened only for this final authoritative sync. Readback required for PostgREST upsert verification.
 name: Temp absolute final Supabase to Neon delta
 
 on:
