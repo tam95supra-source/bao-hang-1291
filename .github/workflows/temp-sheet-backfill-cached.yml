@@ -1,0 +1,39 @@
+name: Temp cached-RPC canonical Sheet backfill
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/temp-sheet-backfill-cached.yml']
+permissions:
+  contents: read
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Authenticate and backfill
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
+          work="$RUNNER_TEMP/sheet-cached"; mkdir -p "$work"; umask 077
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | jq -er '.private_key' > "$work/key.pem"
+          email="$(printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | jq -er '.client_email')"
+          test "$(printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | jq -er '.project_id')" = 'bao-hang-1291'
+          now="$(date +%s)"; exp="$((now+3600))"
+          b64(){ openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+          sign(){ local payload="$1" tag="$2" h p u sig; h="$(printf '%s' '{"alg":"RS256","typ":"JWT"}'|b64)"; p="$(printf '%s' "$payload"|b64)"; u="$h.$p"; printf '%s' "$u">"$work/$tag.u"; openssl dgst -sha256 -sign "$work/key.pem" -out "$work/$tag.s" "$work/$tag.u"; sig="$(cat "$work/$tag.s"|b64)"; printf '%s' "$u.$sig"; }
+          gp="$(jq -cn --arg iss "$email" --arg scope 'https://www.googleapis.com/auth/spreadsheets' --arg aud 'https://oauth2.googleapis.com/token' --argjson iat "$now" --argjson exp "$exp" '{iss:$iss,scope:$scope,aud:$aud,iat:$iat,exp:$exp}')"
+          gj="$(sign "$gp" google)"
+          G="$(curl -fsS -X POST 'https://oauth2.googleapis.com/token' -H 'Content-Type: application/x-www-form-urlencoded' --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer' --data-urlencode "assertion=$gj" | jq -er '.access_token')"
+          echo "::add-mask::$G"
+          fp="$(jq -cn --arg iss "$email" --arg sub "$email" --arg aud 'https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit' --arg uid '44fae0a2-09eb-4226-8412-0f1a1f5d7ef8' --argjson iat "$now" --argjson exp "$exp" '{iss:$iss,sub:$sub,aud:$aud,iat:$iat,exp:$exp,uid:$uid,claims:{role:"authenticated",app_role:"ADMIN",employee_code:"6281280"}}')"
+          fj="$(sign "$fp" firebase)"
+          F="$(curl -fsS -X POST 'https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=AIzaSyB-n368fntzxsuuLlvte9NXhcuX0DDbTXM' -H 'Content-Type: application/json' --data "$(jq -cn --arg token "$fj" '{token:$token,returnSecureToken:true}')" | jq -er '.idToken')"
+          echo "::add-mask::$F"
+          GOOGLE_ACCESS_TOKEN="$G" FIREBASE_ID_TOKEN="$F" python3 .ops/temp_sheet_backfill.py
+      - name: Cleanup
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/sheet-cached"
