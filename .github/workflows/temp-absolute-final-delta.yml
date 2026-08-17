@@ -1,4 +1,4 @@
-# Migration window reopened only for this final authoritative sync. Readback required for PostgREST upsert verification.
+# Final authoritative sync after reconciling Neon-only zero-effect cleanup audit row.
 name: Temp absolute final Supabase to Neon delta
 
 on:
