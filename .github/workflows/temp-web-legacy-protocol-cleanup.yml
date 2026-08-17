@@ -1,0 +1,63 @@
+name: Temp web legacy protocol cleanup
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/temp-web-legacy-protocol-cleanup.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Replace legacy protocol-shaped internal routes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          for p in Path('web-admin/src').glob('*.js'):
+              s = p.read_text()
+              s = s.replace('/auth/v1/token', '/auth/token')
+              s = s.replace('/auth/v1/logout', '/auth/logout')
+              s = s.replace('/rest/v1/', '/data/')
+              s = s.replace("'/rest/v1'.length", "'/data'.length")
+              s = s.replace('/functions/v1/', '/api/')
+              s = s.replace(r'^\\/functions\\/v1\\/', r'^\\/api\\/')
+              s = s.replace('compatibilityFetch', 'backendFetchAdapter')
+              s = s.replace('ChannelShim', 'BackendChannel')
+              s = s.replace('MIGRATION_ACTION_UNSUPPORTED', 'BACKEND_ACTION_UNSUPPORTED')
+              p.write_text(s)
+          PY
+          ! grep -RniE '/auth/v1|/rest/v1|/functions/v1|MIGRATION_ACTION_UNSUPPORTED|compatibilityFetch|ChannelShim' web-admin/src
+          ! grep -RniE 'supabase\.co|oedasgcdjppjwidhlqdr|ap-northeast-2|@supabase/supabase-js|supabase-shim|compat\.bao-hang-1291\.invalid' web-admin --exclude-dir=node_modules
+          grep -F "url.pathname === '/auth/token'" web-admin/src/backend-runtime.js >/dev/null
+          grep -F "url.pathname.startsWith('/data/')" web-admin/src/backend-runtime.js >/dev/null
+          grep -F "^\\/api\\/" web-admin/src/backend-runtime.js >/dev/null
+          grep -F "const NEON_API = 'https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1'" web-admin/src/backend-runtime.js >/dev/null
+          git diff --check
+          cd web-admin
+          npm ci --no-audit --no-fund
+          npm run build
+          ! grep -RniE '/auth/v1|/rest/v1|/functions/v1|supabase\.co|oedasgcdjppjwidhlqdr|ap-northeast-2|compat\.bao-hang-1291\.invalid' dist
+          cd ..
+      - name: Commit verified protocol cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add web-admin/src
+          git commit -m 'refactor(web): remove legacy provider protocol bridge shapes'
+          git pull --rebase origin main
+          git push origin HEAD:main
