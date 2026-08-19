@@ -1,0 +1,62 @@
+name: Apply staff source bridge route
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'ops/apply-staff-source-bridge.request'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-bh-staff-source-bridge
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Guard and patch doPost
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
+          test -f google-apps-script/STAFF_SOURCE_BRIDGE_RECEIVER.gs
+          grep -q "SOURCE_DRIVEN_DELTA_V1" google-apps-script/STAFF_SOURCE_BRIDGE_RECEIVER.gs
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('google-apps-script/DEPLOY_NEON.gs')
+          s=p.read_text()
+          assert "const BH_PROJECT = 'bao-hang-1291';" in s
+          assert "const BH_NEON_PROJECT = 'tiny-boat-19315489';" in s
+          route="    if (action === 'staff-source-ping' || action === 'staff-source-structure-ping') return json_(staffSourceBridgeReceive_(body));"
+          if route not in s:
+              needle="    if (action === 'ping') return json_({ok:true,project:BH_PROJECT,provider:'NEON_FIREBASE_GOOGLE',staff_sheet_id:BH_STAFF_SHEET_ID,staff_sheet_name:BH_STAFF_SHEET_NAME});"
+              assert s.count(needle)==1, 'PING_ROUTE_ANCHOR_MISMATCH'
+              s=s.replace(needle, needle+'\n'+route)
+              p.write_text(s)
+          assert s.count(route)==1, 'BRIDGE_ROUTE_COUNT_MISMATCH'
+          PY
+          cat google-apps-script/DEPLOY_NEON.gs google-apps-script/STAFF_SOURCE_BRIDGE_RECEIVER.gs > /tmp/bh-gas-bundle.js
+          node --check /tmp/bh-gas-bundle.js
+          grep -q "staff-source-structure-ping.*staffSourceBridgeReceive_" google-apps-script/DEPLOY_NEON.gs
+          echo 'STAFF_SOURCE_BRIDGE_ROUTE=PASS'
+      - name: Commit canonical source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add google-apps-script/DEPLOY_NEON.gs
+          if git diff --cached --quiet; then
+            echo 'Route already canonical'
+            exit 0
+          fi
+          git commit -m 'feat(gas): route source-driven staff pings'
+          git pull --rebase origin main
+          git push origin HEAD:main
