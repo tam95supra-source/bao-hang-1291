@@ -1,4 +1,4 @@
-name: Temp force verified web deploy
+name: Temp identify current Bao Hang Apps Script
 on:
   push:
     branches: [main]
@@ -6,76 +6,28 @@ on:
 permissions:
   contents: write
 jobs:
-  deploy:
+  identify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     env:
-      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
       GOOGLE_SHEET_WEBHOOK_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v6
         with: { fetch-depth: 0 }
-      - name: Scope and zero-cost guard
+      - name: Identify current deployment and verify ping
         shell: bash
         run: |
           set -euo pipefail
-          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
-          test -n "${FIREBASE_SERVICE_ACCOUNT:-}"
           test -n "${GOOGLE_SHEET_WEBHOOK_URL:-}"
           node <<'NODE'
-          const crypto=require('crypto');
-          const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');
-          if(sa.project_id!=='bao-hang-1291'||!sa.client_email||!sa.private_key) throw new Error('Firebase service account invalid');
-          const enc=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');
-          (async()=>{const now=Math.floor(Date.now()/1000),h=enc({alg:'RS256',typ:'JWT'}),p=enc({iss:sa.client_email,scope:'https://www.googleapis.com/auth/cloud-platform',aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+900}),u=`${h}.${p}`,sig=crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url'); const tr=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:`${u}.${sig}`})}); if(!tr.ok) throw new Error('OAuth '+tr.status); const at=(await tr.json()).access_token; const br=await fetch('https://cloudbilling.googleapis.com/v1/projects/bao-hang-1291/billingInfo',{headers:{Authorization:`Bearer ${at}`}}); if(!br.ok) throw new Error('Billing '+br.status); const b=await br.json(); if(b.billingEnabled===true) throw new Error('COST_GUARD_STOP'); console.log('COST_GUARD=PASS');})().catch(e=>{console.error(e.message);process.exit(3)});
+          const fs=require('fs');
+          const u=String(process.env.GOOGLE_SHEET_WEBHOOK_URL||'').trim();
+          const m=u.match(/\/macros\/s\/([^/]+)\/exec/);if(!m)throw new Error('WEBHOOK_URL_FORMAT');
+          (async()=>{const r=await fetch(u,{method:'POST',headers:{'content-type':'text/plain;charset=UTF-8'},body:JSON.stringify({action:'ping'})});const t=await r.text();let j={};try{j=JSON.parse(t)}catch{};if(!r.ok||j.ok!==true||j.project!=='bao-hang-1291'||j.provider!=='NEON_FIREBASE_GOOGLE')throw new Error('PING_SCOPE_FAIL');fs.mkdirSync('ops',{recursive:true});fs.writeFileSync('ops/current-apps-script-deployment.txt',`deployment_id=${m[1]}\nping=PASS\nproject=bao-hang-1291\nprovider=NEON_FIREBASE_GOOGLE\n`);})().catch(e=>{console.error(e.message);process.exit(1)});
           NODE
-      - uses: actions/setup-node@v7
-        with: { node-version: '22', package-manager-cache: false }
-      - name: Build current Web Admin
-        shell: bash
-        env:
-          APPS_SCRIPT_WORKER_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
-        run: |
-          set -euo pipefail
-          mkdir -p web-admin/public
-          cp docs/templates/MAU_NHAN_SU_BAO_HANG_1291.xlsx web-admin/public/MAU_NHAN_SU_BAO_HANG_1291.xlsx
-          npm --prefix web-admin install --ignore-scripts --no-audit --no-fund --no-package-lock
-          npm --prefix web-admin run build
-          grep -R -F 'text/plain;charset=UTF-8' web-admin/dist >/dev/null
-          grep -R -F 'initial_password' web-admin/dist >/dev/null
-          grep -R -F 'script.google.com/macros/s/' web-admin/dist >/dev/null
-      - name: Deploy Firebase Hosting
+          cat ops/current-apps-script-deployment.txt
+      - name: Commit sanitized result
         shell: bash
         run: |
           set -euo pipefail
-          umask 077
-          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-sa.json"
-          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/firebase-sa.json"
-          npx --yes firebase-tools@14.17.0 deploy --only hosting --project bao-hang-1291 --non-interactive
-      - name: Verify live bundle
-        shell: bash
-        run: |
-          set -euo pipefail
-          PASS=false
-          for i in $(seq 1 15); do
-            curl -fsSL https://bao-hang-1291.web.app/ -o "$RUNNER_TEMP/index.html" || true
-            python3 - <<'PY' > "$RUNNER_TEMP/assets.txt"
-          import os,re
-          p=os.environ['RUNNER_TEMP']+'/index.html'
-          s=open(p).read() if os.path.exists(p) else ''
-          print('\n'.join(sorted(set(re.findall(r'/assets/[^"\x27]+\.js',s)))))
-          PY
-            : > "$RUNNER_TEMP/bundle.js"
-            while IFS= read -r a; do [ -n "$a" ] && curl -fsSL "https://bao-hang-1291.web.app$a" >> "$RUNNER_TEMP/bundle.js" || true; done < "$RUNNER_TEMP/assets.txt"
-            if grep -F 'text/plain;charset=UTF-8' "$RUNNER_TEMP/bundle.js" >/dev/null && grep -F 'initial_password' "$RUNNER_TEMP/bundle.js" >/dev/null; then PASS=true; break; fi
-            sleep 3
-          done
-          test "$PASS" = true
-          mkdir -p ops
-          printf 'web_deploy=PASS\nweb_fix_live=PASS\nrun_id=%s\n' "$GITHUB_RUN_ID" > ops/last-force-web-deploy.txt
-      - name: Commit proof
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add ops/last-force-web-deploy.txt; git diff --cached --quiet || git commit -m 'chore: record verified web deployment'; git pull --rebase origin main; git push origin HEAD:main
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git add ops/current-apps-script-deployment.txt;git diff --cached --quiet || git commit -m 'chore(temp): record current Bao Hang Apps Script deployment';git pull --rebase origin main;git push origin HEAD:main
