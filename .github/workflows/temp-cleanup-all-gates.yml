@@ -1,0 +1,34 @@
+name: Temp cleanup all diagnostic gates
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/cleanup-all-temp-gates.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Remove all temporary gates and intermediate failed proofs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          shopt -s nullglob
+          files=(.github/workflows/temp-*.yml ops/*.trigger ops/temp-* web-admin/.deploy-trigger-*)
+          for f in "${files[@]}"; do [ -e "$f" ] && git rm -f "$f"; done
+          for f in ops/web-realtime-stable-live.txt ops/web-realtime-stable-live-v2.txt ops/web-live-fingerprint.txt; do [ -e "$f" ] && git rm -f "$f"; done
+          git status --short
+          git diff --cached --quiet || git commit -m 'chore: remove temporary diagnostic gates'
+          git pull --rebase origin main
+          git push origin HEAD:main
