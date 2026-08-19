@@ -11,10 +11,12 @@ jobs:
     timeout-minutes: 8
     env:
       FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      NEON_API: https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1
+      ADMIN_UID: 44fae0a2-09eb-4226-8412-0f1a1f5d7ef8
     steps:
       - uses: actions/checkout@v6
         with: { fetch-depth: 0 }
-      - name: Verify billing off and live bundle contains account v2
+      - name: Verify billing, live bundle and non-mutating Admin Event permission
         shell: bash
         run: |
           set -euo pipefail
@@ -22,16 +24,29 @@ jobs:
           node <<'NODE'
           const fs=require('fs'),crypto=require('crypto');
           const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');
-          if(sa.project_id!=='bao-hang-1291'||!sa.client_email||!sa.private_key)throw new Error('SA_SCOPE');
+          const cfg=JSON.parse(fs.readFileSync('app/google-services.json','utf8'));
+          const apiKey=cfg.client?.[0]?.api_key?.[0]?.current_key;
+          if(sa.project_id!=='bao-hang-1291'||!sa.client_email||!sa.private_key||!apiKey)throw new Error('SCOPE_CONFIG');
           const enc=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');
+          const signJwt=payload=>{const h=enc({alg:'RS256',typ:'JWT'}),p=enc(payload),u=h+'.'+p,s=crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url');return u+'.'+s};
           async function main(){
-            const now=Math.floor(Date.now()/1000),h=enc({alg:'RS256',typ:'JWT'}),p=enc({iss:sa.client_email,scope:'https://www.googleapis.com/auth/cloud-platform',aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+900}),u=h+'.'+p,s=crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url');
-            let r=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:u+'.'+s})});if(!r.ok)throw new Error('OAUTH_'+r.status);const token=(await r.json()).access_token;
+            const now=Math.floor(Date.now()/1000);
+            const assertion=signJwt({iss:sa.client_email,scope:'https://www.googleapis.com/auth/cloud-platform',aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+900});
+            let r=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion})});if(!r.ok)throw new Error('OAUTH_'+r.status);const token=(await r.json()).access_token;
             r=await fetch('https://cloudbilling.googleapis.com/v1/projects/bao-hang-1291/billingInfo',{headers:{Authorization:'Bearer '+token}});if(!r.ok)throw new Error('BILLING_'+r.status);const b=await r.json();if(b.billingEnabled===true)throw new Error('COST_GUARD_STOP');
+
             const ir=await fetch('https://bao-hang-1291.web.app/',{cache:'no-store'});if(!ir.ok)throw new Error('WEB_'+ir.status);const index=await ir.text();const srcs=[...index.matchAll(/<script[^>]+src=["']([^"']+)["']/g)].map(m=>m[1]);let bundle='';for(const src of srcs){const url=new URL(src,'https://bao-hang-1291.web.app/');const rr=await fetch(url,{cache:'no-store'});if(rr.ok)bundle+='\n'+await rr.text()}
             const account=bundle.includes('api_admin_create_profile_rpc');const staff=bundle.includes('DỮ LIỆU THEO NGÀY')&&bundle.includes('DANH SÁCH NHÂN SỰ');const legacy=bundle.includes('opsStaffSync');
-            fs.writeFileSync('ops/web-account-v2-live.txt',`billing=OFF\nweb_http=200\naccount_v2=${account?'PASS':'FAIL'}\nstaff_source_label=${staff?'PASS':'FAIL'}\nlegacy_staff_button=${legacy?'PRESENT':'ABSENT'}\n`);
-            if(!account||!staff||legacy)process.exitCode=2;
+
+            const custom=signJwt({iss:sa.client_email,sub:sa.client_email,aud:'https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit',iat:now,exp:now+900,uid:process.env.ADMIN_UID});
+            r=await fetch('https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key='+encodeURIComponent(apiKey),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:custom,returnSecureToken:true})});if(!r.ok)throw new Error('ADMIN_TOKEN_'+r.status);const adminToken=(await r.json()).idToken;if(!adminToken)throw new Error('ADMIN_TOKEN_MISSING');
+            const fakeId=crypto.randomUUID();
+            r=await fetch(process.env.NEON_API+'/rpc/api_admin_create_profile_rpc',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+adminToken},body:JSON.stringify({p_user_id:fakeId,p_employee_code:'10085',p_full_name:'Permission Probe',p_role:'INVENT',p_contractor:'',p_source_position:'',p_test_role:'ADMIN_INVENT'})});
+            const permissionText=await r.text();
+            const permission=!r.ok&&permissionText.includes('EMPLOYEE_CODE_EXISTS')&&!permissionText.includes('FORBIDDEN');
+
+            fs.writeFileSync('ops/web-account-v2-live.txt',`billing=OFF\nweb_http=200\naccount_v2=${account?'PASS':'FAIL'}\nstaff_source_label=${staff?'PASS':'FAIL'}\nlegacy_staff_button=${legacy?'PRESENT':'ABSENT'}\nadmin_event_invent_permission=${permission?'PASS':'FAIL'}\npermission_probe_mutation=NONE\n`);
+            if(!account||!staff||legacy||!permission)process.exitCode=2;
           }
           main().catch(e=>{fs.writeFileSync('ops/web-account-v2-live.txt','status=FAIL\nerror='+String(e.message).slice(0,200)+'\n');process.exitCode=3});
           NODE
@@ -40,6 +55,8 @@ jobs:
           grep -q '^account_v2=PASS$' ops/web-account-v2-live.txt
           grep -q '^staff_source_label=PASS$' ops/web-account-v2-live.txt
           grep -q '^legacy_staff_button=ABSENT$' ops/web-account-v2-live.txt
+          grep -q '^admin_event_invent_permission=PASS$' ops/web-account-v2-live.txt
+          grep -q '^permission_probe_mutation=NONE$' ops/web-account-v2-live.txt
       - name: Commit proof
         if: always()
         shell: bash
@@ -51,4 +68,4 @@ jobs:
           git diff --cached --quiet || git commit -m 'chore(web): record account v2 live proof'
           git pull --rebase origin main
           git push origin HEAD:main
-# rerun-after-deploy: 2
+# permission-probe: non-mutating
