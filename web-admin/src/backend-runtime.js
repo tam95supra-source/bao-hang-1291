@@ -181,7 +181,8 @@ async function worker(action, body, init) {
   const token = bearer(init) || realtimeToken
   return originalFetch(WORKER_URL, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    // text/plain keeps this a CORS-simple request. Apps Script parses the JSON body itself.
+    headers: { 'content-type': 'text/plain;charset=UTF-8' },
     body: JSON.stringify({ action, id_token: token, ...body }),
   })
 }
@@ -219,7 +220,7 @@ async function backendFetchAdapter(input, init = {}) {
         action = ({ board:'withdrawn-board', search:'picker-search-digits', my:'picker-my-issues', withdraw:'withdraw-shortage' })[action] || action
       }
       if (family === 'admin-ops') {
-        if (action === 'create-user') return worker('update-user', body, init)
+        if (action === 'create-user') return worker('update-user', { ...body, initial_password: body.initial_password || body.password || '' }, init)
         if (action === 'update-user') return worker('update-user', body, init)
         if (action === 'delete-user') return worker('user-disable', { user_id: body.id || body.user_id }, init)
       }

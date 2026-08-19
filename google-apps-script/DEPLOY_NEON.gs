@@ -8,8 +8,8 @@ const BH_NEON_PROJECT = 'tiny-boat-19315489';
 const BH_NEON_BRANCH = 'br-broad-resonance-aznwrpea';
 const BH_NEON_DATA_API = 'https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1';
 const BH_REPORT_SHEET_ID = '15_AJ8oB7cEeQjeM6Jb6dm0ki6NcqyxPRVRTAvQPHVM0';
-const BH_STAFF_SHEET_ID = '1FRROqCp1lmkuHc3lc4UBpVI5_ZrtiPI1thlEymv458E';
-const BH_STAFF_SHEET_NAME = 'DANH MỤC NHÂN SỰ';
+const BH_STAFF_SHEET_ID = '1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78';
+const BH_STAFF_SHEET_NAME = 'DANH SÁCH NHÂN SỰ';
 const BH_PROTECTED_ADMIN_CODE = '6281280';
 const BH_LOG_FOLDER = 'Báo hàng 1291 - Diagnostic Logs';
 const BH_EVENT_HEADERS = ['Mã sự kiện','Thời gian','Loại sự kiện','Ticket ID','SKU','Tên sản phẩm','Trạng thái','Số lượt báo','Người báo/Actor ID','Dữ liệu JSON'];
@@ -54,7 +54,7 @@ function doPost(e) {
     if (body.secret && Array.isArray(body.events)) return json_(sheetWebhook_(body));
     const action = String(body.action || '').trim();
     if (!action) return json_({ok:false,error:'ACTION_REQUIRED'});
-    if (action === 'ping') return json_({ok:true,project:BH_PROJECT,provider:'NEON_FIREBASE_GOOGLE'});
+    if (action === 'ping') return json_({ok:true,project:BH_PROJECT,provider:'NEON_FIREBASE_GOOGLE',staff_sheet_id:BH_STAFF_SHEET_ID,staff_sheet_name:BH_STAFF_SHEET_NAME});
     if (action === 'bootstrap-config') return json_(bootstrapConfig_(body));
     if (action === 'worker-kick') {
       requireUser_(String(body.id_token || ''), null);
@@ -424,7 +424,7 @@ function fetchFilteredStaff_() {
       rows.slice(1).forEach(function(row){
         const code=String(row[0]||'').trim(),name=String(row[1]||'').trim();
         if(!code||!name)return;
-        const contractor=String(row[2]||'').trim(),position=String(row[3]||'').trim();
+        const position=String(row[2]||'').trim(),contractor=String(row[3]||'').trim();
         byCode[code.toLowerCase()]={employee_code:code,full_name:name,contractor:contractor,source_position:position,role:staffRole_(position,code)};
       });
       const staff=Object.keys(byCode).sort().map(function(k){return byCode[k];});
