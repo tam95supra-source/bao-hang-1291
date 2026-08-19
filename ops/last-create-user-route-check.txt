@@ -1,0 +1,6 @@
+admin_token=PASS
+worker_http=200
+worker_json=PASS
+worker_error_class=INVALID_USER
+protected_route=PASS
+mutation=NONE_EXPECTED
