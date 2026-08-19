@@ -25,6 +25,7 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.time.Instant
 import java.util.UUID
 
 class ApiClient(
@@ -106,9 +107,10 @@ class ApiClient(
 
     suspend fun reportShortage(sku: String, clientRequestId: String): ReportResult {
         val json = invoke("report-shortage", JSONObject().put("sku", sku).put("client_request_id", clientRequestId))
-        kickWorkerBestEffort("report_shortage")
+        val issue = StockIssue.fromJson(json.getJSONObject("issue"))
+        emitIssueRealtimeBestEffort(issue, "report_shortage")
         return ReportResult(
-            StockIssue.fromJson(json.getJSONObject("issue")),
+            issue,
             json.optBoolean("already_reported", false),
             json.optString("message", "Đã ghi nhận báo thiếu")
         )
@@ -147,6 +149,7 @@ class ApiClient(
         val issue = StockIssue.fromJson(
             invoke("claim-issue", JSONObject().put("issue_id", issueId).put("client_request_id", UUID.randomUUID().toString())).getJSONObject("issue")
         )
+        emitIssueRealtimeBestEffort(issue, "claim_issue")
         kickWorkerBestEffort("claim_issue")
         return issue
     }
@@ -162,6 +165,7 @@ class ApiClient(
                     .put("client_request_id", UUID.randomUUID().toString())
             ).getJSONObject("issue")
         )
+        emitIssueRealtimeBestEffort(issue, "reassign_issue")
         kickWorkerBestEffort("reassign_issue")
         return issue
     }
@@ -176,6 +180,7 @@ class ApiClient(
                     .put("client_request_id", UUID.randomUUID().toString())
             ).getJSONObject("issue")
         )
+        emitIssueRealtimeBestEffort(issue, "update_issue")
         kickWorkerBestEffort("update_issue")
         return issue
     }
@@ -189,6 +194,7 @@ class ApiClient(
                     .put("reason", "Đã tìm thấy hàng sau khi cho phép bỏ qua")
             ).getJSONObject("issue")
         )
+        emitIssueRealtimeBestEffort(issue, "restore_skipped")
         kickWorkerBestEffort("restore_skipped")
         return issue
     }
@@ -428,8 +434,31 @@ class ApiClient(
         return result
     }
 
-    private fun kickWorkerBestEffort(reason: String) {
-        if (workerUrl.isBlank() || sessionStore.accessToken.isBlank()) return
+    private suspend fun emitIssueRealtimeBestEffort(issue: StockIssue, reason: String) = withContext(Dispatchers.IO) {
+        if (sessionStore.accessToken.isBlank()) return@withContext
+        runCatching {
+            refreshSessionIfNeeded()
+            val fields = JSONObject()
+                .put("event_type", JSONObject().put("stringValue", "issue_changed"))
+                .put("topic", JSONObject().put("stringValue", "issues"))
+                .put("entity_id", JSONObject().put("stringValue", issue.id))
+                .put("entity_version", JSONObject().put("integerValue", issue.issueVersion.toString()))
+                .put("source", JSONObject().put("stringValue", "android:$reason"))
+                .put("client_at", JSONObject().put("timestampValue", Instant.now().toString()))
+            requestJson(
+                "PATCH",
+                "https://firestore.googleapis.com/v1/projects/bao-hang-1291/databases/(default)/documents/realtime/issues",
+                JSONObject().put("fields", fields),
+                token = sessionStore.accessToken,
+                eventName = "firestore_issue_signal_$reason",
+                connectTimeout = 5_000,
+                readTimeout = 8_000
+            )
+        }.onFailure { diagnostics.warn("issue_realtime_signal_deferred", mapOf("reason" to reason, "error" to (it.message ?: it.javaClass.simpleName).take(240))) }
+    }
+
+    private suspend fun kickWorkerBestEffort(reason: String) = withContext(Dispatchers.IO) {
+        if (workerUrl.isBlank() || sessionStore.accessToken.isBlank()) return@withContext
         runCatching {
             val body = JSONObject()
                 .put("action", "worker-kick")

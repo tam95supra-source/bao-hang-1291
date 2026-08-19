@@ -8,7 +8,7 @@
 
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="64dp"
+        android:layout_height="76dp"
         android:background="@color/navy_900"
         android:gravity="center_vertical"
         android:orientation="horizontal"
@@ -59,27 +59,52 @@
                 android:textSize="11sp" />
         </LinearLayout>
 
-        <TextView
-            android:id="@+id/btnLog"
-            android:layout_width="46dp"
-            android:layout_height="44dp"
-            android:contentDescription="Gửi log"
+        <LinearLayout
+            android:layout_width="98dp"
+            android:layout_height="match_parent"
             android:gravity="center"
-            android:text="Log"
-            android:textColor="@color/white"
-            android:textSize="12sp"
-            android:textStyle="bold" />
+            android:orientation="vertical">
 
-        <TextView
-            android:id="@+id/btnLogout"
-            android:layout_width="52dp"
-            android:layout_height="44dp"
-            android:contentDescription="Đăng xuất"
-            android:gravity="center"
-            android:text="Thoát"
-            android:textColor="@color/white"
-            android:textSize="12sp"
-            android:textStyle="bold" />
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="42dp"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/btnLog"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:contentDescription="Gửi log"
+                    android:gravity="center"
+                    android:text="Log"
+                    android:textColor="@color/white"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/btnLogout"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:contentDescription="Đăng xuất"
+                    android:gravity="center"
+                    android:text="Thoát"
+                    android:textColor="@color/white"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tvAppVersion"
+                android:layout_width="match_parent"
+                android:layout_height="24dp"
+                android:contentDescription="Phiên bản ứng dụng; chạm để kiểm tra cập nhật"
+                android:gravity="center"
+                android:text="v0.0.0"
+                android:textColor="#C9DFEE"
+                android:textSize="10sp" />
+        </LinearLayout>
     </LinearLayout>
 
     <FrameLayout

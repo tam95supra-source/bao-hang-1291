@@ -7,6 +7,7 @@ import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
+import android.provider.Settings
 import android.text.Editable
 import android.text.InputFilter
 import android.text.InputType
@@ -119,6 +120,10 @@ class MainActivity : AppCompatActivity() {
         container = findViewById(R.id.contentContainer)
         findViewById<TextView>(R.id.btnBack).setOnClickListener { navigateBack() }
         findViewById<TextView>(R.id.btnLog).setOnClickListener { showDiagnosticsDialog() }
+        findViewById<TextView>(R.id.tvAppVersion).apply {
+            text = "v${BuildConfig.VERSION_NAME} • ${BuildConfig.OTA_CHANNEL.uppercase()}"
+            setOnClickListener { AppUpdater(this@MainActivity, app.diagnostics).check(showUpToDate = false) }
+        }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() { if (isRoleRoot()) finish() else renderForRole() }
         })
@@ -134,6 +139,7 @@ class MainActivity : AppCompatActivity() {
             runCatching { app.repository.refreshProfile() }
                 .onFailure { app.diagnostics.warn("profile_refresh_fallback", mapOf("error" to it.message.orEmpty())) }
             renderForRole()
+            ensureOverlayPermissionForPicker()
             checkPendingAlerts()
         }
         AppUpdater(this, app.diagnostics).check()
@@ -486,14 +492,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun showPicker() {
         val root = fixedPage(SCREEN_PICKER, "Báo thiếu hàng")
-        root.addView(text("Báo gần đây", 14, true).apply { setPadding(0, 0, 0, dp(4)) })
-        val historyScroll = ScrollView(this).apply { isFillViewport = true }
         val recent = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.BOTTOM
+            gravity = Gravity.TOP
         }
-        historyScroll.addView(recent, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        root.addView(historyScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
         val suggestionsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val selected = infoBox("Chưa chọn SKU")
@@ -512,7 +514,11 @@ class MainActivity : AppCompatActivity() {
         root.addView(selected)
         root.addView(text("Nhập hoặc quét mã SKU", 12, true).apply { setPadding(dp(2), dp(3), 0, dp(2)) })
         root.addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)))
-        root.addView(reportButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply { setMargins(0, dp(3), 0, 0) })
+        root.addView(reportButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply { setMargins(0, dp(3), 0, dp(8)) })
+        root.addView(text("SKU đã báo hôm nay • cũ → mới", 14, true).apply { setPadding(0, dp(4), 0, dp(4)) })
+        val historyScroll = ScrollView(this).apply { isFillViewport = true }
+        historyScroll.addView(recent, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        root.addView(historyScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
         fun clearSelection() {
             chosen = null
@@ -611,9 +617,9 @@ class MainActivity : AppCompatActivity() {
             runCatching { app.repository.loadMyIssues() }
                 .onSuccess { issues ->
                     target.removeAllViews()
-                    target.gravity = Gravity.BOTTOM
+                    target.gravity = Gravity.TOP
                     if (issues.isEmpty()) target.addView(infoBox("Chưa có báo thiếu."))
-                    val ordered = issues.sortedByDescending { issue ->
+                    val ordered = issues.sortedBy { issue ->
                         if (issue.status == IssueStatus.WITHDRAWN) issue.withdrawnAt.ifBlank { issue.reportedAt } else issue.reportedAt
                     }
                     ordered.take(50).forEach { issue ->
@@ -643,7 +649,6 @@ class MainActivity : AppCompatActivity() {
                         }
                         target.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(3), 0, dp(3)) })
                     }
-                    (target.parent as? ScrollView)?.post { (target.parent as? ScrollView)?.fullScroll(View.FOCUS_DOWN) }
                 }.onFailure { target.removeAllViews(); target.addView(infoBox("Không tải được lịch sử: ${it.message}")) }
         }
     }
@@ -884,8 +889,25 @@ class MainActivity : AppCompatActivity() {
                 .setPositiveButton("Xác nhận") { _, _ -> lifecycleScope.launch { app.repository.acknowledgeAlert(alert.eventId) } }
                 .create()
             dialog.setOnShowListener { lifecycleScope.launch { runCatching { app.repository.markAlertDisplayed(alert.eventId) } } }
-            if (!isFinishing && !isDestroyed) dialog.show()
+            if (!isFinishing && !isDestroyed) {
+                dialog.show()
+                dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            }
         }.onFailure { app.diagnostics.warn("pending_alert_check_failed", mapOf("error" to it.message.orEmpty())) }
+    }
+
+    private fun ensureOverlayPermissionForPicker() {
+        if (app.session.effectiveRole != UserRole.PICKER || Settings.canDrawOverlays(this)) return
+        AlertDialog.Builder(this)
+            .setTitle("Bật cảnh báo toàn màn hình")
+            .setMessage("Bật quyền “Hiển thị trên ứng dụng khác” một lần để cảnh báo ĐÃ CÓ HÀNG / CHO PHÉP SKIP phủ toàn màn hình khi ứng dụng đang ở nền.")
+            .setNegativeButton("Để sau", null)
+            .setPositiveButton("Mở cài đặt") { _, _ ->
+                runCatching {
+                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                }.onFailure { app.diagnostics.warn("overlay_settings_open_failed", mapOf("error" to it.message.orEmpty())) }
+            }
+            .show()
     }
 
     private fun syncSheet() {

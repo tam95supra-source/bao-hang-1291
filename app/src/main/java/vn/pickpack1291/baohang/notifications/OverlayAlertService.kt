@@ -101,9 +101,8 @@ class OverlayAlertService : Service() {
         } else {
             view.setOnClickListener { dismiss() }
         }
-        val height = (resources.displayMetrics.heightPixels * 0.40).toInt()
         val params = WindowManager.LayoutParams(
-            (resources.displayMetrics.widthPixels * 0.94).toInt(), height,
+            WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             } else WindowManager.LayoutParams.TYPE_PHONE,
