@@ -1,0 +1,97 @@
+from pathlib import Path
+
+p=Path('web-admin/src/backend-runtime.js')
+s=p.read_text()
+if 'const realtimeSnapshotMarkers = new Map()' not in s:
+    anchor="let realtimeToken = ''\n"
+    assert anchor in s
+    s=s.replace(anchor,anchor+"const realtimeSnapshotMarkers = new Map()\n",1)
+if 'function realtimeSnapshotMarker(event)' not in s:
+    anchor='class BackendChannel {'
+    assert anchor in s
+    helper=r'''function realtimeSnapshotMarker(event) {
+  const normalize = (value) => {
+    if (value && typeof value.toMillis === 'function') return value.toMillis()
+    if (Array.isArray(value)) return value.map(normalize)
+    if (value && typeof value === 'object') {
+      const out = {}
+      for (const key of Object.keys(value).sort()) out[key] = normalize(value[key])
+      return out
+    }
+    return value
+  }
+  try { return JSON.stringify(normalize(event || {})) }
+  catch { return String(event?.event_id || event?.entity_id || event?.updated_at || '') }
+}
+
+'''
+    s=s.replace(anchor,helper+anchor,1)
+old="""          const event = snapshot.data() || {}
+          this.handlers.forEach(({ filter, callback }) => {
+            if (!filter?.event || filter.event === event.event_type) callback({ payload: event })
+          })"""
+new="""          const event = snapshot.data() || {}
+          if (snapshot.metadata?.hasPendingWrites) return
+          const marker = realtimeSnapshotMarker(event)
+          const previous = realtimeSnapshotMarkers.get(topic)
+          realtimeSnapshotMarkers.set(topic, marker)
+          // Firestore emits the current document immediately after every subscribe.
+          // Treat the first snapshot as a baseline and suppress reconnect duplicates.
+          if (previous === undefined || previous === marker) return
+          this.handlers.forEach(({ filter, callback }) => {
+            if (!filter?.event || filter.event === event.event_type) callback({ payload: event })
+          })"""
+if old in s:
+    s=s.replace(old,new,1)
+elif 'previous === undefined || previous === marker' not in s:
+    raise SystemExit('BACKEND_SNAPSHOT_ANCHOR_NOT_FOUND')
+p.write_text(s)
+
+p=Path('web-admin/src/ops-console.js')
+s=p.read_text()
+if 'userSearch:' not in s:
+    anchor='  issueBoardAt: 0,\n};'
+    assert anchor in s
+    s=s.replace(anchor,"  issueBoardAt: 0,\n  userSearch: '',\n  userTableScrollTop: 0,\n};",1)
+fn="""async function renderUsersView() {
+  const content = $('#content');
+  if (!content || !isManager()) return;
+  content.dataset.opsRender = 'users';"""
+repl="""async function renderUsersView() {
+  const content = $('#content');
+  if (!content || !isManager()) return;
+  const existingSearch = $('#opsUserSearch');
+  if (existingSearch) ui.userSearch = existingSearch.value;
+  const existingUserTable = content.querySelector('.ops-users-panel .table-wrap');
+  if (existingUserTable) ui.userTableScrollTop = existingUserTable.scrollTop;
+  content.dataset.opsRender = 'users';"""
+if fn in s:
+    s=s.replace(fn,repl,1)
+elif "const existingSearch = $('#opsUserSearch')" not in s:
+    raise SystemExit('USERS_STATE_ANCHOR_NOT_FOUND')
+old='''<span><i class="dot ${auto ? 'good' : 'warn'}"></i>Tự đồng bộ nguồn: <b>mỗi ${interval} phút</b></span>'''
+new='''<span><i class="dot good"></i>Đồng bộ nguồn: <b>${auto ? `dự phòng mỗi ${interval} phút` : 'theo sự kiện'}</b></span>'''
+if old in s: s=s.replace(old,new,1)
+old='''<label class="ops-search">Tìm<input id="opsUserSearch" placeholder="Mã nhân viên hoặc họ tên"></label>'''
+new='''<label class="ops-search">Tìm<input id="opsUserSearch" placeholder="Mã nhân viên hoặc họ tên" value="${escapeHtml(ui.userSearch)}"></label>'''
+if old in s: s=s.replace(old,new,1)
+elif 'value="${escapeHtml(ui.userSearch)}"' not in s:
+    raise SystemExit('USER_SEARCH_HTML_ANCHOR_NOT_FOUND')
+old="""    draw();
+    $('#opsUserSearch').addEventListener('input', draw);"""
+new="""    draw();
+    const searchInput = $('#opsUserSearch');
+    if (searchInput) {
+      searchInput.value = ui.userSearch;
+      searchInput.addEventListener('input', () => { ui.userSearch = searchInput.value; draw(); });
+    }
+    const userTableWrap = content.querySelector('.ops-users-panel .table-wrap');
+    if (userTableWrap) {
+      userTableWrap.scrollTop = ui.userTableScrollTop;
+      userTableWrap.addEventListener('scroll', () => { ui.userTableScrollTop = userTableWrap.scrollTop; }, { passive: true });
+    }"""
+if old in s:
+    s=s.replace(old,new,1)
+elif 'userTableWrap.scrollTop = ui.userTableScrollTop' not in s:
+    raise SystemExit('USER_SEARCH_LISTENER_ANCHOR_NOT_FOUND')
+p.write_text(s)
