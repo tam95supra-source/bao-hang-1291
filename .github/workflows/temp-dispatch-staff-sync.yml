@@ -23,3 +23,4 @@ jobs:
             https://api.github.com/repos/tam95supra-source/bao-hang-1291/actions/workflows/staff-sync.yml/dispatches \
             -d '{"ref":"main"}'
           echo STAFF_SYNC_DISPATCH=PASS
+# trigger: run-now
