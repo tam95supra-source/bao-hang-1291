@@ -37,9 +37,10 @@ jobs:
           while read -r asset; do curl -fsSL --retry 4 --retry-all-errors "$BASE$asset" >> /tmp/all.js; echo >> /tmp/all.js; done < /tmp/assets.txt
           echo RECONNECT_MARKER > /tmp/stage
           grep -F 'hasPendingWrites' /tmp/all.js >/dev/null
-          echo EVENT_LABEL > /tmp/stage
-          grep -F 'theo sự kiện' /tmp/all.js >/dev/null
-          echo SEARCH_MARKER > /tmp/stage
+          echo SEARCH_STATE_MARKER > /tmp/stage
+          grep -F 'userTableScrollTop' /tmp/all.js >/dev/null
+          grep -F 'userSearch' /tmp/all.js >/dev/null
+          echo SEARCH_INPUT_MARKER > /tmp/stage
           grep -F 'Mã nhân viên hoặc họ tên' /tmp/all.js >/dev/null
           SHA=$(sha256sum /tmp/all.js | awk '{print $1}')
           python3 - "$SHA" <<'PY'
@@ -49,7 +50,7 @@ jobs:
             'stage':'COMPLETE',
             'hosting':'https://bao-hang-1291.web.app',
             'reconnect_dedupe_marker':'PASS',
-            'event_driven_label':'PASS',
+            'user_state_preservation':'PASS',
             'user_search_bundle':'PASS',
             'security_headers':'PASS',
             'bundle_sha256':sys.argv[1],
