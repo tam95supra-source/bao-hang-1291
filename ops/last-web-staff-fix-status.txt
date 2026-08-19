@@ -1,0 +1,3 @@
+web_source_fix=PASS
+staff_source_repo=PASS
+apps_script_deploy=MISSING_GOOGLE_APPS_SCRIPT_OAUTH_CAPABILITY
