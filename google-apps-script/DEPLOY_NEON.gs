@@ -55,6 +55,7 @@ function doPost(e) {
     const action = String(body.action || '').trim();
     if (!action) return json_({ok:false,error:'ACTION_REQUIRED'});
     if (action === 'ping') return json_({ok:true,project:BH_PROJECT,provider:'NEON_FIREBASE_GOOGLE',staff_sheet_id:BH_STAFF_SHEET_ID,staff_sheet_name:BH_STAFF_SHEET_NAME});
+    if (action === 'staff-source-ping' || action === 'staff-source-structure-ping') return json_(staffSourceBridgeReceive_(body));
     if (action === 'bootstrap-config') return json_(bootstrapConfig_(body));
     if (action === 'worker-kick') {
       requireUser_(String(body.id_token || ''), null);
