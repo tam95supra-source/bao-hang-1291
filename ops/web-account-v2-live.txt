@@ -3,3 +3,5 @@ web_http=200
 account_v2=PASS
 staff_source_label=PASS
 legacy_staff_button=ABSENT
+admin_event_invent_permission=FAIL
+permission_probe_mutation=NONE
