@@ -1,0 +1,6 @@
+status=FAILED
+created=0
+updated=0
+deactivated=0
+failed=1
+error=HTTP_400:WORKER_ADMIN_REQUIRED
