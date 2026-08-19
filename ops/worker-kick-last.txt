@@ -1,5 +1,5 @@
 status=PASS
 source=CLIENT_KICK
-realtime_count=2
-realtime_published=2
+realtime_count=1
+realtime_published=1
 realtime_failed=0
