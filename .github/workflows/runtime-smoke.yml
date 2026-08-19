@@ -1,0 +1,81 @@
+name: Runtime smoke — authenticated App to Web path
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/runtime-smoke.request'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bao-hang-runtime-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      FIREBASE_PROJECT: bao-hang-1291
+      ADMIN_UID: 44fae0a2-09eb-4226-8412-0f1a1f5d7ef8
+      NEON_API: https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Authenticated marker transaction and Web-board verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
+          node <<'NODE'
+          const fs=require('fs'),crypto=require('crypto');
+          const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');
+          if(sa.project_id!==process.env.FIREBASE_PROJECT)throw new Error('PROJECT_SCOPE_MISMATCH');
+          const g=JSON.parse(fs.readFileSync('app/google-services.json','utf8'));
+          const apiKey=g.client?.[0]?.api_key?.[0]?.current_key;if(!apiKey)throw new Error('FIREBASE_API_KEY_MISSING');
+          const enc=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');
+          const sign=payload=>{const h=enc({alg:'RS256',typ:'JWT'}),p=enc(payload),u=h+'.'+p,s=crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url');return u+'.'+s};
+          async function request(url,opt={}){const r=await fetch(url,opt),t=await r.text();let j={};try{j=t?JSON.parse(t):{}}catch{j={raw:t}};if(!r.ok)throw new Error('HTTP_'+r.status+':'+String(j?.error?.message||j?.error||j?.message||j?.raw||'').slice(0,250));return j}
+          async function idToken(uid){const now=Math.floor(Date.now()/1000),custom=sign({iss:sa.client_email,sub:sa.client_email,aud:'https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit',iat:now,exp:now+900,uid});const j=await request('https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key='+encodeURIComponent(apiKey),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:custom,returnSecureToken:true})});return j.idToken}
+          async function rpc(name,payload,token){return request(process.env.NEON_API+'/rpc/'+name,{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+token},body:JSON.stringify(payload||{})})}
+          (async()=>{
+            const admin=await idToken(process.env.ADMIN_UID);
+            const list=await rpc('api_list_users_rpc',{p_test_role:null},admin);
+            const users=Array.isArray(list?.users)?list.users:[];
+            const picker=users.find(u=>u.active===true&&u.role==='PICKER'&&u.source_kind==='GSHEET');
+            if(!picker?.id)throw new Error('ACTIVE_GSHEET_PICKER_NOT_FOUND');
+            const marker='__BH_SMOKE_'+String(process.env.GITHUB_RUN_ID||Date.now())+'__';
+            await rpc('api_import_skus_rpc',{p_items:[{sku:marker,product_name:'Báo hàng 1291 runtime smoke'}],p_test_role:null},admin);
+            const pickerToken=await idToken(String(picker.id));
+            const requestId=crypto.randomUUID();
+            const report=await rpc('report_shortage_rpc',{p_sku:marker,p_client_request_id:requestId},pickerToken);
+            const issue=report?.issue;if(!issue?.id||issue.sku!==marker)throw new Error('REPORT_RESPONSE_INVALID');
+            const board=await rpc('api_issue_board_rpc',{p_test_role:null},admin);
+            const rows=[...(board?.open||[]),...(board?.claimed||[]),...(board?.recent||[])];
+            if(!rows.some(row=>row.id===issue.id&&row.sku===marker))throw new Error('WEB_BOARD_MARKER_MISSING');
+            const proof={status:'PASS',marker_sku:marker,issue_id:String(issue.id),request_id:requestId,picker_code:String(picker.employee_code||''),report_message:String(report.message||''),board_visible:true};
+            fs.writeFileSync('ops/runtime-smoke-last.json',JSON.stringify(proof,null,2)+'\n');
+            console.log('status=PASS');console.log('marker_sku='+marker);console.log('issue_id='+issue.id);console.log('picker_code='+picker.employee_code);console.log('board_visible=true');
+          })().catch(e=>{fs.writeFileSync('ops/runtime-smoke-last.json',JSON.stringify({status:'FAIL',error:String(e.message).slice(0,800)},null,2)+'\n');console.error(e);process.exitCode=2});
+          NODE
+          grep -q '"status": "PASS"' ops/runtime-smoke-last.json
+
+      - name: Record sanitized proof
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s ops/runtime-smoke-last.json || printf '{"status":"FAIL","error":"no_proof"}\n' > ops/runtime-smoke-last.json
+          cat ops/runtime-smoke-last.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ops/runtime-smoke-last.json
+          git diff --cached --quiet || git commit -m 'chore(runtime): record authenticated smoke proof'
+          git pull --rebase origin main
+          git push origin HEAD:main
