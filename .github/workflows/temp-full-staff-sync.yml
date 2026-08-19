@@ -1,0 +1,86 @@
+name: Temp full staff sync 400
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/full-staff-sync.trigger'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bao-hang-full-staff-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      GOOGLE_SHEET_WEBHOOK_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
+      STAFF_SHEET_ID: 1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78
+      STAFF_SHEET_NAME: DANH SÁCH NHÂN SỰ
+      STAFF_CREATE_CONCURRENCY: 8
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Enforce scope and read exact full source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
+          test -n "${FIREBASE_SERVICE_ACCOUNT:-}"
+          case "$GOOGLE_SHEET_WEBHOOK_URL" in https://script.google.com/macros/s/*/exec) ;; *) exit 11;; esac
+          mkdir -p "$RUNNER_TEMP/staff"
+          URL=$(python3 - <<'PY'
+          import os,urllib.parse
+          base='https://docs.google.com/spreadsheets/d/'+os.environ['STAFF_SHEET_ID']+'/gviz/tq'
+          print(base+'?'+urllib.parse.urlencode({'tqx':'out:csv','sheet':os.environ['STAFF_SHEET_NAME'],'tq':'select A,B,D,E,F'}))
+          PY
+          )
+          curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 "$URL" -o "$RUNNER_TEMP/staff/source.csv"
+          python3 - <<'PY'
+          import csv,json,os,unicodedata
+          def norm(v):
+              v=unicodedata.normalize('NFD',str(v or '')).replace('Đ','D').replace('đ','d')
+              return ''.join(c for c in v if unicodedata.category(c)!='Mn').upper()
+          rows=list(csv.reader(open(os.environ['RUNNER_TEMP']+'/staff/source.csv',encoding='utf-8-sig',newline='')))
+          by={}
+          for r in rows[1:]:
+              if len(r)<5: continue
+              code,name,position,contractor,department=[str(x or '').strip() for x in r[:5]]
+              if not code or not name: continue
+              key=code.lower()
+              if key in by: raise SystemExit('DUPLICATE_EMPLOYEE_CODE:'+code)
+              p,d=norm(position),norm(department)
+              role='ADMIN_INVENT' if 'DIEU PHOI' in p else ('INVENT' if 'INVENT' in d or 'INVENT' in p else 'PICKER')
+              by[key]={'employee_code':code,'full_name':name,'contractor':contractor,'source_position':position,'department':department,'role':role}
+          staff=[by[k] for k in sorted(by)]
+          if not (350 <= len(staff) <= 500): raise SystemExit('FULL_SOURCE_COUNT_SUSPICIOUS:'+str(len(staff)))
+          json.dump({'staff':staff},open(os.environ['RUNNER_TEMP']+'/staff/source.json','w'),ensure_ascii=False)
+          print('SOURCE_COUNT='+str(len(staff)))
+          PY
+      - name: Reconcile Firebase Auth and Neon concurrently
+        shell: bash
+        env:
+          STAFF_SOURCE_JSON: ${{ runner.temp }}/staff/source.json
+        run: |
+          set -euo pipefail
+          node ops/full_staff_sync.mjs
+          grep -q '"status": "PASS"' ops/full-staff-sync-last.json
+      - name: Record sanitized proof
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s ops/full-staff-sync-last.json || printf '{"status":"FAIL","error_summary":"workflow_failed_before_proof"}\n' > ops/full-staff-sync-last.json
+          cat ops/full-staff-sync-last.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ops/full-staff-sync-last.json
+          git diff --cached --quiet || git commit -m 'chore(staff): record full source sync proof'
+          git pull --rebase origin main
+          git push origin HEAD:main
