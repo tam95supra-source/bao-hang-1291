@@ -153,7 +153,6 @@ function workerTick_(source) {
     const sheet = drainSheet_(token);
     const realtime = drainRealtime_(token);
     maybeCleanup_(token);
-    maybeStaffSync_(token);
     const schedule = neonRpc_('worker_schedule_rpc', {p_realtime_enabled:true}, token);
     scheduleAdaptiveTrigger_(schedule && schedule.next_at ? String(schedule.next_at) : '');
     return {ok:true,source:source,tick:tick,notifications:notifications,pushes:pushes,sheet:sheet,realtime:realtime,schedule:schedule};

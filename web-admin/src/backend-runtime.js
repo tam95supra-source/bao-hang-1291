@@ -30,6 +30,8 @@ async function firebaseRuntime() {
         signOut: authModule.signOut,
         doc: firestoreModule.doc,
         onSnapshot: firestoreModule.onSnapshot,
+        setDoc: firestoreModule.setDoc,
+        serverTimestamp: firestoreModule.serverTimestamp,
       }
     })
   }
@@ -38,6 +40,8 @@ async function firebaseRuntime() {
 
 let installed = false
 let realtimeToken = ''
+const ISSUE_SIGNAL_ACTIONS = new Set(['report-shortage', 'claim-issue', 'reassign-issue', 'update-issue', 'restore-skipped', 'withdraw-shortage'])
+const PICKER_ALERT_ACTIONS = new Set(['update-issue', 'restore-skipped'])
 const originalFetch = globalThis.fetch.bind(globalThis)
 
 function jsonResponse(value, status = 200) {
@@ -162,6 +166,20 @@ function mapRpc(action, body, init) {
   }
 }
 
+async function emitIssueRealtimeSignal(issue, source) {
+  if (!issue?.id) return
+  const { auth, firestore, doc, setDoc, serverTimestamp } = await firebaseRuntime()
+  if (!auth.currentUser) return
+  await setDoc(doc(firestore, 'realtime', 'issues'), {
+    event_type: 'issue_changed',
+    topic: 'issues',
+    entity_id: String(issue.id),
+    entity_version: Number(issue.issue_version || issue.issueVersion || 0),
+    source: String(source || 'web'),
+    client_at: serverTimestamp(),
+  })
+}
+
 async function neonRpc(action, body, init) {
   const mapped = mapRpc(action, body, init)
   if (!mapped) return null
@@ -173,6 +191,18 @@ async function neonRpc(action, body, init) {
     body: JSON.stringify(params),
   })
   const text = await response.text()
+  if (response.ok && ISSUE_SIGNAL_ACTIONS.has(action)) {
+    try {
+      const payload = text ? JSON.parse(text) : {}
+      const issue = payload?.issue || payload
+      await emitIssueRealtimeSignal(issue, `web:${action}`)
+    } catch (error) {
+      console.warn('issue realtime signal deferred', action, error?.message || error)
+    }
+    if (PICKER_ALERT_ACTIONS.has(action)) {
+      void worker('worker-kick', { reason: `web:${action}` }, init).catch(() => {})
+    }
+  }
   return new Response(text, { status: response.status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } })
 }
 

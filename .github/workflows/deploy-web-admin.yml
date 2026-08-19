@@ -6,6 +6,7 @@ on:
     paths:
       - 'web-admin/**'
       - 'firebase.json'
+      - 'firestore.rules'
       - 'docs/templates/MAU_NHAN_SU_BAO_HANG_1291.xlsx'
       - '.github/workflows/deploy-web-admin.yml'
   workflow_dispatch:
@@ -132,9 +133,9 @@ jobs:
           jq -e '.project_id == "bao-hang-1291" and .client_email and .private_key' "$SA_FILE" >/dev/null
           echo "GOOGLE_APPLICATION_CREDENTIALS=$SA_FILE" >> "$GITHUB_ENV"
 
-      - name: Deploy Firebase Hosting
+      - name: Deploy Firebase Hosting and Firestore rules
         shell: bash
-        run: npx --yes firebase-tools@14.17.0 deploy --only hosting --project bao-hang-1291 --non-interactive
+        run: npx --yes firebase-tools@14.17.0 deploy --only hosting,firestore:rules --project bao-hang-1291 --non-interactive
 
       - name: Verify live Web Admin
         shell: bash

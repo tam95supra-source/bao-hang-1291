@@ -1,0 +1,23 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    match /realtime/{topic} {
+      allow read: if signedIn();
+      allow write: if signedIn()
+        && topic == 'issues'
+        && request.resource.data.keys().hasOnly([
+          'event_type', 'topic', 'entity_id', 'entity_version', 'source', 'client_at'
+        ])
+        && request.resource.data.event_type == 'issue_changed'
+        && request.resource.data.topic == 'issues'
+        && request.resource.data.entity_id is string
+        && request.resource.data.entity_version is int
+        && request.resource.data.source is string
+        && request.resource.data.client_at is timestamp;
+    }
+  }
+}

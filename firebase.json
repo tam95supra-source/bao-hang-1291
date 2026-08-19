@@ -1,4 +1,5 @@
 {
+  "firestore": { "rules": "firestore.rules" },
   "hosting": {
     "site": "bao-hang-1291",
     "public": "web-admin/dist",
