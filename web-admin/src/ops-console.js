@@ -304,20 +304,20 @@ async function renderUsersView() {
   const content = $('#content');
   if (!content || !isManager()) return;
   content.dataset.opsRender = 'users';
-  content.innerHTML = `${pageHeading('Nhân sự & tài khoản', 'Google Sheet là nguồn chính; tài khoản tạo thêm được quản lý riêng và không ghi ngược vào nguồn.', `<button class="secondary" id="opsStaffSync">Đồng bộ nguồn ngay</button>`)}<div class="ops-loading">Đang tải nhân sự…</div>`;
+  content.innerHTML = `${pageHeading('Nhân sự & tài khoản', 'Google Sheet là nguồn chính; tài khoản tạo thêm được quản lý riêng và không ghi ngược vào nguồn.', `<span class="ops-source-label">DỮ LIỆU THEO NGÀY · DANH SÁCH NHÂN SỰ</span>`)}<div class="ops-loading">Đang tải nhân sự…</div>`;
   try {
     const [list, sync, service] = await Promise.all([webApi('list-users'), webApi('staff-sync-status'), webApi('service-metrics')]);
     if ($('#content') !== content || content.dataset.opsRender !== 'users') return;
     const users = list.users || [];
     const last = sync.runs?.[0];
-    const auto = Boolean(service.config?.staff_auto_sync_enabled);
-    const interval = Number(service.config?.staff_sync_interval_minutes || 60);
+    const auto = true;
+    const interval = 60;
     const manualCount = users.filter((u) => u.source_kind === 'MANUAL').length;
     const gsheetCount = users.filter((u) => u.source_kind === 'GSHEET').length;
-    content.innerHTML = `${pageHeading('Nhân sự & tài khoản', 'Google Sheet là nguồn chính; tài khoản tạo thêm được quản lý riêng và không ghi ngược vào nguồn.', `<button class="secondary" id="opsStaffSync">Đồng bộ nguồn ngay</button>`)}
+    content.innerHTML = `${pageHeading('Nhân sự & tài khoản', 'Google Sheet là nguồn chính; tài khoản tạo thêm được quản lý riêng và không ghi ngược vào nguồn.', `<span class="ops-source-label">DỮ LIỆU THEO NGÀY · DANH SÁCH NHÂN SỰ</span>`)}
       <section class="ops-status-strip">
-        <span><i class="dot ${last?.status === 'FAILED' ? 'warn' : 'good'}"></i>Nguồn Google Sheet: <b>${last ? `${last.status} · ${formatTime(last.finished_at)}` : 'chưa đồng bộ'}</b></span>
-        <span><i class="dot ${auto ? 'good' : 'warn'}"></i>Tự đồng bộ nguồn: <b>${auto ? `mỗi ${interval} phút` : 'đang tắt'}</b></span>
+        <span><i class="dot ${last?.status === 'FAILED' ? 'warn' : 'good'}"></i>DỮ LIỆU THEO NGÀY: <b>${last ? `${last.status} · ${formatTime(last.finished_at)}` : 'chưa đồng bộ'}</b></span>
+        <span><i class="dot ${auto ? 'good' : 'warn'}"></i>Tự đồng bộ nguồn: <b>mỗi ${interval} phút</b></span>
         <span><i class="dot good"></i>Thay đổi trong service: <b>realtime</b></span>
         <span>Google Sheet: <b>${gsheetCount}</b> · Tạo thêm: <b>${manualCount}</b></span>
       </section>
@@ -351,15 +351,6 @@ async function renderUsersView() {
     };
     draw();
     $('#opsUserSearch').addEventListener('input', draw);
-    $('#opsStaffSync').onclick = async () => {
-      const done = busy('Đang đồng bộ danh mục nhân sự…');
-      try {
-        const result = await webApi('staff-sync-now');
-        toast(`Đồng bộ ${result.status}: tạo ${result.created || 0}, cập nhật ${result.updated || 0}, ngừng ${result.deactivated || 0}.`);
-        await renderUsersView();
-      } catch (error) { toast(error.message, 'error'); }
-      finally { done(); }
-    };
     $('#opsCreateUser').addEventListener('submit', async (event) => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
