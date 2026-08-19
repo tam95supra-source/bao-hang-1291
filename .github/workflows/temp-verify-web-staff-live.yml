@@ -1,0 +1,51 @@
+name: Temp verify web and staff source live
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/temp-verify-web-staff-live.yml']
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      WORKER_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }
+      - name: Verify Firebase Hosting and Apps Script live
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/check" ops
+          WEB=FAIL
+          for i in $(seq 1 18); do
+            if curl -fsSL --retry 2 --retry-all-errors --retry-delay 1 https://bao-hang-1291.web.app/ -o "$RUNNER_TEMP/check/index.html"; then
+              python3 - <<'PY' > "$RUNNER_TEMP/check/assets.txt"
+          import re
+          s=open('/tmp/none','w') if False else open(__import__('os').environ['RUNNER_TEMP']+'/check/index.html').read()
+          for x in sorted(set(re.findall(r'/assets/[^"\x27]+\.js',s))): print(x)
+          PY
+              : > "$RUNNER_TEMP/check/bundle.js"
+              while IFS= read -r a; do curl -fsSL "https://bao-hang-1291.web.app$a" >> "$RUNNER_TEMP/check/bundle.js" || true; done < "$RUNNER_TEMP/check/assets.txt"
+              if grep -F 'text/plain;charset=UTF-8' "$RUNNER_TEMP/check/bundle.js" >/dev/null && grep -F 'initial_password' "$RUNNER_TEMP/check/bundle.js" >/dev/null; then WEB=PASS; break; fi
+            fi
+            sleep 4
+          done
+          GAS=FAIL
+          GAS_SOURCE=UNKNOWN
+          if [ -n "${WORKER_URL:-}" ]; then
+            if curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 -X POST "$WORKER_URL" -H 'content-type: text/plain;charset=UTF-8' -d '{"action":"ping"}' > "$RUNNER_TEMP/check/ping.json"; then
+              if jq -e '.ok==true and .project=="bao-hang-1291" and .provider=="NEON_FIREBASE_GOOGLE"' "$RUNNER_TEMP/check/ping.json" >/dev/null; then GAS=PASS; fi
+              if jq -e '.staff_sheet_id=="1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78" and .staff_sheet_name=="DANH SÁCH NHÂN SỰ"' "$RUNNER_TEMP/check/ping.json" >/dev/null 2>&1; then GAS_SOURCE=PASS; else GAS_SOURCE=OLD; fi
+            fi
+          fi
+          printf 'web_live=%s\napps_script_live=%s\nstaff_source_live=%s\n' "$WEB" "$GAS" "$GAS_SOURCE" > ops/last-web-staff-live-check.txt
+          cat ops/last-web-staff-live-check.txt
+      - name: Commit sanitized proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ops/last-web-staff-live-check.txt; git diff --cached --quiet || git commit -m 'chore: record live web and staff source check'; git pull --rebase origin main; git push origin HEAD:main
