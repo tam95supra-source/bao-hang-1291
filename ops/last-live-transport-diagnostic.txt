@@ -1,0 +1,7 @@
+web_http=200
+web_asset_count=1
+web_fix_markers=NO
+worker_secret_present=YES
+worker_http=200
+worker_json=NO
+worker_project_ok=NO
