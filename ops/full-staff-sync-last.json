@@ -1,0 +1,21 @@
+{
+  "status": "PASS",
+  "source_count": 400,
+  "total_profiles": 401,
+  "active_gsheet": 400,
+  "protected_admins": 1,
+  "created": 365,
+  "updated": 0,
+  "unchanged": 35,
+  "deactivated": 0,
+  "failed": 0,
+  "retries": 4,
+  "mismatch_count": 0,
+  "role_counts": {
+    "PICKER": 307,
+    "ADMIN_INVENT": 45,
+    "INVENT": 48,
+    "ADMIN": 1
+  },
+  "error_summary": ""
+}
