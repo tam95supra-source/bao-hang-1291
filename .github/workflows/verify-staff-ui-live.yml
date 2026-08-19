@@ -1,0 +1,56 @@
+name: Verify staff UI live
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/verify-staff-ui-live.trigger'
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Verify live Firebase Hosting bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE='https://bao-hang-1291.web.app'
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 "$BASE/" -o /tmp/index.html
+          curl -fsSI --retry 5 --retry-all-errors --retry-delay 2 "$BASE/" -o /tmp/headers.txt
+          grep -qi '^content-security-policy:' /tmp/headers.txt
+          grep -qi '^x-content-type-options: nosniff' /tmp/headers.txt
+          grep -oE '/assets/[^"'"'"' ]+\.js' /tmp/index.html | sort -u > /tmp/assets.txt
+          test -s /tmp/assets.txt
+          : > /tmp/all.js
+          while read -r asset; do curl -fsSL --retry 4 --retry-all-errors "$BASE$asset" >> /tmp/all.js; echo >> /tmp/all.js; done < /tmp/assets.txt
+          grep -F 'hasPendingWrites' /tmp/all.js >/dev/null
+          grep -F 'theo sự kiện' /tmp/all.js >/dev/null
+          grep -F 'Mã nhân viên hoặc họ tên' /tmp/all.js >/dev/null
+          SHA=$(sha256sum /tmp/all.js | awk '{print $1}')
+          python3 - "$SHA" <<'PY'
+          import datetime,json,sys
+          proof={
+            'status':'PASS',
+            'hosting':'https://bao-hang-1291.web.app',
+            'reconnect_dedupe_marker':'PASS',
+            'event_driven_label':'PASS',
+            'user_search_bundle':'PASS',
+            'security_headers':'PASS',
+            'bundle_sha256':sys.argv[1],
+            'verified_at':datetime.datetime.now(datetime.timezone.utc).isoformat()
+          }
+          open('ops/staff-ui-live-proof.json','w').write(json.dumps(proof,ensure_ascii=False,indent=2)+'\n')
+          PY
+      - name: Commit sanitized proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ops/staff-ui-live-proof.json
+          git commit -m 'chore(web): record staff UI live proof'
+          git pull --rebase origin main
+          git push origin HEAD:main
