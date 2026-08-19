@@ -37,9 +37,10 @@ jobs:
   if(d.indexOf('INVENT')>=0 || p.indexOf('INVENT')>=0)return 'INVENT';
   return 'PICKER';
 }"""
-          if old not in s:
+          if old in s:
+              s=s.replace(old,new,1)
+          elif "function staffRole_(position,department,code)" not in s:
               raise SystemExit('staffRole_ target not found')
-          s=s.replace(old,new,1)
           s=s.replace("if(caller.profile.role==='ADMIN_INVENT' && role!=='PICKER')throw new Error('FORBIDDEN');", "if(caller.profile.role==='ADMIN_INVENT' && ['INVENT','PICKER'].indexOf(role)<0)throw new Error('FORBIDDEN');", 1)
           s=s.replace("if(caller.profile.role==='ADMIN_INVENT'&&target.role!=='PICKER')throw new Error('FORBIDDEN');", "if(caller.profile.role==='ADMIN_INVENT'&&['INVENT','PICKER'].indexOf(String(target.role||''))<0)throw new Error('FORBIDDEN');", 1)
           required=[
