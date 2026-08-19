@@ -1,0 +1,9 @@
+billing=OFF
+web_http=200
+worker_transport=PASS
+password_mapping=FAIL
+staff_source_label=PASS
+legacy_staff_button=ABSENT
+experimental_create_route=PRESENT
+admin_invent_create_contract=PASS
+probe_mutation=NONE
