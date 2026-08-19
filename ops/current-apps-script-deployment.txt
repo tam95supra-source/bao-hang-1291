@@ -1,0 +1,4 @@
+deployment_id=AKfycbwb8Hcdg7tp0jqHLZU6kW5hkEclDC9d29DGvPuwcxvZbR9t9xnrWzaIYe8UZET-D_yI
+ping=PASS
+project=bao-hang-1291
+provider=NEON_FIREBASE_GOOGLE
