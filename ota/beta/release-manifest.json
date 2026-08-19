@@ -1,11 +1,11 @@
 {
   "channel": "beta",
-  "versionCode": 13,
-  "versionName": "1.6.5",
-  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.5/bao-hang-1291-beta-1.6.5.apk",
-  "sha256": "66c7adbca3b86ba3bf059b02803704d270e290967313f6f93581fc16351a8bd6",
+  "versionCode": 15,
+  "versionName": "1.6.6",
+  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.6/bao-hang-1291-beta-1.6.6.apk",
+  "sha256": "b25414cd1d7ed4ddea69c264531c00d1b3ea126e023d98b30d97c7da4c363655",
   "mandatory": true,
-  "releaseNotes": "Beta 1.6.5: chuyển runtime Báo hàng 1291 sang Neon production + Firebase Auth/FCM/Firestore và Apps Script worker; giữ nguyên luồng nghiệp vụ, signing production và OTA.",
+  "releaseNotes": "Beta 1.6.6: sửa đồng bộ App ↔ Web sau khi dữ liệu server bị clear; snapshot rỗng sẽ xóa cache SKU/lịch sử cũ trên App, báo SKU chỉ thành công khi server thực sự nhận, bỏ outbox báo thiếu sai từ 1.6.5, và lưu tín hiệu realtime FCM khi App ở nền để đồng bộ lại khi mở App.",
   "signerSha256": "2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0",
-  "sourceSha": "e8e36d5f5f65784254bb5a1ec06db18f541f3057"
+  "sourceSha": "e7938d1719dd914577146c2c0d3ba916fef0b9d5"
 }
