@@ -1,0 +1,188 @@
+name: Staff sync — DỮ LIỆU THEO NGÀY
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bao-hang-staff-source-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      GOOGLE_SHEET_WEBHOOK_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
+      FIREBASE_PROJECT: bao-hang-1291
+      ADMIN_UID: 44fae0a2-09eb-4226-8412-0f1a1f5d7ef8
+      NEON_API: https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1
+      STAFF_SHEET_ID: 1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78
+      STAFF_SHEET_NAME: DANH SÁCH NHÂN SỰ
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Enforce zero-cost scope and required credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
+          test -n "${FIREBASE_SERVICE_ACCOUNT:-}"
+          test -n "${GOOGLE_SHEET_WEBHOOK_URL:-}"
+          case "$GOOGLE_SHEET_WEBHOOK_URL" in https://script.google.com/macros/s/*/exec) ;; *) exit 11;; esac
+          python3 - <<'PY'
+          import json,os
+          sa=json.loads(os.environ['FIREBASE_SERVICE_ACCOUNT'])
+          assert sa.get('project_id')=='bao-hang-1291'
+          assert sa.get('client_email') and sa.get('private_key')
+          PY
+
+      - name: Read exact Site 1291 / HY1 source and build canonical snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/staff"
+          URL=$(python3 - <<'PY'
+          import urllib.parse,os
+          base='https://docs.google.com/spreadsheets/d/'+os.environ['STAFF_SHEET_ID']+'/gviz/tq'
+          print(base+'?'+urllib.parse.urlencode({'tqx':'out:csv','sheet':os.environ['STAFF_SHEET_NAME'],'tq':"select A,B,D,E,F where G = 1291 and H = 'HY1'"}))
+          PY
+          )
+          HTTP=$(curl -sSL --retry 3 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/staff/source.csv" -w '%{http_code}' "$URL")
+          test "$HTTP" = 200
+          python3 - <<'PY'
+          import csv,hashlib,json,os,unicodedata
+          src=os.environ['RUNNER_TEMP']+'/staff/source.csv'
+          with open(src,encoding='utf-8-sig',newline='') as f: rows=list(csv.reader(f))
+          def upper_ascii(s):
+              s=unicodedata.normalize('NFD',str(s or '')).replace('Đ','D').replace('đ','d')
+              return ''.join(c for c in s if unicodedata.category(c)!='Mn').upper()
+          by={}
+          for r in rows[1:]:
+              if len(r)<5: continue
+              code,name,position,contractor,department=[str(x or '').strip() for x in r[:5]]
+              if not code or not name: continue
+              key=code.lower()
+              if key in by: raise SystemExit('DUPLICATE_EMPLOYEE_CODE:'+code)
+              p=upper_ascii(position); d=upper_ascii(department)
+              role='ADMIN_INVENT' if 'DIEU PHOI' in p else ('INVENT' if 'INVENT' in d or 'INVENT' in p else 'PICKER')
+              by[key]={'employee_code':code,'full_name':name,'contractor':contractor,'source_position':position,'department':department,'role':role}
+          staff=[by[k] for k in sorted(by)]
+          if not (1 <= len(staff) <= 500): raise SystemExit('ELIGIBLE_COUNT_INVALID:'+str(len(staff)))
+          canonical='\n'.join('|'.join([x['employee_code'],x['full_name'],x['contractor'],x['source_position'],x['role']]) for x in staff)
+          out={'staff':staff,'source_hash':hashlib.sha256(canonical.encode()).hexdigest(),'source_bytes':os.path.getsize(src)}
+          json.dump(out,open(os.environ['RUNNER_TEMP']+'/staff/source.json','w'),ensure_ascii=False)
+          print('SOURCE_COUNT='+str(len(staff)))
+          print('SOURCE_HASH='+out['source_hash'])
+          print('ROLE_ADMIN_INVENT='+str(sum(x['role']=='ADMIN_INVENT' for x in staff)))
+          print('ROLE_INVENT='+str(sum(x['role']=='INVENT' for x in staff)))
+          print('ROLE_PICKER='+str(sum(x['role']=='PICKER' for x in staff)))
+          PY
+
+      - name: Synchronize Firebase Auth and Neon profiles
+        id: sync
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs=require('fs'),crypto=require('crypto');
+          const result={status:'FAILED',created:0,updated:0,deactivated:0,failed:0,error:''};
+          const outPath=process.env.RUNNER_TEMP+'/staff/result.json';
+          const save=()=>fs.writeFileSync(outPath,JSON.stringify(result));
+          const source=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/staff/source.json','utf8'));
+          const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+          const gcfg=JSON.parse(fs.readFileSync('app/google-services.json','utf8'));
+          const apiKey=gcfg.client?.[0]?.api_key?.[0]?.current_key;
+          if(!apiKey) throw new Error('FIREBASE_WEB_API_KEY_MISSING');
+          const b64=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');
+          function signJwt(payload){const h=b64({alg:'RS256',typ:'JWT'}),p=b64(payload),u=h+'.'+p,s=crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url');return u+'.'+s}
+          async function request(url,opt={}){const r=await fetch(url,opt);const text=await r.text();let j={};try{j=text?JSON.parse(text):{}}catch{j={raw:text}};if(!r.ok)throw new Error('HTTP_'+r.status+':'+String(j?.error?.message||j?.error||j?.message||j?.raw||'').slice(0,240));return j}
+          async function neon(name,payload,adminToken){return request(process.env.NEON_API+'/rpc/'+name,{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+adminToken},body:JSON.stringify(payload||{})})}
+          async function worker(action,payload,adminToken){const j=await request(process.env.GOOGLE_SHEET_WEBHOOK_URL,{method:'POST',headers:{'content-type':'text/plain;charset=UTF-8'},body:JSON.stringify({action,id_token:adminToken,...payload})});if(j?.ok!==true)throw new Error('WORKER_'+String(j?.error||'FAILED').slice(0,220));return j}
+          async function oauth(scope){const now=Math.floor(Date.now()/1000),assertion=signJwt({iss:sa.client_email,scope,aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+3600});const body=new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion});const j=await request('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body});if(!j.access_token)throw new Error('GOOGLE_OAUTH_FAILED');return j.access_token}
+          async function adminIdToken(){const now=Math.floor(Date.now()/1000),custom=signJwt({iss:sa.client_email,sub:sa.client_email,aud:'https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit',iat:now,exp:now+900,uid:process.env.ADMIN_UID});const j=await request('https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key='+encodeURIComponent(apiKey),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:custom,returnSecureToken:true})});if(!j.idToken)throw new Error('ADMIN_ID_TOKEN_FAILED');return j.idToken}
+          async function firebaseUpdate(access,body){return request('https://identitytoolkit.googleapis.com/v1/projects/'+process.env.FIREBASE_PROJECT+'/accounts:update',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+access},body:JSON.stringify(body)})}
+          const claims=(code,role)=>JSON.stringify({role:'authenticated',employee_code:String(code),app_role:String(role)});
+          (async()=>{
+            const adminToken=await adminIdToken();
+            const googleAccess=await oauth('https://www.googleapis.com/auth/identitytoolkit');
+            const profiles=await neon('worker_profiles_snapshot_rpc',{},adminToken);
+            if(!Array.isArray(profiles))throw new Error('PROFILE_SNAPSHOT_INVALID');
+            const existing={};for(const p of profiles)existing[String(p.employee_code||'').toLowerCase()]=p;
+            const seen=new Set(source.staff.map(x=>x.employee_code.toLowerCase()));
+            const triggerSource=process.env.GITHUB_EVENT_NAME==='schedule'?'AUTO':'MANUAL';
+            const runId=await neon('worker_staff_run_start_rpc',{p_trigger_source:triggerSource,p_source_sheet_id:process.env.STAFF_SHEET_ID},adminToken);
+            let runFinished=false;
+            try{
+              for(const item of source.staff){
+                const key=item.employee_code.toLowerCase(),old=existing[key];
+                try{
+                  if(old?.protected_account||old?.role==='ADMIN')throw new Error('PROTECTED_PROFILE_COLLISION');
+                  const changed=!old||old.full_name!==item.full_name||old.contractor!==item.contractor||old.role!==item.role||old.active!==true||old.source_kind!=='GSHEET'||String(old.source_position||'')!==item.source_position;
+                  if(!changed)continue;
+                  let uid=old?.id;
+                  if(!old){
+                    const created=await worker('update-user',{employee_code:item.employee_code,full_name:item.full_name,contractor:item.contractor,role:item.role,active:true,source_position:item.source_position},adminToken);
+                    uid=created?.profile?.id;if(!uid)throw new Error('NEW_PROFILE_ID_MISSING');
+                  }else{
+                    await firebaseUpdate(googleAccess,{localId:String(uid),email:item.employee_code.toLowerCase()+'@bao-hang-1291.local',displayName:item.full_name,emailVerified:true,disableUser:false,customAttributes:claims(item.employee_code,item.role)});
+                  }
+                  await neon('worker_profile_upsert_rpc',{p_id:String(uid),p_employee_code:item.employee_code,p_full_name:item.full_name,p_contractor:item.contractor,p_role:item.role,p_active:true,p_source_kind:'GSHEET',p_source_position:item.source_position,p_protected_account:false},adminToken);
+                  old?result.updated++:result.created++;
+                }catch(e){result.failed++;result.error+=(result.error?'; ':'')+item.employee_code+':'+String(e.message).slice(0,120)}
+              }
+              if(result.failed===0){
+                for(const old of profiles){
+                  const code=String(old.employee_code||''),key=code.toLowerCase();
+                  if(old.source_kind!=='GSHEET'||old.protected_account||old.role==='ADMIN'||!old.active||seen.has(key))continue;
+                  try{
+                    await firebaseUpdate(googleAccess,{localId:String(old.id),disableUser:true});
+                    await neon('worker_profile_deactivate_rpc',{p_id:String(old.id),p_reason:'STAFF_SOURCE_MISSING'},adminToken);
+                    result.deactivated++;
+                  }catch(e){result.failed++;result.error+=(result.error?'; ':'')+code+':'+String(e.message).slice(0,120)}
+                }
+              }
+              result.status=result.failed?'PARTIAL':'SUCCEEDED';
+              await neon('worker_staff_run_finish_rpc',{p_run_id:String(runId),p_status:result.status,p_source_hash:source.source_hash,p_source_rows:source.staff.length,p_eligible_rows:source.staff.length,p_created:result.created,p_updated:result.updated,p_deactivated:result.deactivated,p_failed:result.failed,p_error_summary:result.error.slice(0,1900),p_source_response_bytes:source.source_bytes},adminToken);
+              runFinished=true;save();
+              if(result.failed)process.exitCode=2;
+            }catch(e){
+              result.failed++;result.status='FAILED';result.error=(result.error+'; '+e.message).slice(0,1900);
+              if(!runFinished){try{await neon('worker_staff_run_finish_rpc',{p_run_id:String(runId),p_status:'FAILED',p_source_hash:source.source_hash,p_source_rows:source.staff.length,p_eligible_rows:source.staff.length,p_created:result.created,p_updated:result.updated,p_deactivated:result.deactivated,p_failed:result.failed,p_error_summary:result.error,p_source_response_bytes:source.source_bytes},adminToken)}catch{}}
+              save();process.exitCode=3;
+            }
+          })().catch(e=>{result.failed++;result.error=String(e.message).slice(0,1900);save();process.exitCode=4});
+          NODE
+
+      - name: Record sanitized sync result
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ops "$RUNNER_TEMP/staff"
+          test -s "$RUNNER_TEMP/staff/result.json" || printf '{"status":"FAILED","created":0,"updated":0,"deactivated":0,"failed":1,"error":"workflow_failed_before_result"}' > "$RUNNER_TEMP/staff/result.json"
+          python3 - <<'PY' > ops/staff-sync-last.txt
+          import json,os
+          r=json.load(open(os.environ['RUNNER_TEMP']+'/staff/result.json'))
+          print('status='+str(r.get('status','FAILED')))
+          print('created='+str(r.get('created',0)))
+          print('updated='+str(r.get('updated',0)))
+          print('deactivated='+str(r.get('deactivated',0)))
+          print('failed='+str(r.get('failed',0)))
+          print('error='+str(r.get('error',''))[:1000].replace('\n',' '))
+          PY
+          cat ops/staff-sync-last.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ops/staff-sync-last.txt
+          git diff --cached --quiet || git commit -m 'chore(staff): record hourly staff sync result'
+          git pull --rebase origin main
+          git push origin HEAD:main
