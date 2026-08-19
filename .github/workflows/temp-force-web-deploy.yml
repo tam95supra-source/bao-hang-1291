@@ -1,4 +1,4 @@
-name: Temp verify live Bao Hang staff source
+name: Temp inspect Bao Hang Google deploy capability
 on:
   push:
     branches: [main]
@@ -6,25 +6,38 @@ on:
 permissions:
   contents: write
 jobs:
-  verify:
+  inspect:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
       GOOGLE_SHEET_WEBHOOK_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
+      GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+      GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+      GAS_SCRIPT_ID: ${{ secrets.GAS_SCRIPT_ID }}
+      GAS_DEPLOYMENT_ID: ${{ secrets.GAS_DEPLOYMENT_ID }}
+      CLASP_TOKEN: ${{ secrets.CLASP_TOKEN }}
+      CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+      GOOGLE_SCRIPT_ID: ${{ secrets.GOOGLE_SCRIPT_ID }}
     steps:
       - uses: actions/checkout@v6
         with: { fetch-depth: 0 }
-      - name: Verify live ping fields
+      - name: Record presence only and live ping
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p ops
+          : > ops/bao-google-capability.txt
+          for v in GOOGLE_OAUTH_CLIENT_ID GOOGLE_OAUTH_CLIENT_SECRET GOOGLE_OAUTH_REFRESH_TOKEN GAS_SCRIPT_ID GAS_DEPLOYMENT_ID CLASP_TOKEN CLASPRC_JSON GOOGLE_SCRIPT_ID; do
+            if [ -n "${!v:-}" ]; then echo "$v=YES" >> ops/bao-google-capability.txt; else echo "$v=NO" >> ops/bao-google-capability.txt; fi
+          done
           node <<'NODE'
           const fs=require('fs'),u=String(process.env.GOOGLE_SHEET_WEBHOOK_URL||'').trim();
-          (async()=>{const r=await fetch(u,{method:'POST',headers:{'content-type':'text/plain;charset=UTF-8'},body:JSON.stringify({action:'ping'})}),t=await r.text();let j={};try{j=JSON.parse(t)}catch{};if(!r.ok||j.ok!==true||j.project!=='bao-hang-1291')throw new Error('PING_FAIL');fs.mkdirSync('ops',{recursive:true});fs.writeFileSync('ops/live-staff-source-check.txt',`ping=PASS\nstaff_sheet_id=${String(j.staff_sheet_id||'')}\nstaff_sheet_name=${String(j.staff_sheet_name||'')}\n`);})().catch(e=>{console.error(e.message);process.exit(1)});
+          (async()=>{const r=await fetch(u,{method:'POST',headers:{'content-type':'text/plain;charset=UTF-8'},body:JSON.stringify({action:'ping'})}),t=await r.text();let j={};try{j=JSON.parse(t)}catch{};fs.appendFileSync('ops/bao-google-capability.txt',`live_ping=${r.ok&&j.ok===true?'PASS':'FAIL'}\nlive_staff_sheet_id=${String(j.staff_sheet_id||'')}\nlive_staff_sheet_name=${String(j.staff_sheet_name||'')}\n`);})().catch(e=>{fs.appendFileSync('ops/bao-google-capability.txt','live_ping=FAIL\n')});
           NODE
-          cat ops/live-staff-source-check.txt
-      - name: Commit proof
+          cat ops/bao-google-capability.txt
+      - name: Commit sanitized capability
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git add ops/live-staff-source-check.txt;git diff --cached --quiet || git commit -m 'chore(temp): record live staff source markers';git pull --rebase origin main;git push origin HEAD:main
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git add ops/bao-google-capability.txt;git diff --cached --quiet || git commit -m 'chore(temp): record Bao Hang Google deploy capability';git pull --rebase origin main;git push origin HEAD:main
