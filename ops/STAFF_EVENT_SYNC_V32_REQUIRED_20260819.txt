@@ -1,0 +1,14 @@
+BÁO HÀNG 1291 — STAFF EVENT SYNC V3.2 REQUIRED
+updated_at=2026-08-19T23:52:00+07:00
+status=OWNER_PASTE_REQUIRED
+reason=Previous user-visible attachment accidentally pointed to V3.1; live setup generated 93 false USER_UPSERT and changed 93 roles to PICKER.
+cleanup_second_batch=PASS
+neon_roles_after_cleanup=PICKER:308,INVENT:48,ADMIN_INVENT:45
+su_kien_false_batch_1644_1645=REMOVED
+sheet_export_queue_false_batch=REMOVED
+v32_local_file=STAFF_EVENT_SYNC_V3_2_DELTA_ONLY.gs
+v32_sha256=77221621b0e17e41616e3abf3e552ad1df2d6dc4a154874a480ef6fd277a4516
+v32_marker=BÁO HÀNG 1291 — STAFF EVENT SYNC V3.2 DELTA ONLY
+v32_behavior=setup snapshot+triggers only; runtime local snapshot diff; backend only changed/added/deleted codes; independent role mapper; one-time Firebase/NHAN_SU V3.1 role repair without Neon upserts.
+repo_google_apps_script_STAFF_EVENT_SYNC_V3.gs=STALE_V3_1_DO_NOT_DEPLOY
+post_owner_gate=verify setup generates zero USER_UPSERT; then manual human edit/add/delete event tests because Google API writes do not fire installable edit triggers; cleanup all markers.
