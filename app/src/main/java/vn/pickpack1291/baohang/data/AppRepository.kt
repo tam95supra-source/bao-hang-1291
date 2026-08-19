@@ -13,6 +13,7 @@ import org.json.JSONObject
 import vn.pickpack1291.baohang.BuildConfig
 import vn.pickpack1291.baohang.diagnostics.DiagnosticsLogger
 import vn.pickpack1291.baohang.network.ApiClient
+import vn.pickpack1291.baohang.network.ApiException
 import vn.pickpack1291.baohang.sync.SyncScheduler
 import java.time.Duration
 import java.time.Instant
@@ -60,7 +61,6 @@ class AppRepository(
     suspend fun searchSkuDigitsOnline(query: String) = api.searchSkuDigits(query)
     suspend fun withdrawShortage(issueId: String) = api.withdrawShortage(issueId)
 
-
     suspend fun reportShortage(sku: String): ReportResult {
         val requestId = UUID.randomUUID().toString()
         diagnostics.info("shortage_submit", mapOf("sku" to sku, "request_id" to requestId))
@@ -70,32 +70,22 @@ class AppRepository(
             diagnostics.info("shortage_submit_success", mapOf("sku" to sku, "issue_id" to result.issue.id, "report_count" to result.issue.reportCount, "aggregated" to result.wasAlreadyReported))
             result
         } catch (error: Exception) {
-            diagnostics.error("shortage_submit_offline", error, mapOf("sku" to sku))
-            val localId = "offline-${UUID.randomUUID()}"
-            val now = Instant.now().toString()
-            val item = database.searchSkus(sku, 1).firstOrNull()
-            val issue = StockIssue(
-                localId, sku, item?.productName.orEmpty(), IssueStatus.OPEN, 1, now, now,
-                latestReporterName = session.profile?.fullName.orEmpty(), latestMessage = "Đang chờ đồng bộ"
-            )
-            database.upsertIssues(listOf(issue))
-            database.enqueue("report-shortage", JSONObject().put("sku", sku).put("client_request_id", requestId))
-            SyncScheduler.enqueueOutbox(context)
-            diagnostics.info("outbox_sync_scheduled", mapOf("action" to "report-shortage", "pending" to database.outboxCount()))
-            ReportResult(issue, false, "ĐÃ LƯU TRÊN MÁY • CHỜ ĐỒNG BỘ")
+            // BÁO HÀNG is online-authoritative: never present a rejected/network-failed report as accepted.
+            diagnostics.error("shortage_submit_failed", error, mapOf("sku" to sku, "request_id" to requestId))
+            throw error
         }
     }
 
     suspend fun loadMyIssues(): List<StockIssue> = try {
-        api.myIssues().also(database::upsertIssues)
+        api.myIssues().also(database::replaceIssues)
     } catch (_: Exception) { database.cachedIssues(100) }
 
     suspend fun loadActiveIssues(): List<StockIssue> = try {
-        api.activeIssues().also(database::upsertIssues)
+        api.activeIssues().also(database::replaceIssues)
     } catch (_: Exception) { database.cachedIssues(200).filter { it.status.isOpenBucket } }
 
     suspend fun loadIssueBoard(): IssueBoard = api.issueBoard().also {
-        database.upsertIssues(it.open + it.claimed + it.recent)
+        database.replaceIssues(it.open + it.claimed + it.recent + it.withdrawn)
     }
 
     suspend fun claimIssue(issueId: String): StockIssue = api.claimIssue(issueId).also {
@@ -133,7 +123,6 @@ class AppRepository(
     }
 
     fun catalogNeedsRefresh(maxAgeHours: Long = 6): Boolean {
-        if (database.skuCount() == 0) return true
         val last = database.metadata("catalog_last_sync") ?: return true
         return runCatching { Duration.between(Instant.parse(last), Instant.now()).toHours() >= maxAgeHours }.getOrDefault(true)
     }
@@ -146,32 +135,48 @@ class AppRepository(
         var count = 0
         var revision: Long? = null
         var hasMore = true
-        diagnostics.info("catalog_sync_start", mapOf("mode" to "active_full"))
+        val snapshot = mutableListOf<SkuItem>()
+        diagnostics.info("catalog_sync_start", mapOf("mode" to "active_full_snapshot"))
         while (hasMore) {
             val page = api.catalogPage(afterSku, null, syncUntil)
             syncUntil = page.syncUntil
-            if (revision == null) {
-                revision = page.revision
-                val localRevision = database.metadata("catalog_revision")?.toLongOrNull()
-                if (localRevision != page.revision) database.clearSkus()
-            }
-            database.upsertSkus(page.items)
+            if (revision == null) revision = page.revision
+            snapshot += page.items
             count += page.items.size
             afterSku = page.items.lastOrNull()?.sku ?: afterSku
             onPage?.invoke(count)
             hasMore = page.hasMore && page.items.isNotEmpty()
         }
+        // Commit only after all pages succeeded; an empty server snapshot must clear stale local data.
+        database.replaceSkus(snapshot)
         syncUntil?.let { database.setMetadata("catalog_last_sync", it) }
         revision?.let { database.setMetadata("catalog_revision", it.toString()) }
         diagnostics.info("catalog_sync_success", mapOf("received" to count, "local_count" to database.skuCount(), "revision" to (revision ?: 0L)))
         return count
-    }    suspend fun flushOutbox(): Int {
+    }
+
+    suspend fun flushOutbox(): Int {
         var sent = 0
         database.outbox().forEach { item ->
+            // Legacy 1.6.5 may have queued report-shortage even after a semantic rejection.
+            if (item.action == "report-shortage") {
+                database.removeOutbox(item.id)
+                diagnostics.warn("legacy_shortage_outbox_dropped", mapOf("id" to item.id))
+                return@forEach
+            }
             try {
                 api.invoke(item.action, item.payload)
                 database.removeOutbox(item.id)
                 sent++
+            } catch (error: ApiException) {
+                if (error.statusCode in 400..499) {
+                    database.removeOutbox(item.id)
+                    diagnostics.warn("outbox_semantic_rejection_dropped", mapOf("action" to item.action, "status" to error.statusCode, "code" to error.code))
+                    return@forEach
+                }
+                database.failOutbox(item.id, error.message.orEmpty())
+                diagnostics.warn("outbox_flush_paused", mapOf("action" to item.action, "sent" to sent, "error" to error.message.orEmpty(), "pending" to database.outboxCount()))
+                return sent
             } catch (error: Exception) {
                 database.failOutbox(item.id, error.message.orEmpty())
                 diagnostics.warn("outbox_flush_paused", mapOf("action" to item.action, "sent" to sent, "error" to error.message.orEmpty(), "pending" to database.outboxCount()))
@@ -202,7 +207,7 @@ class AppRepository(
     }
 
     suspend fun sendDiagnosticLog(): JSONObject {
-        diagnostics.info("diagnostic_upload_requested", mapOf("role" to session.effectiveRole.wire, "version" to BuildConfig.VERSION_NAME))
+        diagnostics.info("diagnostic_upload_requested", mapOf("role" to session.effectiveRole.wire, "version" to BuildConfig.VERSION_NAME, "android" to Build.VERSION.RELEASE))
         val bundle = diagnostics.prepareUpload() ?: return JSONObject().put("uploaded", false).put("message", "Chưa có log để gửi")
         val result = api.uploadDiagnosticLog(bundle)
         if (result.optBoolean("uploaded", false)) diagnostics.clearAfterConfirmedUpload()
