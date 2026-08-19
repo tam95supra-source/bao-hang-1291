@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - 'ops/release-request.json'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'ops/release-request.json'
 
 permissions:
   contents: write
@@ -21,10 +25,12 @@ jobs:
       FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
       APPS_SCRIPT_WORKER_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
       GH_TOKEN: ${{ github.token }}
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: actions/setup-java@v5
         with:
@@ -215,7 +221,7 @@ jobs:
           jq -n \
             --arg channel "$CHANNEL" --argjson versionCode "$VERSION_CODE" --arg versionName "$VERSION_NAME" \
             --arg apkUrl "$apk_url" --arg sha256 "$APK_SHA256" --argjson mandatory "$MANDATORY" \
-            --arg releaseNotes "$(cat "$notes")" --arg signerSha256 "$SIGNER_SHA256" --arg sourceSha "$GITHUB_SHA" \
+            --arg releaseNotes "$(cat "$notes")" --arg signerSha256 "$SIGNER_SHA256" --arg sourceSha "$SOURCE_SHA" \
             '{channel:$channel,versionCode:$versionCode,versionName:$versionName,apkUrl:$apkUrl,sha256:$sha256,mandatory:$mandatory,releaseNotes:$releaseNotes,signerSha256:$signerSha256,sourceSha:$sourceSha}' > "$manifest"
           jq -e . "$manifest" >/dev/null
 
@@ -224,9 +230,9 @@ jobs:
           }
           trap cleanup_failed_release ERR
           if test "$CHANNEL" = stable; then
-            gh release create "$TAG" "$RELEASE_DIR/$APK_NAME" "$manifest" --target "$GITHUB_SHA" --title "Báo hàng 1291 Stable $VERSION_NAME" --notes-file "$notes" --latest
+            gh release create "$TAG" "$RELEASE_DIR/$APK_NAME" "$manifest" --target "$SOURCE_SHA" --title "Báo hàng 1291 Stable $VERSION_NAME" --notes-file "$notes" --latest
           else
-            gh release create "$TAG" "$RELEASE_DIR/$APK_NAME" "$manifest" --target "$GITHUB_SHA" --title "Báo hàng 1291 Beta $VERSION_NAME" --notes-file "$notes" --prerelease
+            gh release create "$TAG" "$RELEASE_DIR/$APK_NAME" "$manifest" --target "$SOURCE_SHA" --title "Báo hàng 1291 Beta $VERSION_NAME" --notes-file "$notes" --prerelease
           fi
           gh release download "$TAG" --pattern "$APK_NAME" --dir "$work/published"
           gh release download "$TAG" --pattern 'release-manifest.json' --dir "$work/published"
