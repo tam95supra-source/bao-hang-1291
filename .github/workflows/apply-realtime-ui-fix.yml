@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: apply-realtime-ui-fix-${{ github.event.pull_request.number || github.ref }}
@@ -80,6 +81,15 @@ jobs:
             exit 1
           fi
           echo 'PUBLIC_REPO_SECRET_GUARD=PASS'
+      - name: Dispatch production OTA release
+        if: github.event_name == 'pull_request' && github.head_ref == 'release/beta-1.6.7-dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/production-release.yml/dispatches" -f ref=main
+          echo 'PRODUCTION_OTA_DISPATCH=PASS'
       - name: Commit patched runtime to trigger branch
         shell: bash
         run: |
