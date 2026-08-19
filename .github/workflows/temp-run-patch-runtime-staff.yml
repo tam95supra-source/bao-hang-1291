@@ -1,0 +1,39 @@
+name: Temp run runtime staff patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/run-patch-runtime-staff.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Apply guarded patch script
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
+          python3 ops/patch_runtime_staff.py
+          ! grep -q 'cron:' .github/workflows/staff-sync.yml
+          ! grep -q "where G = 1291 and H = 'HY1'" .github/workflows/staff-sync.yml google-apps-script/DEPLOY_NEON.gs
+          git diff --check
+      - name: Commit patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/vn/pickpack1291/baohang google-apps-script/DEPLOY_NEON.gs .github/workflows/staff-sync.yml
+          git diff --cached --quiet && { echo 'No patch produced' >&2; exit 1; }
+          git commit -m 'fix(runtime): reconcile cleared snapshots and event-driven staff source'
+          git pull --rebase origin main
+          git push origin HEAD:main
