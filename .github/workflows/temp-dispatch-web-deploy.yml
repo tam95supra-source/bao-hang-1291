@@ -1,0 +1,63 @@
+name: Temp dispatch and observe Web deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/web-deploy-dispatch-20260819.trigger'
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Dispatch existing guarded deploy workflow and wait
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
+          START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/deploy-web-admin.yml/dispatches" \
+            -d '{"ref":"main"}'
+          RUN_ID=''
+          for i in $(seq 1 30); do
+            JSON="$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/deploy-web-admin.yml/runs?event=workflow_dispatch&branch=main&per_page=5")"
+            RUN_ID="$(jq -r --arg start "$START" '[.workflow_runs[] | select(.created_at >= $start)] | sort_by(.created_at) | last | .id // empty' <<<"$JSON")"
+            [ -n "$RUN_ID" ] && break
+            sleep 2
+          done
+          [ -n "$RUN_ID" ] || { echo 'run_id_not_found' > "$RUNNER_TEMP/deploy-error"; exit 2; }
+          STATUS=''; CONCLUSION=''
+          for i in $(seq 1 180); do
+            R="$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID")"
+            STATUS="$(jq -r '.status' <<<"$R")"; CONCLUSION="$(jq -r '.conclusion // empty' <<<"$R")"
+            [ "$STATUS" = completed ] && break
+            sleep 5
+          done
+          mkdir -p ops
+          {
+            echo "run_id=$RUN_ID"
+            echo "status=$STATUS"
+            echo "conclusion=$CONCLUSION"
+          } > ops/web-deploy-last.txt
+          cat ops/web-deploy-last.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ops/web-deploy-last.txt
+          git diff --cached --quiet || git commit -m 'chore(web): record guarded Web deploy result'
+          git pull --rebase origin main
+          git push origin HEAD:main
+          [ "$STATUS" = completed ] && [ "$CONCLUSION" = success ]
