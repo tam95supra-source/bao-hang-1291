@@ -1,0 +1,61 @@
+name: Temp fingerprint Web live
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/fingerprint-web-live.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  fingerprint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Fingerprint live Hosting assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/live"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 https://bao-hang-1291.web.app/ -o "$RUNNER_TEMP/live/index.html"
+          python3 - <<'PY' > "$RUNNER_TEMP/live/assets.txt"
+          import re,os,pathlib
+          s=pathlib.Path(os.environ['RUNNER_TEMP']+'/live/index.html').read_text(errors='ignore')
+          print('\n'.join(re.findall(r'(?:src|href)=["\']([^"\']+\.js[^"\']*)',s)))
+          PY
+          : > "$RUNNER_TEMP/live/all.js"
+          while IFS= read -r asset; do
+            [ -n "$asset" ] || continue
+            case "$asset" in http*) url="$asset";; /*) url="https://bao-hang-1291.web.app$asset";; *) url="https://bao-hang-1291.web.app/$asset";; esac
+            curl -fsSL --retry 3 --retry-all-errors "$url" >> "$RUNNER_TEMP/live/all.js"
+            printf '\n' >> "$RUNNER_TEMP/live/all.js"
+          done < "$RUNNER_TEMP/live/assets.txt"
+          WV2=FAIL; OPS=FAIL; NOTICE=FAIL; MUTATION=PASS
+          grep -q '__BH_WV2_RENDER__' "$RUNNER_TEMP/live/all.js" && WV2=PASS
+          grep -q '__BH_OPS_RENDER__' "$RUNNER_TEMP/live/all.js" && OPS=PASS
+          grep -q 'realtime-notice' "$RUNNER_TEMP/live/all.js" && NOTICE=PASS
+          grep -q 'MutationObserver' "$RUNNER_TEMP/live/all.js" && MUTATION=FAIL
+          COUNT=$(grep -o 'site:1291:issues' "$RUNNER_TEMP/live/all.js" | wc -l | tr -d ' ' || true)
+          SHA=$(sha256sum "$RUNNER_TEMP/live/all.js" | awk '{print $1}')
+          mkdir -p ops
+          {
+            echo "wv2_passive_renderer=$WV2"
+            echo "ops_passive_renderer=$OPS"
+            echo "realtime_notice=$NOTICE"
+            echo "mutation_observer_absent=$MUTATION"
+            echo "issue_topic_count=$COUNT"
+            echo "bundle_sha256=$SHA"
+          } > ops/web-live-fingerprint.txt
+          cat ops/web-live-fingerprint.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ops/web-live-fingerprint.txt
+          git diff --cached --quiet || git commit -m 'chore(web): record post-deploy live fingerprint'
+          git pull --rebase origin main
+          git push origin HEAD:main
+          [ "$WV2" = PASS ] && [ "$OPS" = PASS ] && [ "$NOTICE" = PASS ] && [ "$MUTATION" = PASS ] && [ "$COUNT" = 1 ]
