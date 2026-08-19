@@ -1,5 +1,11 @@
 {
-  "status": "FAIL",
-  "stage": "EVENT_LABEL",
-  "verified_at": "2026-08-19T23:49:25.808998+00:00"
+  "status": "PASS",
+  "stage": "COMPLETE",
+  "hosting": "https://bao-hang-1291.web.app",
+  "reconnect_dedupe_marker": "PASS",
+  "user_state_preservation": "PASS",
+  "user_search_bundle": "PASS",
+  "security_headers": "PASS",
+  "bundle_sha256": "85f27047574ef47370b6e923a5a2305f9b5d99a0f4939efa0c3c9f6c043c079b",
+  "verified_at": "2026-08-19T23:50:26.038368+00:00"
 }
