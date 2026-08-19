@@ -409,7 +409,7 @@ function runStaffSync_(triggerSource, callerProfile) {
 }
 
 function fetchFilteredStaff_() {
-  const variants = ["select A,B,D,E where G = 1291 and H = 'HY1'","select A,B,D,E where G = '1291' and H = 'HY1'"];
+  const variants = ["select A,B,D,E,F where G = 1291 and H = 'HY1'","select A,B,D,E,F where G = '1291' and H = 'HY1'"];
   let lastError='';
   for (let q=0;q<variants.length;q++) {
     try {
@@ -424,8 +424,8 @@ function fetchFilteredStaff_() {
       rows.slice(1).forEach(function(row){
         const code=String(row[0]||'').trim(),name=String(row[1]||'').trim();
         if(!code||!name)return;
-        const position=String(row[2]||'').trim(),contractor=String(row[3]||'').trim();
-        byCode[code.toLowerCase()]={employee_code:code,full_name:name,contractor:contractor,source_position:position,role:staffRole_(position,code)};
+        const position=String(row[2]||'').trim(),contractor=String(row[3]||'').trim(),department=String(row[4]||'').trim();
+        byCode[code.toLowerCase()]={employee_code:code,full_name:name,contractor:contractor,source_position:position,role:staffRole_(position,department,code)};
       });
       const staff=Object.keys(byCode).sort().map(function(k){return byCode[k];});
       if(!staff.length){lastError='Không có nhân sự Site 1291 / HY1';continue;}
@@ -459,7 +459,7 @@ function userUpsert_(body) {
   if(!/^[a-z0-9._-]+$/i.test(code)||!name)throw new Error('INVALID_USER');
   const role=String(item.role||'PICKER').toUpperCase();
   if(['ADMIN','ADMIN_INVENT','INVENT','PICKER'].indexOf(role)<0)throw new Error('INVALID_ROLE');
-  if(caller.profile.role==='ADMIN_INVENT' && role!=='PICKER')throw new Error('FORBIDDEN');
+  if(caller.profile.role==='ADMIN_INVENT' && ['INVENT','PICKER'].indexOf(role)<0)throw new Error('FORBIDDEN');
   if(code===BH_PROTECTED_ADMIN_CODE && caller.profile.role!=='ADMIN')throw new Error('FORBIDDEN');
   const token=workerAdminIdToken_();
   let uid=String(item.id||'').trim();
@@ -489,7 +489,7 @@ function userDisable_(body) {
   const target=users.find(function(u){return String(u.id)===uid;});
   if(!target)throw new Error('USER_NOT_FOUND');
   if(target.protected_account||target.role==='ADMIN')throw new Error('PROTECTED_ADMIN');
-  if(caller.profile.role==='ADMIN_INVENT'&&target.role!=='PICKER')throw new Error('FORBIDDEN');
+  if(caller.profile.role==='ADMIN_INVENT'&&['INVENT','PICKER'].indexOf(String(target.role||''))<0)throw new Error('FORBIDDEN');
   firebaseAdminUpdate_(uid,{disableUser:true});
   const profile=neonRpc_('worker_profile_deactivate_rpc',{p_id:uid,p_reason:'ADMIN_DISABLE'},token);
   workerTick_('USER_DISABLE');
@@ -606,10 +606,12 @@ function firebaseIdentityPost_(path,body) {
 
 function claims_(employeeCode, role) { return {role:'authenticated',employee_code:String(employeeCode),app_role:String(role)}; }
 function employeeEmail_(code) { return String(code).toLowerCase()+'@bao-hang-1291.local'; }
-function staffRole_(position,code) {
+function staffRole_(position,department,code) {
   if(String(code)===BH_PROTECTED_ADMIN_CODE)return 'ADMIN';
-  const p=String(position||'').toUpperCase();
-  if(p.indexOf('INVENT')>=0)return 'INVENT';
+  const p=String(position||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/Đ/g,'D').toUpperCase();
+  const d=String(department||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/Đ/g,'D').toUpperCase();
+  if(p.indexOf('DIEU PHOI')>=0)return 'ADMIN_INVENT';
+  if(d.indexOf('INVENT')>=0||p.indexOf('INVENT')>=0)return 'INVENT';
   return 'PICKER';
 }
 
