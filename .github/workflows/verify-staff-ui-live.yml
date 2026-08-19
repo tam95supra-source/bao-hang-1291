@@ -14,26 +14,39 @@ jobs:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
       - name: Verify live Firebase Hosting bundle
+        id: live
         shell: bash
         run: |
           set -euo pipefail
+          echo FETCH_INDEX > /tmp/stage
           BASE='https://bao-hang-1291.web.app'
           curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 "$BASE/" -o /tmp/index.html
+          echo SECURITY_HEADERS > /tmp/stage
           curl -fsSI --retry 5 --retry-all-errors --retry-delay 2 "$BASE/" -o /tmp/headers.txt
           grep -qi '^content-security-policy:' /tmp/headers.txt
           grep -qi '^x-content-type-options: nosniff' /tmp/headers.txt
-          grep -oE '/assets/[^"'"'"' ]+\.js' /tmp/index.html | sort -u > /tmp/assets.txt
-          test -s /tmp/assets.txt
+          echo DISCOVER_ASSETS > /tmp/stage
+          python3 - <<'PY'
+          import re
+          html=open('/tmp/index.html',encoding='utf-8').read()
+          assets=sorted(set(re.findall(r'''/assets/[^"' ]+\.js''',html)))
+          assert assets,'NO_JS_ASSET'
+          open('/tmp/assets.txt','w').write('\n'.join(assets)+'\n')
+          PY
           : > /tmp/all.js
           while read -r asset; do curl -fsSL --retry 4 --retry-all-errors "$BASE$asset" >> /tmp/all.js; echo >> /tmp/all.js; done < /tmp/assets.txt
+          echo RECONNECT_MARKER > /tmp/stage
           grep -F 'hasPendingWrites' /tmp/all.js >/dev/null
+          echo EVENT_LABEL > /tmp/stage
           grep -F 'theo sự kiện' /tmp/all.js >/dev/null
+          echo SEARCH_MARKER > /tmp/stage
           grep -F 'Mã nhân viên hoặc họ tên' /tmp/all.js >/dev/null
           SHA=$(sha256sum /tmp/all.js | awk '{print $1}')
           python3 - "$SHA" <<'PY'
           import datetime,json,sys
           proof={
             'status':'PASS',
+            'stage':'COMPLETE',
             'hosting':'https://bao-hang-1291.web.app',
             'reconnect_dedupe_marker':'PASS',
             'event_driven_label':'PASS',
@@ -44,13 +57,23 @@ jobs:
           }
           open('ops/staff-ui-live-proof.json','w').write(json.dumps(proof,ensure_ascii=False,indent=2)+'\n')
           PY
-      - name: Commit sanitized proof
+      - name: Record sanitized proof
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
+          if [[ ! -s ops/staff-ui-live-proof.json ]]; then
+            STAGE=$(cat /tmp/stage 2>/dev/null || echo UNKNOWN)
+            python3 - "$STAGE" <<'PY'
+          import datetime,json,sys
+          proof={'status':'FAIL','stage':sys.argv[1],'verified_at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+          open('ops/staff-ui-live-proof.json','w').write(json.dumps(proof,indent=2)+'\n')
+          PY
+          fi
+          cat ops/staff-ui-live-proof.json
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add ops/staff-ui-live-proof.json
-          git commit -m 'chore(web): record staff UI live proof'
+          git diff --cached --quiet || git commit -m 'chore(web): record staff UI live proof'
           git pull --rebase origin main
           git push origin HEAD:main
