@@ -1,6 +1,0 @@
-billing=PASS
-firestore_signal_cleanup=PASS
-live=FAIL
-detail=attempt_18_issue_topic_count_1
-issue_topic_count=1
-error=

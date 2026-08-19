@@ -1,6 +1,0 @@
-wv2_passive_renderer=PASS
-ops_passive_renderer=PASS
-realtime_notice=PASS
-mutation_observer_absent=FAIL
-issue_topic_count=1
-bundle_sha256=3732cdc874f7479c02c6fa02c2a3c7acb8e0ddee75e1665868a3480278433293
