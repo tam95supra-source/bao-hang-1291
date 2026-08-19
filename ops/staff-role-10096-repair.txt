@@ -1,0 +1,4 @@
+status=PASS
+employee_code=10096
+role=ADMIN_INVENT
+source_kind=GSHEET
