@@ -11,62 +11,24 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - name: Patch worker staff contract
-        id: patch
-        continue-on-error: true
+        with: { fetch-depth: 0 }
+      - name: Patch canonical worker staff contract
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path('google-apps-script/DEPLOY_NEON.gs')
-          s=p.read_text(encoding='utf-8')
-          s=s.replace("const variants = [\"select A,B,D,E where G = 1291 and H = 'HY1'\",\"select A,B,D,E where G = '1291' and H = 'HY1'\"];", "const variants = [\"select A,B,D,E,F where G = 1291 and H = 'HY1'\",\"select A,B,D,E,F where G = '1291' and H = 'HY1'\"];", 1)
-          s=s.replace("const position=String(row[2]||'').trim(),contractor=String(row[3]||'').trim();\n        byCode[code.toLowerCase()]={employee_code:code,full_name:name,contractor:contractor,source_position:position,role:staffRole_(position,code)};", "const position=String(row[2]||'').trim(),contractor=String(row[3]||'').trim(),department=String(row[4]||'').trim();\n        byCode[code.toLowerCase()]={employee_code:code,full_name:name,contractor:contractor,source_position:position,role:staffRole_(position,department,code)};", 1)
-          old="""function staffRole_(position,code) {
-  if(String(code)===BH_PROTECTED_ADMIN_CODE)return 'ADMIN';
-  const p=String(position||'').toUpperCase();
-  if(p.indexOf('INVENT')>=0)return 'INVENT';
-  return 'PICKER';
-}"""
-          new="""function staffRole_(position,department,code) {
-  if(String(code)===BH_PROTECTED_ADMIN_CODE)return 'ADMIN';
-  const p=String(position||'').toUpperCase();
-  const d=String(department||'').toUpperCase();
-  if(p.indexOf('ĐIỀU PHỐI')>=0 || p.indexOf('DIEU PHOI')>=0)return 'ADMIN_INVENT';
-  if(d.indexOf('INVENT')>=0 || p.indexOf('INVENT')>=0)return 'INVENT';
-  return 'PICKER';
-}"""
-          if old in s:
-              s=s.replace(old,new,1)
-          elif "function staffRole_(position,department,code)" not in s:
-              raise SystemExit('staffRole_target_not_found')
-          s=s.replace("if(caller.profile.role==='ADMIN_INVENT' && role!=='PICKER')throw new Error('FORBIDDEN');", "if(caller.profile.role==='ADMIN_INVENT' && ['INVENT','PICKER'].indexOf(role)<0)throw new Error('FORBIDDEN');", 1)
-          s=s.replace("if(caller.profile.role==='ADMIN_INVENT'&&target.role!=='PICKER')throw new Error('FORBIDDEN');", "if(caller.profile.role==='ADMIN_INVENT'&&['INVENT','PICKER'].indexOf(String(target.role||''))<0)throw new Error('FORBIDDEN');", 1)
-          required=["select A,B,D,E,F where G = 1291 and H = 'HY1'","staffRole_(position,department,code)","p.indexOf('ĐIỀU PHỐI')","d.indexOf('INVENT')","['INVENT','PICKER'].indexOf(role)<0"]
-          for x in required:
-              if x not in s: raise SystemExit('missing:'+x)
-          p.write_text(s,encoding='utf-8')
-          PY
+          python3 scripts/patch_apps_script_staff_source.py
           cp google-apps-script/DEPLOY_NEON.gs "$RUNNER_TEMP/worker.js"
           node --check "$RUNNER_TEMP/worker.js"
-          echo PASS > "$RUNNER_TEMP/patch-result"
-      - name: Commit patch and status
-        if: always()
+          grep -q "select A,B,D,E,F where G = 1291" google-apps-script/DEPLOY_NEON.gs
+          grep -q "staffRole_(position,department,code)" google-apps-script/DEPLOY_NEON.gs
+          grep -q "DIEU PHOI" google-apps-script/DEPLOY_NEON.gs
+      - name: Commit canonical patch
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p ops
-          if [ "${{ steps.patch.outcome }}" = success ]; then
-            printf 'staff_patch=PASS\n' > ops/last-staff-source-role-patch.txt
-          else
-            printf 'staff_patch=FAIL\n' > ops/last-staff-source-role-patch.txt
-          fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add google-apps-script/DEPLOY_NEON.gs ops/last-staff-source-role-patch.txt
-          git diff --cached --quiet || git commit -m 'fix(worker): align staff source roles and permissions'
+          git add google-apps-script/DEPLOY_NEON.gs
+          git diff --cached --quiet || git commit -m 'fix(worker): align canonical staff source and roles'
           git pull --rebase origin main
           git push origin HEAD:main
