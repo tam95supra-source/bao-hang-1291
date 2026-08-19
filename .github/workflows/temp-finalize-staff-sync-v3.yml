@@ -1,0 +1,54 @@
+name: Temp finalize staff sync v3
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/temp-finalize-staff-sync-v3.yml']
+permissions:
+  contents: write
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Build staff-sync.yml without deleting source
+        id: build
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .github/workflows/temp-cutover-staff-source.yml .github/workflows/staff-sync.yml
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('.github/workflows/staff-sync.yml');s=p.read_text(encoding='utf-8')
+          s=s.replace('name: Temp cutover staff source to DỮ LIỆU THEO NGÀY','name: Staff sync — DỮ LIỆU THEO NGÀY',1)
+          s=s.replace("on:\n  push:\n    branches: [main]\n    paths:\n      - '.github/workflows/temp-cutover-staff-source.yml'\n","on:\n  schedule:\n    - cron: '17 * * * *'\n  workflow_dispatch:\n",1)
+          s=s.replace("s=unicodedata.normalize('NFD',str(s or ''))","s=unicodedata.normalize('NFD',str(s or '')).replace('Đ','D').replace('đ','d')",1)
+          s=s.replace("p_trigger_source:'DEPLOY'","p_trigger_source:(process.env.GITHUB_EVENT_NAME==='schedule'?'AUTO':'MANUAL')",1)
+          s=s.replace('ops/staff-source-cutover-result.txt','ops/staff-sync-last.txt')
+          s=s.replace('git add ops/staff-source-cutover-result.txt','git add ops/staff-sync-last.txt')
+          s=s.replace('chore(staff): record new source cutover result','chore(staff): record hourly staff sync result')
+          for g in ["cron: '17 * * * *'","STAFF_SHEET_ID: 1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78","STAFF_SHEET_NAME: DANH SÁCH NHÂN SỰ","select A,B,D,E,F where G = 1291 and H = 'HY1'","replace('Đ','D').replace('đ','d')"]:
+              if g not in s: raise SystemExit('MISSING:'+g)
+          p.write_text(s,encoding='utf-8')
+          PY
+      - name: Commit status and staff sync
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ops
+          if [ "${{ steps.build.outcome }}" = success ]; then
+            printf 'status=PASS\nworkflow=staff-sync.yml\ninterval=hourly\nsource=DỮ LIỆU THEO NGÀY / DANH SÁCH NHÂN SỰ\n' > ops/staff-sync-finalize-status.txt
+          else
+            printf 'status=FAIL\n' > ops/staff-sync-finalize-status.txt
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          test ! -f .github/workflows/staff-sync.yml || git add .github/workflows/staff-sync.yml
+          git add ops/staff-sync-finalize-status.txt
+          git diff --cached --quiet || git commit -m 'feat(staff): finalize hourly new-source sync'
+          git pull --rebase origin main
+          git push origin HEAD:main
