@@ -1,4 +1,4 @@
-name: Temp identify current Bao Hang Apps Script
+name: Temp verify live Bao Hang staff source
 on:
   push:
     branches: [main]
@@ -6,7 +6,7 @@ on:
 permissions:
   contents: write
 jobs:
-  identify:
+  verify:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
@@ -14,20 +14,17 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { fetch-depth: 0 }
-      - name: Identify current deployment and verify ping
+      - name: Verify live ping fields
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${GOOGLE_SHEET_WEBHOOK_URL:-}"
           node <<'NODE'
-          const fs=require('fs');
-          const u=String(process.env.GOOGLE_SHEET_WEBHOOK_URL||'').trim();
-          const m=u.match(/\/macros\/s\/([^/]+)\/exec/);if(!m)throw new Error('WEBHOOK_URL_FORMAT');
-          (async()=>{const r=await fetch(u,{method:'POST',headers:{'content-type':'text/plain;charset=UTF-8'},body:JSON.stringify({action:'ping'})});const t=await r.text();let j={};try{j=JSON.parse(t)}catch{};if(!r.ok||j.ok!==true||j.project!=='bao-hang-1291'||j.provider!=='NEON_FIREBASE_GOOGLE')throw new Error('PING_SCOPE_FAIL');fs.mkdirSync('ops',{recursive:true});fs.writeFileSync('ops/current-apps-script-deployment.txt',`deployment_id=${m[1]}\nping=PASS\nproject=bao-hang-1291\nprovider=NEON_FIREBASE_GOOGLE\n`);})().catch(e=>{console.error(e.message);process.exit(1)});
+          const fs=require('fs'),u=String(process.env.GOOGLE_SHEET_WEBHOOK_URL||'').trim();
+          (async()=>{const r=await fetch(u,{method:'POST',headers:{'content-type':'text/plain;charset=UTF-8'},body:JSON.stringify({action:'ping'})}),t=await r.text();let j={};try{j=JSON.parse(t)}catch{};if(!r.ok||j.ok!==true||j.project!=='bao-hang-1291')throw new Error('PING_FAIL');fs.mkdirSync('ops',{recursive:true});fs.writeFileSync('ops/live-staff-source-check.txt',`ping=PASS\nstaff_sheet_id=${String(j.staff_sheet_id||'')}\nstaff_sheet_name=${String(j.staff_sheet_name||'')}\n`);})().catch(e=>{console.error(e.message);process.exit(1)});
           NODE
-          cat ops/current-apps-script-deployment.txt
-      - name: Commit sanitized result
+          cat ops/live-staff-source-check.txt
+      - name: Commit proof
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git add ops/current-apps-script-deployment.txt;git diff --cached --quiet || git commit -m 'chore(temp): record current Bao Hang Apps Script deployment';git pull --rebase origin main;git push origin HEAD:main
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git add ops/live-staff-source-check.txt;git diff --cached --quiet || git commit -m 'chore(temp): record live staff source markers';git pull --rebase origin main;git push origin HEAD:main
