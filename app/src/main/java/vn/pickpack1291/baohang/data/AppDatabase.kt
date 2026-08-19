@@ -81,6 +81,14 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
             db.execSQL("ALTER TABLE issue_cache ADD COLUMN previous_issue_id TEXT")
             db.execSQL("ALTER TABLE issue_cache ADD COLUMN recurrence_30m INTEGER NOT NULL DEFAULT 0")
         }
+        if (oldVersion < 5) {
+            // Server snapshots are authoritative. A reset may legitimately be an empty snapshot.
+            db.delete("sku_catalog", null, null)
+            db.delete("issue_cache", null, null)
+            db.delete("metadata", "key IN (?,?)", arrayOf("catalog_last_sync", "catalog_revision"))
+            // Báo hàng has no offline-accept mode. Drop poison reports created by the old 1.6.5 fallback bug.
+            db.delete("outbox", "action=?", arrayOf("report-shortage"))
+        }
     }
 
     fun upsertSkus(items: List<SkuItem>) {
@@ -98,6 +106,24 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
             }
             writableDatabase.setTransactionSuccessful()
         } finally { writableDatabase.endTransaction() }
+    }
+
+    fun replaceSkus(items: List<SkuItem>) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("sku_catalog", null, null)
+            val values = ContentValues()
+            items.forEach { item ->
+                values.clear()
+                values.put("sku", item.sku)
+                values.put("product_name", item.productName)
+                values.put("search_text", normalize("${item.sku} ${item.productName}"))
+                values.put("updated_at", System.currentTimeMillis().toString())
+                db.insertWithOnConflict("sku_catalog", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
     }
 
     fun searchSkus(query: String, limit: Int = 20): List<SkuItem> {
@@ -175,6 +201,34 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
         } finally { writableDatabase.endTransaction() }
     }
 
+    fun replaceIssues(issues: List<StockIssue>) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("issue_cache", null, null)
+            val values = ContentValues()
+            issues.forEach { issue ->
+                values.clear()
+                values.put("id", issue.id)
+                values.put("sku", issue.sku)
+                values.put("product_name", issue.productName)
+                values.put("status", issue.status.wire)
+                values.put("report_count", issue.reportCount)
+                values.put("reported_at", issue.reportedAt)
+                values.put("updated_at", issue.updatedAt)
+                values.put("assigned_name", issue.assignedName)
+                values.put("assigned_id", issue.assignedId)
+                values.put("latest_reporter_name", issue.latestReporterName)
+                values.put("latest_message", issue.latestMessage)
+                values.put("issue_version", issue.issueVersion)
+                values.put("previous_issue_id", issue.previousIssueId)
+                values.put("recurrence_30m", if (issue.recurrence30m) 1 else 0)
+                db.insertWithOnConflict("issue_cache", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
     private fun issueFromCursor(cursor: android.database.Cursor) = StockIssue(
         id = cursor.getString(0), sku = cursor.getString(1), productName = cursor.getString(2), status = IssueStatus.from(cursor.getString(3)),
         reportCount = cursor.getInt(4), reportedAt = cursor.getString(5), updatedAt = cursor.getString(6), assignedName = cursor.getString(7),
@@ -225,7 +279,7 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
 
     companion object {
         private const val DB_NAME = "bao_hang_1291.db"
-        private const val DB_VERSION = 4
+        private const val DB_VERSION = 5
 
         fun normalize(value: String): String = Normalizer.normalize(value.trim(), Normalizer.Form.NFD)
             .replace(Regex("\\p{M}+"), "")
