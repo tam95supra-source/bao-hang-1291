@@ -4,5 +4,6 @@
   "versionName": "1.6.6",
   "versionCode": 15,
   "mandatory": true,
-  "releaseNotes": "Beta 1.6.6: sửa đồng bộ App ↔ Web sau khi dữ liệu server bị clear; snapshot rỗng sẽ xóa cache SKU/lịch sử cũ trên App, báo SKU chỉ thành công khi server thực sự nhận, bỏ outbox báo thiếu sai từ 1.6.5, và lưu tín hiệu realtime FCM khi App ở nền để đồng bộ lại khi mở App."
+  "releaseNotes": "Beta 1.6.6: sửa đồng bộ App ↔ Web sau khi dữ liệu server bị clear; snapshot rỗng sẽ xóa cache SKU/lịch sử cũ trên App, báo SKU chỉ thành công khi server thực sự nhận, bỏ outbox báo thiếu sai từ 1.6.5, và lưu tín hiệu realtime FCM khi App ở nền để đồng bộ lại khi mở App.",
+  "retry": 2
 }
