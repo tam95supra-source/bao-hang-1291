@@ -30,7 +30,17 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
       - name: Apply guarded source patch
-        run: python3 ops/apply_realtime_ui_fix_20260819.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -Fq "emitIssueRealtimeSignal" web-admin/src/backend-runtime.js \
+             && grep -Fq "SKU đã báo hôm nay • cũ → mới" app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt \
+             && test -s firestore.rules \
+             && test -s sql/20260819_staff_realtime_coalesce.sql; then
+            echo 'PATCH_ALREADY_APPLIED=PASS'
+          else
+            python3 ops/apply_realtime_ui_fix_20260819.py
+          fi
       - name: Validate patch shape
         shell: bash
         run: |
