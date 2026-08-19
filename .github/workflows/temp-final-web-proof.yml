@@ -1,0 +1,60 @@
+name: Temp final Web realtime proof
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/final-web-proof.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Verify app source and live runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -n 'MutationObserver' web-admin/src/warehouse-ui-v2.js web-admin/src/ops-console.js
+          grep -q '__BH_WV2_RENDER__' web-admin/src/warehouse-ui-v2.js
+          grep -q '__BH_OPS_RENDER__' web-admin/src/ops-console.js
+          grep -q 'realtime-notice' web-admin/src/style.css
+          mkdir -p "$RUNNER_TEMP/live"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 https://bao-hang-1291.web.app/ -o "$RUNNER_TEMP/live/index.html"
+          python3 - <<'PY' > "$RUNNER_TEMP/live/assets.txt"
+          import re,os,pathlib
+          s=pathlib.Path(os.environ['RUNNER_TEMP']+'/live/index.html').read_text(errors='ignore')
+          print('\n'.join(re.findall(r'(?:src|href)=["\']([^"\']+\.js[^"\']*)',s)))
+          PY
+          : > "$RUNNER_TEMP/live/all.js"
+          while IFS= read -r asset; do
+            [ -n "$asset" ] || continue
+            case "$asset" in http*) url="$asset";; /*) url="https://bao-hang-1291.web.app$asset";; *) url="https://bao-hang-1291.web.app/$asset";; esac
+            curl -fsSL --retry 3 --retry-all-errors "$url" >> "$RUNNER_TEMP/live/all.js"
+          done < "$RUNNER_TEMP/live/assets.txt"
+          grep -q '__BH_WV2_RENDER__' "$RUNNER_TEMP/live/all.js"
+          grep -q '__BH_OPS_RENDER__' "$RUNNER_TEMP/live/all.js"
+          grep -q 'realtime-notice' "$RUNNER_TEMP/live/all.js"
+          COUNT=$(grep -o 'site:1291:issues' "$RUNNER_TEMP/live/all.js" | wc -l | tr -d ' ')
+          [ "$COUNT" = 1 ]
+          mkdir -p ops
+          {
+            echo 'status=PASS'
+            echo 'source_competing_ui_observers=0'
+            echo 'live_wv2_passive_renderer=PASS'
+            echo 'live_ops_passive_renderer=PASS'
+            echo 'live_realtime_notice=PASS'
+            echo "live_issue_topic_count=$COUNT"
+          } > ops/web-realtime-final-proof.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ops/web-realtime-final-proof.txt
+          git diff --cached --quiet || git commit -m 'chore(web): record final realtime UI proof'
+          git pull --rebase origin main
+          git push origin HEAD:main
