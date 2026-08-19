@@ -1,0 +1,58 @@
+name: Temp verify create user route
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/temp-verify-create-user-route.yml']
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      WORKER_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      FIREBASE_WEB_API_KEY: AIzaSyB-n368fntzxsuuLlvte9NXhcuX0DDbTXM
+      ADMIN_UID: 44fae0a2-09eb-4226-8412-0f1a1f5d7ef8
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }
+      - name: Call protected user route with intentionally invalid user
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ops "$RUNNER_TEMP/t"
+          node <<'NODE'
+          const fs=require('fs'),crypto=require('crypto');
+          const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');
+          const out=[]; const add=(k,v)=>out.push(`${k}=${v}`); const save=()=>fs.writeFileSync(process.env.RUNNER_TEMP+'/t/status.txt',out.join('\n')+'\n');
+          const enc=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');
+          async function req(url,opt={}){const r=await fetch(url,opt),text=await r.text();let j={};try{j=text?JSON.parse(text):{}}catch{j={raw:text}};return {r,j,text}}
+          (async()=>{
+            if(sa.project_id!=='bao-hang-1291'||!sa.client_email||!sa.private_key) throw new Error('SA_SCOPE');
+            const now=Math.floor(Date.now()/1000),h=enc({alg:'RS256',typ:'JWT'}),p=enc({iss:sa.client_email,sub:sa.client_email,aud:'https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit',iat:now,exp:now+900,uid:process.env.ADMIN_UID}),u=`${h}.${p}`,sig=crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url');
+            const a=await req(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${encodeURIComponent(process.env.FIREBASE_WEB_API_KEY)}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:`${u}.${sig}`,returnSecureToken:true})});
+            if(!a.r.ok||!a.j.idToken) throw new Error('ADMIN_TOKEN'); add('admin_token','PASS');
+            const w=await req(process.env.WORKER_URL,{method:'POST',headers:{'content-type':'text/plain;charset=UTF-8'},body:JSON.stringify({action:'update-user',id_token:a.j.idToken,user:{employee_code:'',full_name:'',role:'PICKER',active:true,initial_password:'x'}})});
+            add('worker_http',String(w.r.status));
+            add('worker_json',w.text.trim().startsWith('{')?'PASS':'FAIL');
+            const err=String(w.j?.error||'');
+            add('protected_route',w.j?.ok===false && /INVALID_USER/.test(err)?'PASS':'FAIL');
+            add('mutation','NONE_EXPECTED');
+            save();
+          })().catch(e=>{add('fatal',String(e.message).slice(0,120));save();});
+          NODE
+          cp "$RUNNER_TEMP/t/status.txt" ops/last-create-user-route-check.txt
+          cat ops/last-create-user-route-check.txt
+          grep -q '^admin_token=PASS$' ops/last-create-user-route-check.txt
+          grep -q '^worker_json=PASS$' ops/last-create-user-route-check.txt
+          grep -q '^protected_route=PASS$' ops/last-create-user-route-check.txt
+      - name: Commit proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ops/last-create-user-route-check.txt
+          git diff --cached --quiet || git commit -m 'chore: record create-user route verification'
+          git pull --rebase origin main
+          git push origin HEAD:main
