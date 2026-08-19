@@ -1,0 +1,178 @@
+name: Temp patch runtime and staff source
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/patch-runtime-staff.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Apply guarded root-cause patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(path, old, new):
+              p=Path(path); s=p.read_text()
+              if s.count(old)!=1:
+                  raise SystemExit(f'{path}: expected exactly one guarded match, got {s.count(old)}')
+              p.write_text(s.replace(old,new,1))
+
+          # Android DB: migration clears stale server snapshots but preserves durable outbox/offline pseudo issues.
+          p=Path('app/src/main/java/vn/pickpack1291/baohang/data/AppDatabase.kt')
+          s=p.read_text()
+          old='''        if (oldVersion < 4) {\n            db.execSQL("ALTER TABLE issue_cache ADD COLUMN assigned_id TEXT")\n            db.execSQL("ALTER TABLE issue_cache ADD COLUMN issue_version INTEGER NOT NULL DEFAULT 1")\n            db.execSQL("ALTER TABLE issue_cache ADD COLUMN previous_issue_id TEXT")\n            db.execSQL("ALTER TABLE issue_cache ADD COLUMN recurrence_30m INTEGER NOT NULL DEFAULT 0")\n        }\n'''
+          new=old+'''        if (oldVersion < 5) {\n            db.delete("sku_catalog", null, null)\n            db.delete("issue_cache", "id NOT LIKE 'offline-%'", null)\n            db.delete("metadata", "key IN (?,?)", arrayOf("catalog_last_sync", "catalog_revision"))\n        }\n'''
+          if s.count(old)!=1: raise SystemExit('AppDatabase migration guard mismatch')
+          s=s.replace(old,new,1)
+          old='''    fun skuCount(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM sku_catalog", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }\n    fun clearSkus() { writableDatabase.delete("sku_catalog", null, null) }\n\n'''
+          new='''    fun skuCount(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM sku_catalog", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }\n    fun clearSkus() { writableDatabase.delete("sku_catalog", null, null) }\n\n    fun replaceSkus(items: List<SkuItem>) {\n        val db = writableDatabase\n        db.beginTransaction()\n        try {\n            db.delete("sku_catalog", null, null)\n            val values = ContentValues()\n            items.forEach { item ->\n                values.clear()\n                values.put("sku", item.sku)\n                values.put("product_name", item.productName)\n                values.put("search_text", normalize("${item.sku} ${item.productName}"))\n                values.put("updated_at", System.currentTimeMillis().toString())\n                db.insertWithOnConflict("sku_catalog", null, values, SQLiteDatabase.CONFLICT_REPLACE)\n            }\n            db.setTransactionSuccessful()\n        } finally { db.endTransaction() }\n    }\n\n'''
+          if s.count(old)!=1: raise SystemExit('AppDatabase SKU guard mismatch')
+          s=s.replace(old,new,1)
+          marker='''    private fun issueFromCursor(cursor: android.database.Cursor) = StockIssue(\n'''
+          insert='''    fun replaceIssues(issues: List<StockIssue>) {\n        val db = writableDatabase\n        db.beginTransaction()\n        try {\n            db.delete("issue_cache", "id NOT LIKE 'offline-%'", null)\n            val values = ContentValues()\n            issues.forEach { issue ->\n                values.clear()\n                values.put("id", issue.id)\n                values.put("sku", issue.sku)\n                values.put("product_name", issue.productName)\n                values.put("status", issue.status.wire)\n                values.put("report_count", issue.reportCount)\n                values.put("reported_at", issue.reportedAt)\n                values.put("updated_at", issue.updatedAt)\n                values.put("assigned_name", issue.assignedName)\n                values.put("assigned_id", issue.assignedId)\n                values.put("latest_reporter_name", issue.latestReporterName)\n                values.put("latest_message", issue.latestMessage)\n                values.put("issue_version", issue.issueVersion)\n                values.put("previous_issue_id", issue.previousIssueId)\n                values.put("recurrence_30m", if (issue.recurrence30m) 1 else 0)\n                db.insertWithOnConflict("issue_cache", null, values, SQLiteDatabase.CONFLICT_REPLACE)\n            }\n            db.setTransactionSuccessful()\n        } finally { db.endTransaction() }\n    }\n\n    fun removeOfflineIssueBySku(sku: String) {\n        writableDatabase.delete("issue_cache", "id LIKE 'offline-%' AND sku=?", arrayOf(sku))\n    }\n\n'''
+          if s.count(marker)!=1: raise SystemExit('AppDatabase issue marker mismatch')
+          s=s.replace(marker,insert+marker,1)
+          if 'private const val DB_VERSION = 4' not in s: raise SystemExit('DB version guard mismatch')
+          s=s.replace('private const val DB_VERSION = 4','private const val DB_VERSION = 5',1)
+          p.write_text(s)
+
+          # Repository: semantic 4xx is not offline; canonical reads replace stale cache; catalog snapshot commits atomically.
+          p=Path('app/src/main/java/vn/pickpack1291/baohang/data/AppRepository.kt')
+          s=p.read_text()
+          imp='import vn.pickpack1291.baohang.network.ApiClient\n'
+          if s.count(imp)!=1: raise SystemExit('AppRepository import guard mismatch')
+          s=s.replace(imp,imp+'import vn.pickpack1291.baohang.network.ApiException\n',1)
+          old='''        } catch (error: Exception) {\n            diagnostics.error("shortage_submit_offline", error, mapOf("sku" to sku))\n'''
+          new='''        } catch (error: Exception) {\n            if (error is ApiException && error.statusCode in 400..499) {\n                diagnostics.warn("shortage_submit_rejected", mapOf("sku" to sku, "status" to error.statusCode, "code" to error.code))\n                throw error\n            }\n            diagnostics.error("shortage_submit_offline", error, mapOf("sku" to sku))\n'''
+          if s.count(old)!=1: raise SystemExit('reportShortage catch guard mismatch')
+          s=s.replace(old,new,1)
+          s=s.replace('api.myIssues().also(database::upsertIssues)','api.myIssues().also(database::replaceIssues)',1)
+          s=s.replace('api.activeIssues().also(database::upsertIssues)','api.activeIssues().also(database::replaceIssues)',1)
+          old='''    suspend fun loadIssueBoard(): IssueBoard = api.issueBoard().also {\n        database.upsertIssues(it.open + it.claimed + it.recent)\n    }\n'''
+          new='''    suspend fun loadIssueBoard(): IssueBoard = api.issueBoard().also {\n        database.replaceIssues(it.open + it.claimed + it.recent + it.withdrawn)\n    }\n'''
+          if s.count(old)!=1: raise SystemExit('issue board guard mismatch')
+          s=s.replace(old,new,1)
+          old='''    suspend fun syncCatalog(onPage: ((count: Int) -> Unit)? = null): Int {\n        var syncUntil: String? = null\n        var afterSku: String? = null\n        var count = 0\n        var revision: Long? = null\n        var hasMore = true\n        diagnostics.info("catalog_sync_start", mapOf("mode" to "active_full"))\n        while (hasMore) {\n            val page = api.catalogPage(afterSku, null, syncUntil)\n            syncUntil = page.syncUntil\n            if (revision == null) {\n                revision = page.revision\n                val localRevision = database.metadata("catalog_revision")?.toLongOrNull()\n                if (localRevision != page.revision) database.clearSkus()\n            }\n            database.upsertSkus(page.items)\n            count += page.items.size\n            afterSku = page.items.lastOrNull()?.sku ?: afterSku\n            onPage?.invoke(count)\n            hasMore = page.hasMore && page.items.isNotEmpty()\n        }\n        syncUntil?.let { database.setMetadata("catalog_last_sync", it) }\n        revision?.let { database.setMetadata("catalog_revision", it.toString()) }\n        diagnostics.info("catalog_sync_success", mapOf("received" to count, "local_count" to database.skuCount(), "revision" to (revision ?: 0L)))\n        return count\n    }    suspend fun flushOutbox(): Int {\n'''
+          new='''    suspend fun syncCatalog(onPage: ((count: Int) -> Unit)? = null): Int {\n        var syncUntil: String? = null\n        var afterSku: String? = null\n        var count = 0\n        var revision: Long? = null\n        var hasMore = true\n        val snapshot = mutableListOf<SkuItem>()\n        diagnostics.info("catalog_sync_start", mapOf("mode" to "active_full_snapshot"))\n        while (hasMore) {\n            val page = api.catalogPage(afterSku, null, syncUntil)\n            syncUntil = page.syncUntil\n            if (revision == null) revision = page.revision\n            snapshot += page.items\n            count += page.items.size\n            afterSku = page.items.lastOrNull()?.sku ?: afterSku\n            onPage?.invoke(count)\n            hasMore = page.hasMore && page.items.isNotEmpty()\n        }\n        database.replaceSkus(snapshot)\n        syncUntil?.let { database.setMetadata("catalog_last_sync", it) }\n        revision?.let { database.setMetadata("catalog_revision", it.toString()) }\n        diagnostics.info("catalog_sync_success", mapOf("received" to count, "local_count" to database.skuCount(), "revision" to (revision ?: 0L)))\n        return count\n    }\n\n    suspend fun flushOutbox(): Int {\n'''
+          if s.count(old)!=1: raise SystemExit('catalog sync guard mismatch')
+          s=s.replace(old,new,1)
+          old='''                api.invoke(item.action, item.payload)\n                database.removeOutbox(item.id)\n                sent++\n'''
+          new='''                api.invoke(item.action, item.payload)\n                if (item.action == "report-shortage") {\n                    database.removeOfflineIssueBySku(item.payload.optString("sku"))\n                }\n                database.removeOutbox(item.id)\n                sent++\n'''
+          if s.count(old)!=1: raise SystemExit('outbox guard mismatch')
+          s=s.replace(old,new,1)
+          p.write_text(s)
+
+          # Realtime invalidation: only call delivered when a foreground listener actually got it.
+          p=Path('app/src/main/java/vn/pickpack1291/baohang/realtime/RealtimeSignalBus.kt')
+          s=p.read_text()
+          old='''        listeners.forEach { listener -> runCatching { listener(topic) } }\n        return true\n'''
+          new='''        val current = listeners.toList()\n        current.forEach { listener -> runCatching { listener(topic) } }\n        return current.isNotEmpty()\n'''
+          if s.count(old)!=1: raise SystemExit('RealtimeSignalBus guard mismatch')
+          p.write_text(s.replace(old,new,1))
+
+          # Durable foreground handoff for FCM deltas delivered while Activity is stopped.
+          Path('app/src/main/java/vn/pickpack1291/baohang/realtime/RealtimeInvalidationStore.kt').write_text('''package vn.pickpack1291.baohang.realtime\n\nimport android.content.Context\n\nobject RealtimeInvalidationStore {\n    private const val PREFS = "bao_hang_realtime_pending"\n    private val allowed = setOf("issues", "catalog", "staff", "config")\n\n    @Synchronized\n    fun markPending(context: Context, rawTopic: String) {\n        val topic = rawTopic.trim().lowercase()\n        if (topic !in allowed) return\n        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(topic, true).apply()\n    }\n\n    @Synchronized\n    fun consume(context: Context): Set<String> {\n        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)\n        val pending = allowed.filterTo(linkedSetOf()) { prefs.getBoolean(it, false) }\n        if (pending.isNotEmpty()) prefs.edit().clear().apply()\n        return pending\n    }\n}\n''')
+
+          p=Path('app/src/main/java/vn/pickpack1291/baohang/notifications/StockMessagingService.kt')
+          s=p.read_text()
+          imp='import vn.pickpack1291.baohang.realtime.RealtimeSignalBus\n'
+          if s.count(imp)!=1: raise SystemExit('StockMessaging import guard mismatch')
+          s=s.replace(imp,imp+'import vn.pickpack1291.baohang.realtime.RealtimeInvalidationStore\n',1)
+          old='''            val published = RealtimeSignalBus.publish(topic)\n            app.diagnostics.info(\n'''
+          new='''            val published = RealtimeSignalBus.publish(topic)\n            if (!published) RealtimeInvalidationStore.markPending(this, topic)\n            app.diagnostics.info(\n'''
+          if s.count(old)!=1: raise SystemExit('StockMessaging realtime guard mismatch')
+          p.write_text(s.replace(old,new,1))
+
+          # Main UI: consume durable invalidations and never claim an offline queue write was accepted by server.
+          p=Path('app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt')
+          s=p.read_text()
+          imp='import vn.pickpack1291.baohang.realtime.RealtimeClient\n'
+          if s.count(imp)!=1: raise SystemExit('MainActivity import guard mismatch')
+          s=s.replace(imp,imp+'import vn.pickpack1291.baohang.realtime.RealtimeInvalidationStore\n',1)
+          old='''    override fun onResume() {\n        super.onResume()\n        if (app.session.isLoggedIn) lifecycleScope.launch { checkPendingAlerts() }\n    }\n'''
+          new='''    override fun onResume() {\n        super.onResume()\n        if (!app.session.isLoggedIn) return\n        val pending = RealtimeInvalidationStore.consume(this)\n        lifecycleScope.launch {\n            if ("staff" in pending) {\n                runCatching { app.repository.refreshProfile() }\n                if (currentScreen == SCREEN_USERS) showUsers()\n            }\n            if ("issues" in pending) {\n                when (currentScreen) {\n                    SCREEN_INVENT -> inventRefresh?.invoke()\n                    SCREEN_PICKER -> pickerRefresh?.invoke()\n                }\n            }\n            if ("config" in pending) {\n                when (currentScreen) {\n                    SCREEN_SLA -> showOperationalSla()\n                    SCREEN_CONFIG -> showConfig()\n                }\n            }\n            checkPendingAlerts()\n        }\n        if ("catalog" in pending) lifecycleScope.launch(Dispatchers.IO) {\n            runCatching { app.repository.syncCatalog() }\n                .onFailure { app.diagnostics.warn("catalog_resume_invalidation_failed", mapOf("error" to it.message.orEmpty())) }\n            runOnUiThread { if (currentScreen == SCREEN_CATALOG) showCatalog() }\n        }\n    }\n'''
+          if s.count(old)!=1: raise SystemExit('MainActivity onResume guard mismatch')
+          s=s.replace(old,new,1)
+          old='''                    .onSuccess {\n                        toast("Đã ghi nhận báo thiếu SKU ${item.sku}")\n                        clearSelection()\n'''
+          new='''                    .onSuccess { result ->\n                        toast(result.message.ifBlank { "Đã ghi nhận báo thiếu SKU ${item.sku}" })\n                        clearSelection()\n'''
+          if s.count(old)!=1: raise SystemExit('MainActivity report toast guard mismatch')
+          s=s.replace(old,new,1)
+          p.write_text(s)
+
+          # Canonical staff source is the entire exact tab, not old Site/Kho subset.
+          p=Path('google-apps-script/DEPLOY_NEON.gs')
+          s=p.read_text()
+          old='''  const variants = ["select A,B,D,E,F where G = 1291 and H = 'HY1'","select A,B,D,E,F where G = '1291' and H = 'HY1'"];'''
+          new='''  const variants = ["select A,B,D,E,F"];'''
+          if s.count(old)!=1: raise SystemExit('Apps Script staff source filter guard mismatch')
+          s=s.replace(old,new,1)
+          old='''function installWorkerTriggers_() {\n  ScriptApp.getProjectTriggers().forEach(function(t) {\n    const f = t.getHandlerFunction();\n    if (f === 'workerSafetyTick' || f === 'workerAdaptiveTick') ScriptApp.deleteTrigger(t);\n  });\n  ScriptApp.newTrigger('workerSafetyTick').timeBased().everyMinutes(30).create();\n}\n'''
+          new='''function installWorkerTriggers_() {\n  ScriptApp.getProjectTriggers().forEach(function(t) {\n    const f = t.getHandlerFunction();\n    if (f === 'workerSafetyTick' || f === 'workerAdaptiveTick' || f === 'staffSourceEditTrigger' || f === 'staffSourceChangeTrigger') ScriptApp.deleteTrigger(t);\n  });\n  ScriptApp.newTrigger('workerSafetyTick').timeBased().everyMinutes(30).create();\n  ScriptApp.newTrigger('staffSourceEditTrigger').forSpreadsheet(BH_STAFF_SHEET_ID).onEdit().create();\n  ScriptApp.newTrigger('staffSourceChangeTrigger').forSpreadsheet(BH_STAFF_SHEET_ID).onChange().create();\n}\n\nfunction staffSourceEditTrigger(e) {\n  try {\n    if (!e || !e.range || e.range.getSheet().getName() !== BH_STAFF_SHEET_NAME) return;\n    markStaffSourceDirtyAndSync_('SOURCE_EDIT');\n  } catch (error) { PropertiesService.getScriptProperties().setProperty('LAST_STAFF_SYNC_ERROR', safeError_(error)); }\n}\n\nfunction staffSourceChangeTrigger(e) {\n  try {\n    if (e && String(e.changeType || '').toUpperCase() === 'EDIT') return;\n    markStaffSourceDirtyAndSync_('SOURCE_CHANGE');\n  } catch (error) { PropertiesService.getScriptProperties().setProperty('LAST_STAFF_SYNC_ERROR', safeError_(error)); }\n}\n\nfunction markStaffSourceDirtyAndSync_(source) {\n  const props = PropertiesService.getScriptProperties();\n  props.setProperty('STAFF_SOURCE_DIRTY', '1');\n  const lock = LockService.getScriptLock();\n  if (!lock.tryLock(1000)) return;\n  try {\n    for (let pass = 0; pass < 3 && props.getProperty('STAFF_SOURCE_DIRTY') === '1'; pass++) {\n      props.deleteProperty('STAFF_SOURCE_DIRTY');\n      runStaffSync_(source, {role:'ADMIN'});\n    }\n  } finally { lock.releaseLock(); }\n}\n'''
+          if s.count(old)!=1: raise SystemExit('Apps Script trigger guard mismatch')
+          s=s.replace(old,new,1)
+          # Disable interval-based staff polling permanently; source edit/change triggers own this concern.
+          pat=r"function maybeStaffSync_\(token\) \{.*?\n\}\n\nfunction runStaffSync_"
+          repl="function maybeStaffSync_(token) { return; }\n\nfunction runStaffSync_"
+          s2,n=re.subn(pat,repl,s,count=1,flags=re.S)
+          if n!=1: raise SystemExit('Apps Script maybeStaffSync guard mismatch')
+          p.write_text(s2)
+
+          # Recovery workflow remains manual-only and reads the full exact staff tab.
+          p=Path('.github/workflows/staff-sync.yml')
+          s=p.read_text()
+          s=s.replace("on:\n  schedule:\n    - cron: '17 * * * *'\n  workflow_dispatch:\n","on:\n  workflow_dispatch:\n",1)
+          old='''          print(base+'?'+urllib.parse.urlencode({'tqx':'out:csv','sheet':os.environ['STAFF_SHEET_NAME'],'tq':"select A,B,D,E,F where G = 1291 and H = 'HY1'"}))'''
+          new='''          print(base+'?'+urllib.parse.urlencode({'tqx':'out:csv','sheet':os.environ['STAFF_SHEET_NAME'],'tq':"select A,B,D,E,F"}))'''
+          if s.count(old)!=1: raise SystemExit('staff-sync workflow query guard mismatch')
+          s=s.replace(old,new,1)
+          p.write_text(s)
+
+          # Evidence-oriented static assertions.
+          checks={
+            'App DB v5':'private const val DB_VERSION = 5',
+            'atomic empty catalog':'database.replaceSkus(snapshot)',
+            'semantic reject':'shortage_submit_rejected',
+            'durable realtime':'RealtimeInvalidationStore.consume(this)',
+            'full staff source':'const variants = ["select A,B,D,E,F"]',
+            'event trigger':"newTrigger('staffSourceEditTrigger')",
+          }
+          joined='\n'.join(Path(x).read_text() for x in [
+            'app/src/main/java/vn/pickpack1291/baohang/data/AppDatabase.kt',
+            'app/src/main/java/vn/pickpack1291/baohang/data/AppRepository.kt',
+            'app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt',
+            'google-apps-script/DEPLOY_NEON.gs'])
+          for label,needle in checks.items():
+              if needle not in joined: raise SystemExit('missing '+label)
+          PY
+
+          grep -q '^on:' .github/workflows/staff-sync.yml
+          ! grep -q 'cron:' .github/workflows/staff-sync.yml
+          ! grep -q "where G = 1291 and H = 'HY1'" .github/workflows/staff-sync.yml google-apps-script/DEPLOY_NEON.gs
+          git diff --check
+
+      - name: Commit root-cause patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/vn/pickpack1291/baohang google-apps-script/DEPLOY_NEON.gs .github/workflows/staff-sync.yml
+          git diff --cached --quiet && { echo 'No patch produced' >&2; exit 1; }
+          git commit -m 'fix(runtime): reconcile cleared snapshots and event-driven staff source'
+          git pull --rebase origin main
+          git push origin HEAD:main
