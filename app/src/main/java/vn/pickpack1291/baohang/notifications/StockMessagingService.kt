@@ -10,6 +10,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import vn.pickpack1291.baohang.BaoHangApplication
 import vn.pickpack1291.baohang.data.IssueStatus
+import vn.pickpack1291.baohang.realtime.RealtimeInvalidationStore
 import vn.pickpack1291.baohang.realtime.RealtimeSignalBus
 
 class StockMessagingService : FirebaseMessagingService() {
@@ -30,12 +31,14 @@ class StockMessagingService : FirebaseMessagingService() {
         if (data["event_type"] == "REALTIME_DELTA") {
             val topic = data["topic"].orEmpty()
             val published = RealtimeSignalBus.publish(topic)
+            if (!published) RealtimeInvalidationStore.markPending(this, topic)
             app.diagnostics.info(
                 "fcm_realtime_delta",
                 mapOf(
                     "topic" to topic,
                     "event_id" to data["realtime_event_id"].orEmpty(),
-                    "published_to_foreground" to published
+                    "published_to_foreground" to published,
+                    "persisted_for_resume" to !published
                 )
             )
             return
@@ -60,8 +63,6 @@ class StockMessagingService : FirebaseMessagingService() {
             return
         }
 
-        // Notification is a hint, never the source of truth. A locally cached newer issue
-        // version is enough to prove this FCM is stale and must not cover newer UI state.
         val cached = issueId.takeIf { it.isNotBlank() }?.let(app.database::cachedIssue)
         val stale = cached != null && (
             cached.issueVersion > incomingVersion ||
