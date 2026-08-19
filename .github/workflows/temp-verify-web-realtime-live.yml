@@ -1,0 +1,115 @@
+name: Temp verify Web realtime live
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/verify-web-realtime-live.trigger'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      FIREBASE_PROJECT: bao-hang-1291
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Clear stale Firestore realtime signal docs and enforce Billing OFF
+        id: cloud
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/verify"
+          node <<'NODE'
+          const fs=require('fs'),crypto=require('crypto');
+          const result={billing:'FAIL',firestore:'FAIL',error:''}; const path=process.env.RUNNER_TEMP+'/verify/cloud.json';
+          const save=()=>fs.writeFileSync(path,JSON.stringify(result));
+          const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');
+          const enc=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');
+          function jwt(payload){const h=enc({alg:'RS256',typ:'JWT'}),p=enc(payload),u=h+'.'+p,s=crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url');return u+'.'+s}
+          async function req(url,opt={}){const r=await fetch(url,opt);const text=await r.text();let j={};try{j=text?JSON.parse(text):{}}catch{j={raw:text}};if(!r.ok){const e=new Error('HTTP_'+r.status+':'+String(j?.error?.message||j?.error||j?.raw||'').slice(0,180));e.status=r.status;throw e}return j}
+          async function token(scope){const now=Math.floor(Date.now()/1000),assertion=jwt({iss:sa.client_email,scope,aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+900});const j=await req('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth2:grant-type:jwt-bearer',assertion})}).catch(async()=>req('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth2:grant-type:jwt-bearer',assertion})}));return j.access_token}
+          (async()=>{try{
+            if(sa.project_id!==process.env.FIREBASE_PROJECT)throw new Error('PROJECT_SCOPE_MISMATCH');
+            const access=await token('https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/datastore'); if(!access)throw new Error('ACCESS_TOKEN_MISSING');
+            const b=await req('https://cloudbilling.googleapis.com/v1/projects/'+process.env.FIREBASE_PROJECT+'/billingInfo',{headers:{authorization:'Bearer '+access}}); if(b.billingEnabled===true)throw new Error('COST_GUARD_STOP_BILLING_ENABLED'); result.billing='PASS';
+            for(const doc of ['issues','catalog','staff']){const u='https://firestore.googleapis.com/v1/projects/'+process.env.FIREBASE_PROJECT+'/databases/(default)/documents/realtime/'+doc;const r=await fetch(u,{method:'DELETE',headers:{authorization:'Bearer '+access}});if(!(r.ok||r.status===404))throw new Error('FIRESTORE_DELETE_'+doc+'_'+r.status)}
+            result.firestore='PASS'; save();
+          }catch(e){result.error=String(e.message).slice(0,800);save();process.exitCode=2}})();
+          NODE
+      - name: Verify Firebase Hosting live bundle
+        id: live
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/verify/live"
+          STATUS=FAIL
+          DETAIL='not_verified'
+          ISSUE_TOPIC_COUNT=0
+          for attempt in $(seq 1 24); do
+            rm -rf "$RUNNER_TEMP/verify/live"/*
+            if curl -fsSL --retry 2 --retry-all-errors https://bao-hang-1291.web.app/ -o "$RUNNER_TEMP/verify/live/index.html"; then
+              python3 - <<'PY' > "$RUNNER_TEMP/verify/live/assets.txt"
+          import re, pathlib
+          s=pathlib.Path(__import__('os').environ['RUNNER_TEMP']+'/verify/live/index.html').read_text(errors='ignore')
+          for x in re.findall(r'(?:src|href)=["\']([^"\']+\.js[^"\']*)',s): print(x)
+          PY
+              : > "$RUNNER_TEMP/verify/live/all.js"
+              while IFS= read -r asset; do
+                [ -n "$asset" ] || continue
+                case "$asset" in http*) url="$asset";; /*) url="https://bao-hang-1291.web.app$asset";; *) url="https://bao-hang-1291.web.app/$asset";; esac
+                curl -fsSL --retry 2 --retry-all-errors "$url" >> "$RUNNER_TEMP/verify/live/all.js" || true
+                printf '\n' >> "$RUNNER_TEMP/verify/live/all.js"
+              done < "$RUNNER_TEMP/verify/live/assets.txt"
+              ISSUE_TOPIC_COUNT=$(grep -o 'site:1291:issues' "$RUNNER_TEMP/verify/live/all.js" | wc -l | tr -d ' ' || true)
+              if grep -q 'Có cập nhật báo hàng mới' "$RUNNER_TEMP/verify/live/all.js" \
+                && grep -q 'Danh sách nhân sự vừa cập nhật' "$RUNNER_TEMP/verify/live/all.js" \
+                && grep -q 'realtime-notice' "$RUNNER_TEMP/verify/live/all.js" \
+                && ! grep -q 'MutationObserver' "$RUNNER_TEMP/verify/live/all.js" \
+                && [ "$ISSUE_TOPIC_COUNT" = '1' ]; then
+                STATUS=PASS; DETAIL='stable_realtime_bundle'; break
+              fi
+              DETAIL="attempt_${attempt}_issue_topic_count_${ISSUE_TOPIC_COUNT}"
+            fi
+            sleep 5
+          done
+          printf '{"status":"%s","detail":"%s","issue_topic_count":%s}\n' "$STATUS" "$DETAIL" "${ISSUE_TOPIC_COUNT:-0}" > "$RUNNER_TEMP/verify/live.json"
+          [ "$STATUS" = PASS ]
+      - name: Record sanitized proof
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$RUNNER_TEMP/verify/cloud.json" || printf '{"billing":"FAIL","firestore":"FAIL","error":"no_cloud_result"}' > "$RUNNER_TEMP/verify/cloud.json"
+          test -s "$RUNNER_TEMP/verify/live.json" || printf '{"status":"FAIL","detail":"no_live_result","issue_topic_count":0}' > "$RUNNER_TEMP/verify/live.json"
+          mkdir -p ops
+          python3 - <<'PY' > ops/web-realtime-stable-live.txt
+          import json,os
+          root=os.environ['RUNNER_TEMP']+'/verify/'
+          c=json.load(open(root+'cloud.json')); l=json.load(open(root+'live.json'))
+          print('billing='+str(c.get('billing','FAIL')))
+          print('firestore_signal_cleanup='+str(c.get('firestore','FAIL')))
+          print('live='+str(l.get('status','FAIL')))
+          print('detail='+str(l.get('detail',''))[:300])
+          print('issue_topic_count='+str(l.get('issue_topic_count',0)))
+          print('error='+str(c.get('error','')).replace('\n',' ')[:500])
+          PY
+          cat ops/web-realtime-stable-live.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ops/web-realtime-stable-live.txt
+          git diff --cached --quiet || git commit -m 'chore(web): record stable realtime live proof'
+          git pull --rebase origin main
+          git push origin HEAD:main
+          grep -q '^billing=PASS$' ops/web-realtime-stable-live.txt
+          grep -q '^firestore_signal_cleanup=PASS$' ops/web-realtime-stable-live.txt
+          grep -q '^live=PASS$' ops/web-realtime-stable-live.txt
