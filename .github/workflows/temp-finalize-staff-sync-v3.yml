@@ -52,3 +52,4 @@ jobs:
           git diff --cached --quiet || git commit -m 'feat(staff): finalize hourly new-source sync'
           git pull --rebase origin main
           git push origin HEAD:main
+# trigger-v3: execute
