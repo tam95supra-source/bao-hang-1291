@@ -40,6 +40,7 @@ async function firebaseRuntime() {
 
 let installed = false
 let realtimeToken = ''
+const realtimeSnapshotMarkers = new Map()
 const ISSUE_SIGNAL_ACTIONS = new Set(['report-shortage', 'claim-issue', 'reassign-issue', 'update-issue', 'restore-skipped', 'withdraw-shortage'])
 const PICKER_ALERT_ACTIONS = new Set(['update-issue', 'restore-skipped'])
 const originalFetch = globalThis.fetch.bind(globalThis)
@@ -275,6 +276,21 @@ function installFetchAdapter() {
   globalThis.fetch = backendFetchAdapter
 }
 
+function realtimeSnapshotMarker(event) {
+  const normalize = (value) => {
+    if (value && typeof value.toMillis === 'function') return value.toMillis()
+    if (Array.isArray(value)) return value.map(normalize)
+    if (value && typeof value === 'object') {
+      const out = {}
+      for (const key of Object.keys(value).sort()) out[key] = normalize(value[key])
+      return out
+    }
+    return value
+  }
+  try { return JSON.stringify(normalize(event || {})) }
+  catch { return String(event?.event_id || event?.entity_id || event?.updated_at || '') }
+}
+
 class BackendChannel {
   constructor(name) {
     this.name = name
@@ -303,6 +319,13 @@ class BackendChannel {
         (snapshot) => {
           if (!snapshot.exists()) return
           const event = snapshot.data() || {}
+          if (snapshot.metadata?.hasPendingWrites) return
+          const marker = realtimeSnapshotMarker(event)
+          const previous = realtimeSnapshotMarkers.get(topic)
+          realtimeSnapshotMarkers.set(topic, marker)
+          // Firestore emits the current document immediately after every subscribe.
+          // Treat the first snapshot as a baseline and suppress reconnect duplicates.
+          if (previous === undefined || previous === marker) return
           this.handlers.forEach(({ filter, callback }) => {
             if (!filter?.event || filter.event === event.event_type) callback({ payload: event })
           })

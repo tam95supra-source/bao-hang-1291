@@ -18,6 +18,8 @@ const ui = {
   overviewClock: null,
   issueBoardCache: null,
   issueBoardAt: 0,
+  userSearch: '',
+  userTableScrollTop: 0,
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -303,6 +305,10 @@ function canManageUser(user) {
 async function renderUsersView() {
   const content = $('#content');
   if (!content || !isManager()) return;
+  const existingSearch = $('#opsUserSearch');
+  if (existingSearch) ui.userSearch = existingSearch.value;
+  const existingUserTable = content.querySelector('.ops-users-panel .table-wrap');
+  if (existingUserTable) ui.userTableScrollTop = existingUserTable.scrollTop;
   content.dataset.opsRender = 'users';
   if(content.dataset.opsRender!=='users'||!content.querySelector('.ops-users-table'))content.innerHTML = `${pageHeading('Nhân sự & tài khoản', 'Google Sheet là nguồn chính; tài khoản tạo thêm được quản lý riêng và không ghi ngược vào nguồn.', `<span class="ops-source-label">DỮ LIỆU THEO NGÀY · DANH SÁCH NHÂN SỰ</span>`)}<div class="ops-loading">Đang tải nhân sự…</div>`;
   try {
@@ -317,12 +323,12 @@ async function renderUsersView() {
     content.innerHTML = `${pageHeading('Nhân sự & tài khoản', 'Google Sheet là nguồn chính; tài khoản tạo thêm được quản lý riêng và không ghi ngược vào nguồn.', `<span class="ops-source-label">DỮ LIỆU THEO NGÀY · DANH SÁCH NHÂN SỰ</span>`)}
       <section class="ops-status-strip">
         <span><i class="dot ${last?.status === 'FAILED' ? 'warn' : 'good'}"></i>DỮ LIỆU THEO NGÀY: <b>${last ? `${last.status} · ${formatTime(last.finished_at)}` : 'chưa đồng bộ'}</b></span>
-        <span><i class="dot ${auto ? 'good' : 'warn'}"></i>Tự đồng bộ nguồn: <b>mỗi ${interval} phút</b></span>
+        <span><i class="dot good"></i>Đồng bộ nguồn: <b>${auto ? `dự phòng mỗi ${interval} phút` : 'theo sự kiện'}</b></span>
         <span><i class="dot good"></i>Thay đổi trong service: <b>realtime</b></span>
         <span>Google Sheet: <b>${gsheetCount}</b> · Tạo thêm: <b>${manualCount}</b></span>
       </section>
       <article class="ops-panel ops-users-panel">
-        <div class="ops-panel-title"><div><h3>Danh sách tài khoản</h3><p>Chỉ tài khoản “Tạo thêm” mới có nút Sửa/Xóa. Nhân sự Google Sheet được khóa theo nguồn.</p></div><label class="ops-search">Tìm<input id="opsUserSearch" placeholder="Mã nhân viên hoặc họ tên"></label></div>
+        <div class="ops-panel-title"><div><h3>Danh sách tài khoản</h3><p>Chỉ tài khoản “Tạo thêm” mới có nút Sửa/Xóa. Nhân sự Google Sheet được khóa theo nguồn.</p></div><label class="ops-search">Tìm<input id="opsUserSearch" placeholder="Mã nhân viên hoặc họ tên" value="${escapeHtml(ui.userSearch)}"></label></div>
         <div class="table-wrap"><table class="ops-users-table"><thead><tr><th>Mã nhân viên</th><th>Họ tên</th><th>Quyền</th><th>Nguồn</th><th>Trạng thái</th><th class="ops-action-col">Thao tác</th></tr></thead><tbody id="opsUserRows"></tbody></table></div>
       </article>
       <article class="ops-panel ops-create-user"><div class="ops-panel-title"><div><h3>Thêm tài khoản ngoài Google Sheet</h3><p>Chỉ cần mã nhân viên, họ tên, quyền và mật khẩu. Không yêu cầu nhà thầu.</p></div></div>
@@ -350,7 +356,16 @@ async function renderUsersView() {
       $$('[data-delete-user]').forEach((button) => button.onclick = () => openDeleteUser(users.find((u) => u.id === button.dataset.deleteUser), async () => { await renderUsersView(); }));
     };
     draw();
-    $('#opsUserSearch').addEventListener('input', draw);
+    const searchInput = $('#opsUserSearch');
+    if (searchInput) {
+      searchInput.value = ui.userSearch;
+      searchInput.addEventListener('input', () => { ui.userSearch = searchInput.value; draw(); });
+    }
+    const userTableWrap = content.querySelector('.ops-users-panel .table-wrap');
+    if (userTableWrap) {
+      userTableWrap.scrollTop = ui.userTableScrollTop;
+      userTableWrap.addEventListener('scroll', () => { ui.userTableScrollTop = userTableWrap.scrollTop; }, { passive: true });
+    }
     $('#opsCreateUser').addEventListener('submit', async (event) => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
