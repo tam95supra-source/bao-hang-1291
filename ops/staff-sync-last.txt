@@ -1,6 +1,6 @@
-status=PARTIAL
-created=34
+status=SUCCEEDED
+created=1
 updated=0
 deactivated=0
-failed=1
-error=10361:WORKER_INVALID_TOKEN
+failed=0
+error=
