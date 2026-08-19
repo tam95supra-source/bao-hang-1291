@@ -12,14 +12,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { fetch-depth: 0 }
-      - name: Patch Web runtime and staff UI
+      - name: Restore UUID-safe worker account creation
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/patch_account_create_v2.py
+          python3 scripts/use_worker_for_account_create.py
           node --check web-admin/src/backend-runtime.js
-          node --check web-admin/src/ops-console.js
-          grep -q 'api_admin_create_profile_rpc' web-admin/src/backend-runtime.js
+          grep -q "text/plain;charset=UTF-8" web-admin/src/backend-runtime.js
+          grep -q "initial_password: body.initial_password || body.password || ''" web-admin/src/backend-runtime.js
+          ! grep -q 'api_admin_create_profile_rpc' web-admin/src/backend-runtime.js
           grep -q 'DỮ LIỆU THEO NGÀY' web-admin/src/ops-console.js
           ! grep -q "opsStaffSync').onclick" web-admin/src/ops-console.js
       - name: Commit Web patch
@@ -28,7 +29,7 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add web-admin/src/backend-runtime.js web-admin/src/ops-console.js
-          git diff --cached --quiet || git commit -m 'fix(web): create accounts without legacy Apps Script worker'
+          git add web-admin/src/backend-runtime.js
+          git diff --cached --quiet || git commit -m 'fix(web): use UUID-safe Firebase Admin worker for account creation'
           git pull --rebase origin main
           git push origin HEAD:main
