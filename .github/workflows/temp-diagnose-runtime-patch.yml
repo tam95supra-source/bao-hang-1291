@@ -1,0 +1,39 @@
+name: Temp diagnose runtime patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/diagnose-runtime-patch.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Run patch dry diagnostic
+        shell: bash
+        run: |
+          set +e
+          python3 ops/patch_runtime_staff.py > "$RUNNER_TEMP/patch.log" 2>&1
+          code=$?
+          printf 'exit=%s\n' "$code" > ops/patch-runtime-staff-last.txt
+          tail -n 8 "$RUNNER_TEMP/patch.log" | sed 's/[[:cntrl:]]//g' | head -c 1200 >> ops/patch-runtime-staff-last.txt
+          cat ops/patch-runtime-staff-last.txt
+      - name: Record proof
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ops/patch-runtime-staff-last.txt
+          git diff --cached --quiet || git commit -m 'chore(runtime): record patch diagnostic'
+          git pull --rebase origin main
+          git push origin HEAD:main
