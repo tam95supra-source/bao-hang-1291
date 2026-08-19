@@ -1,0 +1,53 @@
+name: Temp verify Web account v2 live
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/temp-verify-web-account-v2.yml']
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }
+      - name: Verify billing off and live bundle contains account v2
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ops "$RUNNER_TEMP/web"
+          node <<'NODE'
+          const fs=require('fs'),crypto=require('crypto');
+          const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');
+          if(sa.project_id!=='bao-hang-1291'||!sa.client_email||!sa.private_key)throw new Error('SA_SCOPE');
+          const enc=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');
+          async function main(){
+            const now=Math.floor(Date.now()/1000),h=enc({alg:'RS256',typ:'JWT'}),p=enc({iss:sa.client_email,scope:'https://www.googleapis.com/auth/cloud-platform',aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+900}),u=h+'.'+p,s=crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url');
+            let r=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:u+'.'+s})});if(!r.ok)throw new Error('OAUTH_'+r.status);const token=(await r.json()).access_token;
+            r=await fetch('https://cloudbilling.googleapis.com/v1/projects/bao-hang-1291/billingInfo',{headers:{Authorization:'Bearer '+token}});if(!r.ok)throw new Error('BILLING_'+r.status);const b=await r.json();if(b.billingEnabled===true)throw new Error('COST_GUARD_STOP');
+            const index=await (await fetch('https://bao-hang-1291.web.app/',{cache:'no-store'})).text();const srcs=[...index.matchAll(/<script[^>]+src=["']([^"']+)["']/g)].map(m=>m[1]);let bundle='';for(const src of srcs){const url=new URL(src,'https://bao-hang-1291.web.app/');const rr=await fetch(url,{cache:'no-store'});if(rr.ok)bundle+='\n'+await rr.text()}
+            const account=bundle.includes('api_admin_create_profile_rpc');const staff=bundle.includes('DỮ LIỆU THEO NGÀY')&&bundle.includes('DANH SÁCH NHÂN SỰ');const legacy=bundle.includes("opsStaffSync");
+            fs.writeFileSync('ops/web-account-v2-live.txt',`billing=OFF\nweb_http=200\naccount_v2=${account?'PASS':'FAIL'}\nstaff_source_label=${staff?'PASS':'FAIL'}\nlegacy_staff_button=${legacy?'PRESENT':'ABSENT'}\n`);
+            if(!account||!staff||legacy)process.exitCode=2;
+          }
+          main().catch(e=>{fs.writeFileSync('ops/web-account-v2-live.txt','status=FAIL\nerror='+String(e.message).slice(0,200)+'\n');process.exitCode=3});
+          NODE
+          cat ops/web-account-v2-live.txt
+          grep -q '^billing=OFF$' ops/web-account-v2-live.txt
+          grep -q '^account_v2=PASS$' ops/web-account-v2-live.txt
+          grep -q '^staff_source_label=PASS$' ops/web-account-v2-live.txt
+          grep -q '^legacy_staff_button=ABSENT$' ops/web-account-v2-live.txt
+      - name: Commit proof
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ops/web-account-v2-live.txt
+          git diff --cached --quiet || git commit -m 'chore(web): record account v2 live proof'
+          git pull --rebase origin main
+          git push origin HEAD:main
