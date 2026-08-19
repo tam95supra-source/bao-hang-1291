@@ -1,9 +1,9 @@
 {
   "action": "publish",
   "channel": "beta",
-  "versionName": "1.6.6",
-  "versionCode": 15,
+  "versionName": "1.6.7",
+  "versionCode": 16,
   "mandatory": true,
-  "releaseNotes": "Beta 1.6.6: sửa đồng bộ App ↔ Web sau khi dữ liệu server bị clear; snapshot rỗng sẽ xóa cache SKU/lịch sử cũ trên App, báo SKU chỉ thành công khi server thực sự nhận, bỏ outbox báo thiếu sai từ 1.6.5, và lưu tín hiệu realtime FCM khi App ở nền để đồng bộ lại khi mở App.",
+  "releaseNotes": "Beta 1.6.7: Web nhận tín hiệu realtime trực tiếp sau thay đổi SKU và tự tải lại dữ liệu Neon; sửa cảnh báo picker phủ toàn màn hình và bổ sung luồng cấp quyền hiển thị trên ứng dụng khác; đưa màn Báo thiếu về bố cục nhập/quét ở trên, SKU đã báo hôm nay hiển thị cũ đến mới; hiển thị version dưới Log/Thoát và chạm version để kiểm tra OTA, không báo gì khi không có bản mới; giảm spam cập nhật nhân sự bằng coalesce tín hiệu staff. Bản Beta dùng để xác minh thực địa trước khi nâng Stable.",
   "retry": 2
 }
