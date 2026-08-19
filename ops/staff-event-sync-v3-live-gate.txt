@@ -1,0 +1,18 @@
+BÁO HÀNG 1291 — STAFF EVENT SYNC V3 LIVE GATE
+updated_at=2026-08-19T22:01:00+07:00
+source_spreadsheet_title=DỮ LIỆU THEO NGÀY
+source_spreadsheet_id=1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78
+source_tab=DANH SÁCH NHÂN SỰ
+apps_script_project=báo hàng 1291
+canonical_event_source=google-apps-script/STAFF_EVENT_SYNC_V3.gs
+repo_source=READY
+neon_active_gsheet_before_install=400
+sheet_valid_staff_rows_before_install=401
+known_sheet_only_row_before_install=99999 Test
+periodic_staff_polling_config=false
+live_apps_script_v3_file=NOT_INSTALLED
+live_installable_onEdit=NOT_INSTALLED
+live_installable_onChange=NOT_INSTALLED
+owner_gate=ADD_V3_FILE_TO_BOUND_APPS_SCRIPT_AND_RUN_setupStaffEventSyncV3
+reason=Current connectors expose Google Drive/Sheets but no write API for bound Apps Script project; repo has no Apps Script OAuth/clasp credential.
+post_gate_required=live add/edit/delete test + Neon/Firebase/realtime verification + complete cleanup
