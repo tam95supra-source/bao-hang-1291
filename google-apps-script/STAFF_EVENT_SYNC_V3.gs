@@ -1,398 +1,282 @@
-// BÁO HÀNG 1291 — event-driven staff synchronization V3.1
-// Paste into the SAME Apps Script project as the Báo hàng worker (DEPLOY_NEON/Mã.gs).
-// Source of truth is pinned here and does NOT depend on any legacy BH_STAFF_SHEET_ID constant.
+// BÁO HÀNG 1291 — STAFF EVENT SYNC V3.3 RELIABLE DELTA
+// Source: DỮ LIỆU THEO NGÀY / DANH SÁCH NHÂN SỰ.
+// Rule: no full backend reconcile. Normal edits process only affected rows.
+// Structural changes/recovery read the source sheet locally, diff snapshot, then mutate only changed codes.
+// Setup preserves an existing V3.2 snapshot and immediately recovers only missed deltas.
 
-var BH_STAFF_EVENT_SOURCE_ID_V31 = '1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78';
-var BH_STAFF_EVENT_SOURCE_TITLE_V31 = 'DỮ LIỆU THEO NGÀY';
-var BH_STAFF_EVENT_SOURCE_TAB_V31 = 'DANH SÁCH NHÂN SỰ';
-var BH_STAFF_EVENT_PROTECTED_ADMIN_V31 = '6281280';
-var BH_STAFF_EVENT_RELEVANT_COLUMNS_V31 = [1, 2, 4, 5, 6]; // A MNV, B tên, D vị trí, E NCC, F bộ phận
-var BH_STAFF_EVENT_MAX_ROWS_V31 = 500;
-var BH_STAFF_EVENT_INSTALL_MIN_ROWS_V31 = 300;
+var BH_STAFF_V33_SOURCE_ID = '1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78';
+var BH_STAFF_V33_SOURCE_TITLE = 'DỮ LIỆU THEO NGÀY';
+var BH_STAFF_V33_SOURCE_TAB = 'DANH SÁCH NHÂN SỰ';
+var BH_STAFF_V33_PROTECTED_ADMIN = '6281280';
+var BH_STAFF_V33_RELEVANT_COLUMNS = [1, 2, 4, 5, 6]; // A,B,D,E,F
+var BH_STAFF_V33_MIN_ROWS = 300;
+var BH_STAFF_V33_MAX_ROWS = 500;
+var BH_STAFF_V33_SNAPSHOT_KEY = 'STAFF_EVENT_SYNC_V32_SNAPSHOT';
+var BH_STAFF_V33_ENABLED_KEY = 'STAFF_EVENT_SYNC_V33_ENABLED';
+var BH_STAFF_V33_PENDING_KEY = 'STAFF_EVENT_SYNC_V33_PENDING';
+var BH_STAFF_V33_LAST_KEY = 'LAST_STAFF_EVENT_SYNC_V33';
+var BH_STAFF_V33_ERROR_KEY = 'LAST_STAFF_EVENT_SYNC_V33_ERROR';
+var BH_STAFF_V33_DIAG_LABEL = 'STAFF_EVENT_SYNC_V3.3';
 
-/**
- * One-time installer.
- * Creates installable onEdit + onChange triggers on DỮ LIỆU THEO NGÀY by exact spreadsheet ID.
- * Requires owner authorization once because installable triggers run as the creator.
- */
 function setupStaffEventSyncV3() {
   assertScope_();
-  var source = staffValidateSourceV31_();
-
-  ScriptApp.getProjectTriggers().forEach(function(trigger) {
-    var handler = trigger.getHandlerFunction();
-    if (
-      handler === 'staffSourceEditV2' ||
-      handler === 'staffSourceChangeV2' ||
-      handler === 'staffSourceEditV3' ||
-      handler === 'staffSourceChangeV3'
-    ) {
-      ScriptApp.deleteTrigger(trigger);
-    }
-  });
-
-  ScriptApp.newTrigger('staffSourceEditV3')
-    .forSpreadsheet(BH_STAFF_EVENT_SOURCE_ID_V31)
-    .onEdit()
-    .create();
-
-  ScriptApp.newTrigger('staffSourceChangeV3')
-    .forSpreadsheet(BH_STAFF_EVENT_SOURCE_ID_V31)
-    .onChange()
-    .create();
+  var state = staffReadSourceV33_();
+  staffDeleteTriggersV33_();
+  ScriptApp.newTrigger('staffSourceEditV3').forSpreadsheet(BH_STAFF_V33_SOURCE_ID).onEdit().create();
+  ScriptApp.newTrigger('staffSourceChangeV3').forSpreadsheet(BH_STAFF_V33_SOURCE_ID).onChange().create();
 
   var props = PropertiesService.getScriptProperties();
   props.deleteProperty('STAFF_EVENT_SYNC_V2_ENABLED');
+  props.deleteProperty('STAFF_EVENT_SYNC_V32_ENABLED');
+  props.setProperty(BH_STAFF_V33_ENABLED_KEY, '1');
   props.setProperty('STAFF_EVENT_SYNC_V3_ENABLED', '1');
-  props.setProperty('STAFF_EVENT_SYNC_V3_SOURCE_ID', BH_STAFF_EVENT_SOURCE_ID_V31);
-  props.setProperty('STAFF_EVENT_SYNC_V3_SOURCE_TAB', BH_STAFF_EVENT_SOURCE_TAB_V31);
+  props.setProperty('STAFF_EVENT_SYNC_V3_SOURCE_ID', BH_STAFF_V33_SOURCE_ID);
+  props.setProperty('STAFF_EVENT_SYNC_V3_SOURCE_TAB', BH_STAFF_V33_SOURCE_TAB);
 
-  // Prove the full path immediately, but guarded against suspicious mass deletion.
-  var proof = staffFullReconcileV31_('INSTALL');
-  props.setProperty(
-    'STAFF_EVENT_SYNC_V3_BASELINE_COUNT',
-    String(proof.source_rows || source.rowCount)
-  );
+  var snapshot = staffLoadSnapshotV33_();
+  var initialized = false;
+  if (!Object.keys(snapshot).length) {
+    staffSaveSnapshotV33_(state.items);
+    initialized = true;
+  }
 
-  return {
-    ok: true,
-    mode: 'EVENT_DRIVEN_V3_1',
-    source_title: source.title,
-    source_sheet_id: BH_STAFF_EVENT_SOURCE_ID_V31,
-    source_tab: BH_STAFF_EVENT_SOURCE_TAB_V31,
-    edit_trigger: 'staffSourceEditV3',
-    change_trigger: 'staffSourceChangeV3',
-    initial_reconcile: proof
+  var recovery = initialized
+    ? staffProofV33_('SETUP_INITIAL_SNAPSHOT', 0, 0, 0, 'SNAPSHOT_INITIALIZED')
+    : staffSyncDiffV33_('SETUP_RECOVER_MISSED_EVENTS');
+
+  var result = {
+    ok:true,
+    version:'3.3_RELIABLE_DELTA',
+    source_id:BH_STAFF_V33_SOURCE_ID,
+    source_tab:BH_STAFF_V33_SOURCE_TAB,
+    snapshot_initialized:initialized,
+    recovery:recovery,
+    full_backend_reconcile:false,
+    triggers:['staffSourceEditV3','staffSourceChangeV3'],
+    at:new Date().toISOString()
   };
+  props.setProperty(BH_STAFF_V33_LAST_KEY, JSON.stringify(result));
+  props.deleteProperty(BH_STAFF_V33_ERROR_KEY);
+  staffDiagV33_('SETUP', result);
+  return result;
 }
 
 function removeStaffEventSyncV3() {
-  ScriptApp.getProjectTriggers().forEach(function(trigger) {
-    var handler = trigger.getHandlerFunction();
-    if (handler === 'staffSourceEditV3' || handler === 'staffSourceChangeV3') {
-      ScriptApp.deleteTrigger(trigger);
-    }
-  });
-
+  staffDeleteTriggersV33_();
   var props = PropertiesService.getScriptProperties();
+  props.deleteProperty(BH_STAFF_V33_ENABLED_KEY);
   props.deleteProperty('STAFF_EVENT_SYNC_V3_ENABLED');
-  props.deleteProperty('STAFF_EVENT_SYNC_V3_SOURCE_ID');
-  props.deleteProperty('STAFF_EVENT_SYNC_V3_SOURCE_TAB');
-
-  return {ok: true};
+  props.deleteProperty(BH_STAFF_V33_PENDING_KEY);
+  return {ok:true};
 }
 
 function getStaffEventSyncV3Status() {
   var props = PropertiesService.getScriptProperties();
-  var handlers = ScriptApp.getProjectTriggers().map(function(trigger) {
-    return trigger.getHandlerFunction();
-  });
-
+  var handlers = ScriptApp.getProjectTriggers().map(function(t){ return t.getHandlerFunction(); });
+  var snapshot = staffLoadSnapshotV33_();
   return {
-    enabled: props.getProperty('STAFF_EVENT_SYNC_V3_ENABLED') === '1',
-    source_id: props.getProperty('STAFF_EVENT_SYNC_V3_SOURCE_ID') || '',
-    source_tab: props.getProperty('STAFF_EVENT_SYNC_V3_SOURCE_TAB') || '',
-    expected_source_id: BH_STAFF_EVENT_SOURCE_ID_V31,
-    expected_source_tab: BH_STAFF_EVENT_SOURCE_TAB_V31,
-    has_edit_trigger: handlers.indexOf('staffSourceEditV3') >= 0,
-    has_change_trigger: handlers.indexOf('staffSourceChangeV3') >= 0,
-    last_sync: props.getProperty('LAST_STAFF_EVENT_SYNC_V3') || '',
-    last_error: props.getProperty('LAST_STAFF_EVENT_SYNC_V3_ERROR') || '',
-    last_realtime_error: props.getProperty('LAST_STAFF_EVENT_SYNC_V3_REALTIME_ERROR') || ''
+    version:'3.3_RELIABLE_DELTA',
+    enabled:props.getProperty(BH_STAFF_V33_ENABLED_KEY) === '1',
+    source_id:BH_STAFF_V33_SOURCE_ID,
+    source_tab:BH_STAFF_V33_SOURCE_TAB,
+    has_edit_trigger:handlers.indexOf('staffSourceEditV3') >= 0,
+    has_change_trigger:handlers.indexOf('staffSourceChangeV3') >= 0,
+    has_retry_trigger:handlers.indexOf('staffRetryPendingV3') >= 0,
+    snapshot_rows:Object.keys(snapshot).length,
+    pending:props.getProperty(BH_STAFF_V33_PENDING_KEY) || '',
+    last_sync:props.getProperty(BH_STAFF_V33_LAST_KEY) || '',
+    last_error:props.getProperty(BH_STAFF_V33_ERROR_KEY) || ''
   };
 }
 
-/**
- * Normal edits / paste / clearing cells.
- * Only columns used by Báo hàng identity/role are relevant:
- * A MNV, B Họ tên, D Vị trí, E Nhà cung cấp, F Bộ phận.
- */
 function staffSourceEditV3(e) {
   try {
     if (!e || !e.range) return;
-
     var sheet = e.range.getSheet();
-    if (
-      !sheet ||
-      sheet.getParent().getId() !== BH_STAFF_EVENT_SOURCE_ID_V31 ||
-      sheet.getName() !== BH_STAFF_EVENT_SOURCE_TAB_V31
-    ) return;
-
+    if (!sheet || sheet.getParent().getId() !== BH_STAFF_V33_SOURCE_ID || sheet.getName() !== BH_STAFF_V33_SOURCE_TAB) return;
     if (e.range.getLastRow() <= 1) return;
-    if (!staffRangeTouchesRelevantColumnsV31_(e.range)) return;
+    if (!staffTouchesRelevantV33_(e.range)) return;
 
-    // Editing MNV may orphan the old identity, so full reconcile is safest.
+    staffDiagV33_('EVENT_RECEIVED', {kind:'EDIT',range:e.range.getA1Notation(),at:new Date().toISOString()});
+    var proof;
     if (e.range.getColumn() <= 1 && e.range.getLastColumn() >= 1) {
-      staffFullReconcileV31_('EDIT_EMPLOYEE_CODE');
-      return;
+      proof = staffSyncDiffV33_('EDIT_EMPLOYEE_CODE_' + e.range.getA1Notation());
+    } else {
+      proof = staffSyncEditedRangeV33_(e.range, 'EDIT_ROWS_' + e.range.getA1Notation());
     }
-
-    staffDeltaSyncRangeV31_(e.range, 'EDIT_ROWS');
+    staffClearPendingV33_();
+    staffDiagV33_('EVENT_DONE', proof);
+    return proof;
   } catch (error) {
-    staffRecordEventErrorV31_('EDIT', error);
-    throw error;
+    staffHandleFailureV33_('EDIT', error);
   }
 }
 
-/**
- * Structural changes: insert/delete row, remove grid, etc.
- * EDIT is already handled by onEdit.
- */
 function staffSourceChangeV3(e) {
   try {
     var changeType = String(e && e.changeType || '').toUpperCase();
     if (changeType === 'EDIT') return;
-    staffFullReconcileV31_('CHANGE_' + (changeType || 'OTHER'));
+    staffDiagV33_('EVENT_RECEIVED', {kind:'CHANGE',change_type:changeType || 'OTHER',at:new Date().toISOString()});
+    var proof = staffSyncDiffV33_('CHANGE_' + (changeType || 'OTHER'));
+    staffClearPendingV33_();
+    staffDiagV33_('EVENT_DONE', proof);
+    return proof;
   } catch (error) {
-    staffRecordEventErrorV31_('CHANGE', error);
+    staffHandleFailureV33_('CHANGE', error);
+  }
+}
+
+function staffRetryPendingV3() {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    if (!props.getProperty(BH_STAFF_V33_PENDING_KEY)) {
+      staffDeleteRetryTriggersV33_();
+      return {ok:true,skipped:'NO_PENDING'};
+    }
+    var proof = staffSyncDiffV33_('RETRY_PENDING');
+    staffClearPendingV33_();
+    staffDeleteRetryTriggersV33_();
+    staffDiagV33_('RETRY_DONE', proof);
+    return proof;
+  } catch (error) {
+    staffRecordErrorV33_('RETRY', error);
+    staffDiagV33_('RETRY_ERROR', {error:safeError_(error),at:new Date().toISOString()});
+    staffEnsureRetryTriggerV33_();
     throw error;
   }
 }
 
-function staffRangeTouchesRelevantColumnsV31_(range) {
-  var first = range.getColumn();
-  var last = range.getLastColumn();
-
-  return BH_STAFF_EVENT_RELEVANT_COLUMNS_V31.some(function(column) {
-    return column >= first && column <= last;
-  });
-}
-
-function staffDeltaSyncRangeV31_(range, reason) {
-  var lock = LockService.getScriptLock();
+function staffSyncEditedRangeV33_(range, reason) {
+  var lock = LockService.getUserLock();
+  if (!lock.tryLock(5000)) throw new Error('STAFF_V33_BUSY_RETRY');
+  var changed = 0;
   var proof = null;
-  var needsFull = false;
-  var changed = false;
-
-  lock.waitLock(25000);
   try {
-    var sheet = range.getSheet();
+    var snapshot = staffLoadSnapshotV33_();
+    if (!Object.keys(snapshot).length) return staffSyncDiffLockedV33_(reason + '_NO_SNAPSHOT');
     var startRow = Math.max(2, range.getRow());
     var endRow = Math.max(startRow, range.getLastRow());
-    var rows = sheet.getRange(startRow, 1, endRow - startRow + 1, 6).getValues();
+    var rows = range.getSheet().getRange(startRow, 1, endRow - startRow + 1, 6).getValues();
     var items = [];
-
+    var needsDiff = false;
     rows.forEach(function(row) {
-      var item = staffRowV31_(row);
-      if (!item) {
-        // Clearing code/name can mean deletion -> reconcile full source.
-        needsFull = true;
-        return;
-      }
+      var item = staffRowV33_(row);
+      if (!item) { needsDiff = true; return; }
       items.push(item);
     });
+    if (needsDiff) return staffSyncDiffLockedV33_(reason + '_CLEAR_OR_INVALID');
 
-    if (!needsFull && items.length) {
-      var token = workerAdminIdToken_();
-      var codes = items.map(function(item) { return item.employee_code; });
-      var profiles = neonRpc_('worker_profiles_by_codes_rpc', {p_codes: codes}, token) || [];
-      var existing = {};
-
-      profiles.forEach(function(profile) {
-        existing[String(profile.employee_code || '').toLowerCase()] = profile;
-      });
-
-      var created = 0;
-      var updated = 0;
-      var unchanged = 0;
-      var errors = [];
-
-      items.forEach(function(item) {
-        try {
-          var result = staffApplyItemV31_(
-            item,
-            existing[item.employee_code.toLowerCase()],
-            token
-          );
-          if (result === 'CREATED') created++;
-          else if (result === 'UPDATED') updated++;
-          else unchanged++;
-        } catch (error) {
-          errors.push(item.employee_code + ': ' + safeError_(error));
-        }
-      });
-
-      if (errors.length) {
-        throw new Error('STAFF_EVENT_PARTIAL: ' + errors.slice(0, 10).join('; '));
-      }
-
-      changed = !!(created || updated);
-      proof = {
-        status: 'SUCCEEDED',
-        mode: 'DELTA',
-        reason: reason,
-        rows: items.length,
-        created: created,
-        updated: updated,
-        unchanged: unchanged,
-        at: new Date().toISOString()
-      };
-
-      var props = PropertiesService.getScriptProperties();
-      props.setProperty('LAST_STAFF_EVENT_SYNC_V3', JSON.stringify(proof));
-      props.deleteProperty('LAST_STAFF_EVENT_SYNC_V3_ERROR');
-    } else if (!needsFull) {
-      proof = {
-        status: 'NO_CHANGE',
-        mode: 'DELTA',
-        reason: reason,
-        rows: 0,
-        at: new Date().toISOString()
-      };
+    var dirty = items.filter(function(item) { return snapshot[item.employee_code] !== staffItemHashV33_(item); });
+    if (!dirty.length) {
+      proof = staffProofV33_(reason, 0, 0, 0, 'NO_CHANGE');
+      staffSaveProofV33_(proof);
+      return proof;
     }
-  } finally {
-    lock.releaseLock();
-  }
 
-  if (needsFull) {
-    return staffFullReconcileV31_(reason + '_INVALID_OR_CLEARED_ROW');
-  }
-
-  // workerTick_ uses the same script lock: always call AFTER releasing our lock.
-  if (changed) staffKickRealtimeV31_('STAFF_EVENT_DELTA_V31');
-
-  return proof || {status: 'NO_CHANGE', mode: 'DELTA', reason: reason};
-}
-
-function staffFullReconcileV31_(reason) {
-  var lock = LockService.getScriptLock();
-  var proof;
-  var changed = false;
-
-  lock.waitLock(25000);
-  try {
-    var source = staffReadFullSourceV31_();
     var token = workerAdminIdToken_();
-    var profiles = neonRpc_('worker_profiles_snapshot_rpc', {}, token) || [];
+    var profiles = neonRpc_('worker_profiles_by_codes_rpc', {p_codes:dirty.map(function(item){ return item.employee_code; })}, token) || [];
     var existing = {};
-
-    profiles.forEach(function(profile) {
-      existing[String(profile.employee_code || '').toLowerCase()] = profile;
+    profiles.forEach(function(p){ existing[String(p.employee_code || '')] = p; });
+    var created = 0, updated = 0;
+    dirty.forEach(function(item) {
+      var r = staffApplyItemV33_(item, existing[item.employee_code], token);
+      if (r === 'CREATED') created++;
+      else if (r === 'UPDATED') updated++;
+      snapshot[item.employee_code] = staffItemHashV33_(item);
     });
-
-    var seen = {};
-    var created = 0;
-    var updated = 0;
-    var unchanged = 0;
-    var deactivated = 0;
-    var errors = [];
-
-    source.staff.forEach(function(item) {
-      var key = item.employee_code.toLowerCase();
-      seen[key] = true;
-
-      try {
-        var result = staffApplyItemV31_(item, existing[key], token);
-        if (result === 'CREATED') created++;
-        else if (result === 'UPDATED') updated++;
-        else unchanged++;
-      } catch (error) {
-        errors.push(item.employee_code + ': ' + safeError_(error));
-      }
-    });
-
-    // Deactivate only accounts owned by the GSheet source.
-    // Protected/Admin identities are never touched.
-    if (!errors.length) {
-      profiles.forEach(function(old) {
-        var code = String(old.employee_code || '');
-
-        if (
-          old.source_kind !== 'GSHEET' ||
-          old.protected_account ||
-          old.role === 'ADMIN' ||
-          !old.active ||
-          seen[code.toLowerCase()]
-        ) return;
-
-        try {
-          firebaseAdminUpdate_(String(old.id), {disableUser: true});
-          neonRpc_(
-            'worker_profile_deactivate_rpc',
-            {p_id: String(old.id), p_reason: 'STAFF_SOURCE_MISSING'},
-            token
-          );
-          deactivated++;
-        } catch (error) {
-          errors.push(code + ': DEACTIVATE: ' + safeError_(error));
-        }
-      });
-    }
-
-    if (errors.length) {
-      throw new Error('STAFF_EVENT_FULL_PARTIAL: ' + errors.slice(0, 10).join('; '));
-    }
-
-    changed = !!(created || updated || deactivated);
-    proof = {
-      status: 'SUCCEEDED',
-      mode: 'FULL',
-      reason: reason,
-      source_rows: source.staff.length,
-      source_hash: source.sourceHash,
-      created: created,
-      updated: updated,
-      unchanged: unchanged,
-      deactivated: deactivated,
-      at: new Date().toISOString()
-    };
-
-    var props = PropertiesService.getScriptProperties();
-    props.setProperty('LAST_STAFF_EVENT_SYNC_V3', JSON.stringify(proof));
-    props.deleteProperty('LAST_STAFF_EVENT_SYNC_V3_ERROR');
+    staffSaveSnapshotMapV33_(snapshot);
+    changed = created + updated;
+    proof = staffProofV33_(reason, created, updated, 0, 'SUCCEEDED');
+    staffSaveProofV33_(proof);
   } finally {
     lock.releaseLock();
   }
-
-  if (changed) staffKickRealtimeV31_('STAFF_EVENT_FULL_V31');
+  if (changed) staffKickRealtimeV33_(reason);
   return proof;
 }
 
-function staffApplyItemV31_(item, old, token) {
-  if (item.employee_code === BH_STAFF_EVENT_PROTECTED_ADMIN_V31) {
-    return 'UNCHANGED';
+function staffSyncDiffV33_(reason) {
+  var lock = LockService.getUserLock();
+  if (!lock.tryLock(5000)) throw new Error('STAFF_V33_BUSY_RETRY');
+  var proof;
+  var changed = 0;
+  try {
+    proof = staffSyncDiffLockedV33_(reason);
+    changed = Number(proof.created || 0) + Number(proof.updated || 0) + Number(proof.deactivated || 0);
+  } finally {
+    lock.releaseLock();
+  }
+  if (changed) staffKickRealtimeV33_(reason);
+  return proof;
+}
+
+function staffSyncDiffLockedV33_(reason) {
+  var state = staffReadSourceV33_();
+  var previous = staffLoadSnapshotV33_();
+  if (!Object.keys(previous).length) {
+    staffSaveSnapshotV33_(state.items);
+    var initProof = staffProofV33_(reason, 0, 0, 0, 'SNAPSHOT_INITIALIZED');
+    staffSaveProofV33_(initProof);
+    return initProof;
   }
 
-  if (old && (old.protected_account || old.role === 'ADMIN')) {
-    throw new Error('PROTECTED_PROFILE_COLLISION');
+  var current = {};
+  var currentItems = {};
+  state.items.forEach(function(item) {
+    current[item.employee_code] = staffItemHashV33_(item);
+    currentItems[item.employee_code] = item;
+  });
+  var upsertItems = [];
+  Object.keys(current).forEach(function(code) { if (previous[code] !== current[code]) upsertItems.push(currentItems[code]); });
+  var deletedCodes = Object.keys(previous).filter(function(code) { return !current[code]; });
+
+  if (!upsertItems.length && !deletedCodes.length) {
+    var noChange = staffProofV33_(reason, 0, 0, 0, 'NO_CHANGE');
+    staffSaveProofV33_(noChange);
+    return noChange;
   }
+  if (upsertItems.length + deletedCodes.length > 50) throw new Error('STAFF_V33_DIFF_SUSPICIOUS:' + (upsertItems.length + deletedCodes.length));
 
-  var changed =
-    !old ||
-    old.full_name !== item.full_name ||
-    old.contractor !== item.contractor ||
-    old.role !== item.role ||
-    old.active !== true ||
-    old.source_kind !== 'GSHEET' ||
-    String(old.source_position || '') !== item.source_position;
+  var token = workerAdminIdToken_();
+  var codes = upsertItems.map(function(i){ return i.employee_code; }).concat(deletedCodes);
+  var profiles = codes.length ? (neonRpc_('worker_profiles_by_codes_rpc', {p_codes:codes}, token) || []) : [];
+  var existing = {};
+  profiles.forEach(function(p){ existing[String(p.employee_code || '')] = p; });
 
+  var created = 0, updated = 0, deactivated = 0;
+  upsertItems.forEach(function(item) {
+    var r = staffApplyItemV33_(item, existing[item.employee_code], token);
+    if (r === 'CREATED') created++;
+    else if (r === 'UPDATED') updated++;
+  });
+  deletedCodes.forEach(function(code) {
+    var old = existing[code];
+    if (!old || old.protected_account || old.role === 'ADMIN' || old.source_kind !== 'GSHEET' || old.active !== true) return;
+    firebaseAdminUpdate_(String(old.id), {disableUser:true});
+    neonRpc_('worker_profile_deactivate_rpc', {p_id:String(old.id),p_reason:'STAFF_SOURCE_MISSING'}, token);
+    deactivated++;
+  });
+
+  staffSaveSnapshotMapV33_(current);
+  var proof = staffProofV33_(reason, created, updated, deactivated, 'SUCCEEDED');
+  staffSaveProofV33_(proof);
+  return proof;
+}
+
+function staffApplyItemV33_(item, old, token) {
+  if (item.employee_code === BH_STAFF_V33_PROTECTED_ADMIN) return 'UNCHANGED';
+  if (old && (old.protected_account || old.role === 'ADMIN')) throw new Error('PROTECTED_PROFILE_COLLISION:' + item.employee_code);
+  var changed = !old || String(old.full_name || '') !== item.full_name || String(old.contractor || '') !== item.contractor || String(old.role || '') !== item.role || old.active !== true || String(old.source_kind || '') !== 'GSHEET' || String(old.source_position || '') !== item.source_position;
   if (!changed) return 'UNCHANGED';
 
   var uid = old ? String(old.id) : Utilities.getUuid();
-
   if (old) {
-    firebaseAdminUpdate_(uid, {
-      email: employeeEmail_(item.employee_code),
-      displayName: item.full_name,
-      emailVerified: true,
-      disableUser: false,
-      customAttributes: claims_(item.employee_code, item.role)
-    });
+    firebaseAdminUpdate_(uid, {email:employeeEmail_(item.employee_code),displayName:item.full_name,emailVerified:true,disableUser:false,customAttributes:claims_(item.employee_code, item.role)});
   } else {
     var password = requiredProp_('STAFF_DEFAULT_PASSWORD');
-    firebaseAdminCreate_(
-      uid,
-      employeeEmail_(item.employee_code),
-      password,
-      item.full_name,
-      false
-    );
-
+    firebaseAdminCreate_(uid, employeeEmail_(item.employee_code), password, item.full_name, false);
     try {
-      firebaseAdminUpdate_(uid, {
-        emailVerified: true,
-        customAttributes: claims_(item.employee_code, item.role)
-      });
+      firebaseAdminUpdate_(uid, {emailVerified:true,customAttributes:claims_(item.employee_code, item.role)});
     } catch (error) {
       try { firebaseAdminDelete_(uid); } catch (ignore) {}
       throw error;
@@ -400,177 +284,162 @@ function staffApplyItemV31_(item, old, token) {
   }
 
   try {
-    neonRpc_(
-      'worker_profile_upsert_rpc',
-      {
-        p_id: uid,
-        p_employee_code: item.employee_code,
-        p_full_name: item.full_name,
-        p_contractor: item.contractor,
-        p_role: item.role,
-        p_active: true,
-        p_source_kind: 'GSHEET',
-        p_source_position: item.source_position,
-        p_protected_account: false
-      },
-      token
-    );
+    neonRpc_('worker_profile_upsert_rpc', {p_id:uid,p_employee_code:item.employee_code,p_full_name:item.full_name,p_contractor:item.contractor,p_role:item.role,p_active:true,p_source_kind:'GSHEET',p_source_position:item.source_position,p_protected_account:false}, token);
   } catch (error) {
-    if (!old) {
-      try { firebaseAdminDelete_(uid); } catch (ignore) {}
-    }
+    if (!old) try { firebaseAdminDelete_(uid); } catch (ignore2) {}
     throw error;
   }
-
   return old ? 'UPDATED' : 'CREATED';
 }
 
-function staffValidateSourceV31_() {
-  var spreadsheet = SpreadsheetApp.openById(BH_STAFF_EVENT_SOURCE_ID_V31);
+function staffReadSourceV33_() {
+  var ss = SpreadsheetApp.openById(BH_STAFF_V33_SOURCE_ID);
+  if (ss.getId() !== BH_STAFF_V33_SOURCE_ID) throw new Error('STAFF_V33_SOURCE_ID_MISMATCH');
+  if (String(ss.getName() || '').trim() !== BH_STAFF_V33_SOURCE_TITLE) throw new Error('STAFF_V33_SOURCE_TITLE_MISMATCH:' + ss.getName());
+  var sheet = ss.getSheetByName(BH_STAFF_V33_SOURCE_TAB);
+  if (!sheet) throw new Error('STAFF_V33_SOURCE_TAB_NOT_FOUND');
 
-  if (spreadsheet.getId() !== BH_STAFF_EVENT_SOURCE_ID_V31) {
-    throw new Error('STAFF_SOURCE_ID_MISMATCH');
-  }
+  var expected = ['Mã nhân viên','Họ và tên','Số điện thoại','Vị trí chính','Nhà cung cấp','Bộ phận','Site','Kho'];
+  var headers = sheet.getRange(1,1,1,8).getDisplayValues()[0];
+  for (var h=0; h<expected.length; h++) if (String(headers[h] || '').trim() !== expected[h]) throw new Error('STAFF_V33_HEADER_MISMATCH_COL_' + (h+1));
 
-  if (String(spreadsheet.getName() || '').trim() !== BH_STAFF_EVENT_SOURCE_TITLE_V31) {
-    throw new Error('STAFF_SOURCE_TITLE_MISMATCH:' + spreadsheet.getName());
-  }
-
-  var sheet = spreadsheet.getSheetByName(BH_STAFF_EVENT_SOURCE_TAB_V31);
-  if (!sheet) throw new Error('STAFF_SOURCE_TAB_NOT_FOUND');
-
-  var expected = [
-    'Mã nhân viên',
-    'Họ và tên',
-    'Số điện thoại',
-    'Vị trí chính',
-    'Nhà cung cấp',
-    'Bộ phận',
-    'Site',
-    'Kho'
-  ];
-
-  var headers = sheet.getRange(1, 1, 1, 8).getDisplayValues()[0];
-
-  for (var i = 0; i < expected.length; i++) {
-    if (String(headers[i] || '').trim() !== expected[i]) {
-      throw new Error('STAFF_SOURCE_HEADER_MISMATCH_COL_' + (i + 1));
-    }
-  }
-
-  return {
-    title: spreadsheet.getName(),
-    sheet: sheet,
-    rowCount: Math.max(0, sheet.getLastRow() - 1)
-  };
-}
-
-function staffReadFullSourceV31_() {
-  var validated = staffValidateSourceV31_();
-  var sheet = validated.sheet;
-  var lastRow = sheet.getLastRow();
-
-  if (lastRow < 2 || lastRow - 1 > BH_STAFF_EVENT_MAX_ROWS_V31) {
-    throw new Error('STAFF_SOURCE_COUNT_INVALID:' + Math.max(0, lastRow - 1));
-  }
-
-  var values = sheet.getRange(2, 1, lastRow - 1, 6).getValues();
-  var byCode = {};
-
-  values.forEach(function(row) {
-    var item = staffRowV31_(row);
+  var count = Math.max(0, sheet.getLastRow() - 1);
+  if (count < BH_STAFF_V33_MIN_ROWS || count > BH_STAFF_V33_MAX_ROWS) throw new Error('STAFF_V33_ROW_COUNT_SUSPICIOUS:' + count);
+  var rows = sheet.getRange(2,1,count,6).getValues();
+  var items = [];
+  var seen = {};
+  rows.forEach(function(row) {
+    var item = staffRowV33_(row);
     if (!item) return;
-
-    var key = item.employee_code.toLowerCase();
-    if (byCode[key]) {
-      throw new Error('DUPLICATE_EMPLOYEE_CODE:' + item.employee_code);
-    }
-    byCode[key] = item;
+    if (seen[item.employee_code]) throw new Error('STAFF_V33_DUPLICATE_CODE:' + item.employee_code);
+    seen[item.employee_code] = true;
+    items.push(item);
   });
-
-  var keys = Object.keys(byCode).sort();
-  var staff = keys.map(function(key) { return byCode[key]; });
-  var props = PropertiesService.getScriptProperties();
-  var baseline = Number(
-    props.getProperty('STAFF_EVENT_SYNC_V3_BASELINE_COUNT') || 0
-  );
-
-  var safetyFloor = baseline > 0
-    ? Math.max(50, Math.floor(baseline * 0.70))
-    : BH_STAFF_EVENT_INSTALL_MIN_ROWS_V31;
-
-  if (staff.length < safetyFloor || staff.length > BH_STAFF_EVENT_MAX_ROWS_V31) {
-    throw new Error(
-      'STAFF_SOURCE_COUNT_SUSPICIOUS:' +
-      staff.length +
-      ':FLOOR=' +
-      safetyFloor
-    );
-  }
-
-  var canonical = staff.map(function(item) {
-    return [
-      item.employee_code,
-      item.full_name,
-      item.contractor,
-      item.source_position,
-      item.role
-    ].join('|');
-  }).join('\n');
-
-  return {
-    staff: staff,
-    sourceHash: sha256Hex_(canonical)
-  };
+  if (items.length < BH_STAFF_V33_MIN_ROWS || items.length > BH_STAFF_V33_MAX_ROWS) throw new Error('STAFF_V33_VALID_COUNT_SUSPICIOUS:' + items.length);
+  return {sheet:sheet,items:items};
 }
 
-function staffRowV31_(row) {
+function staffRowV33_(row) {
   var code = String(row[0] || '').trim();
   var name = String(row[1] || '').trim();
-
   if (!code && !name) return null;
   if (!code || !name) return null;
-
   var position = String(row[3] || '').trim();
   var contractor = String(row[4] || '').trim();
   var department = String(row[5] || '').trim();
-
-  return {
-    employee_code: code,
-    full_name: name,
-    source_position: position,
-    contractor: contractor,
-    department: department,
-    role: staffRole_(position, department, code)
-  };
+  return {employee_code:code,full_name:name,source_position:position,contractor:contractor,department:department,role:staffRoleV33_(position, department, code)};
 }
 
-function staffKickRealtimeV31_(source) {
-  try {
-    workerTick_(source);
-    PropertiesService.getScriptProperties()
-      .deleteProperty('LAST_STAFF_EVENT_SYNC_V3_REALTIME_ERROR');
-  } catch (error) {
-    // Staff data is already committed to Firebase/Neon.
-    // Record realtime drain failure for retry/diagnostics instead of corrupting sync state.
-    PropertiesService.getScriptProperties().setProperty(
-      'LAST_STAFF_EVENT_SYNC_V3_REALTIME_ERROR',
-      JSON.stringify({
-        source: source,
-        error: safeError_(error),
-        at: new Date().toISOString()
-      })
-    );
+function staffRoleV33_(position, department, code) {
+  if (String(code) === BH_STAFF_V33_PROTECTED_ADMIN) return 'ADMIN';
+  var p = staffNormV33_(position);
+  var d = staffNormV33_(department);
+  if (p.indexOf('DIEU PHOI') >= 0) return 'ADMIN_INVENT';
+  if (p.indexOf('INVENT') >= 0 || d.indexOf('INVENT') >= 0) return 'INVENT';
+  return 'PICKER';
+}
+
+function staffNormV33_(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[Đđ]/g, 'D').toUpperCase().trim();
+}
+
+function staffTouchesRelevantV33_(range) {
+  var first = range.getColumn();
+  var last = range.getLastColumn();
+  return BH_STAFF_V33_RELEVANT_COLUMNS.some(function(c){ return c >= first && c <= last; });
+}
+
+function staffItemHashV33_(item) {
+  var canonical = [item.employee_code,item.full_name,item.source_position,item.contractor,item.department,item.role].join('|');
+  return sha256Hex_(canonical).slice(0,12);
+}
+
+function staffSaveSnapshotV33_(items) {
+  var map = {};
+  items.forEach(function(item){ map[item.employee_code] = staffItemHashV33_(item); });
+  staffSaveSnapshotMapV33_(map);
+}
+
+function staffSaveSnapshotMapV33_(map) {
+  var lines = Object.keys(map).sort().map(function(code){ return code + '|' + map[code]; });
+  var text = lines.join('\n');
+  if (text.length > 8500) throw new Error('STAFF_V33_SNAPSHOT_TOO_LARGE:' + text.length);
+  PropertiesService.getScriptProperties().setProperty(BH_STAFF_V33_SNAPSHOT_KEY, text);
+}
+
+function staffLoadSnapshotV33_() {
+  var text = PropertiesService.getScriptProperties().getProperty(BH_STAFF_V33_SNAPSHOT_KEY) || '';
+  var map = {};
+  if (!text) return map;
+  text.split('\n').forEach(function(line) {
+    var i = line.indexOf('|');
+    if (i <= 0) return;
+    map[line.slice(0,i)] = line.slice(i+1);
+  });
+  return map;
+}
+
+function staffProofV33_(reason, created, updated, deactivated, status) {
+  return {version:'3.3_RELIABLE_DELTA',status:status,reason:reason,created:Number(created || 0),updated:Number(updated || 0),deactivated:Number(deactivated || 0),changed:Number(created || 0) + Number(updated || 0) + Number(deactivated || 0),at:new Date().toISOString()};
+}
+
+function staffSaveProofV33_(proof) {
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty(BH_STAFF_V33_LAST_KEY, JSON.stringify(proof));
+  props.deleteProperty(BH_STAFF_V33_ERROR_KEY);
+}
+
+function staffRecordErrorV33_(kind, error) {
+  PropertiesService.getScriptProperties().setProperty(BH_STAFF_V33_ERROR_KEY, JSON.stringify({version:'3.3_RELIABLE_DELTA',kind:kind,error:safeError_(error),at:new Date().toISOString()}));
+}
+
+function staffHandleFailureV33_(kind, error) {
+  staffRecordErrorV33_(kind, error);
+  PropertiesService.getScriptProperties().setProperty(BH_STAFF_V33_PENDING_KEY, JSON.stringify({kind:kind,error:safeError_(error),at:new Date().toISOString()}));
+  staffDiagV33_('EVENT_ERROR', {kind:kind,error:safeError_(error),at:new Date().toISOString()});
+  staffEnsureRetryTriggerV33_();
+}
+
+function staffEnsureRetryTriggerV33_() {
+  var has = ScriptApp.getProjectTriggers().some(function(t) { return t.getHandlerFunction() === 'staffRetryPendingV3'; });
+  if (!has) ScriptApp.newTrigger('staffRetryPendingV3').timeBased().after(60000).create();
+}
+
+function staffClearPendingV33_() {
+  PropertiesService.getScriptProperties().deleteProperty(BH_STAFF_V33_PENDING_KEY);
+  staffDeleteRetryTriggersV33_();
+}
+
+function staffDeleteRetryTriggersV33_() {
+  ScriptApp.getProjectTriggers().forEach(function(t) { if (t.getHandlerFunction() === 'staffRetryPendingV3') ScriptApp.deleteTrigger(t); });
+}
+
+function staffDeleteTriggersV33_() {
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    var h = t.getHandlerFunction();
+    if (h === 'staffSourceEditV2' || h === 'staffSourceChangeV2' || h === 'staffSourceEditV3' || h === 'staffSourceChangeV3' || h === 'staffRetryPendingV3') ScriptApp.deleteTrigger(t);
+  });
+}
+
+function staffKickRealtimeV33_(reason) {
+  try { workerTick_('STAFF_EVENT_V33_' + reason); }
+  catch (error) {
+    PropertiesService.getScriptProperties().setProperty('LAST_STAFF_EVENT_SYNC_V33_REALTIME_ERROR', JSON.stringify({reason:reason,error:safeError_(error),at:new Date().toISOString()}));
   }
 }
 
-function staffRecordEventErrorV31_(kind, error) {
-  PropertiesService.getScriptProperties().setProperty(
-    'LAST_STAFF_EVENT_SYNC_V3_ERROR',
-    JSON.stringify({
-      kind: kind,
-      error: safeError_(error),
-      at: new Date().toISOString()
-    })
-  );
+function staffDiagV33_(stage, payload) {
+  try {
+    var ss = reportSpreadsheet_();
+    var sheet = ss.getSheetByName('THONG_TIN');
+    if (!sheet) sheet = getOrCreateSheet_('THONG_TIN', ['Mục','Giá trị']);
+    var last = Math.max(1, sheet.getLastRow());
+    var values = last > 1 ? sheet.getRange(2,1,last-1,1).getDisplayValues() : [];
+    var row = 0;
+    for (var i=0; i<values.length; i++) {
+      if (String(values[i][0] || '').trim() === BH_STAFF_V33_DIAG_LABEL) { row = i + 2; break; }
+    }
+    if (!row) row = last + 1;
+    sheet.getRange(row,1,1,2).setValues([[BH_STAFF_V33_DIAG_LABEL,JSON.stringify({stage:stage,payload:payload || {},at:new Date().toISOString()})]]);
+  } catch (ignore) {}
 }
