@@ -5,23 +5,30 @@ on:
     branches: [main]
     paths:
       - 'ops/apply-realtime-ui-fix.request'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'ops/apply-realtime-ui-fix.request'
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: apply-realtime-ui-fix
+  group: apply-realtime-ui-fix-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
   patch:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 25
+    env:
+      TARGET_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
       - name: Apply guarded source patch
         run: python3 ops/apply_realtime_ui_fix_20260819.py
       - name: Validate patch shape
@@ -36,7 +43,34 @@ jobs:
           grep -F "firestore.rules" firebase.json >/dev/null
           grep -F "staff:minute:" sql/20260819_staff_realtime_coalesce.sql >/dev/null
           echo 'PATCH_SHAPE=PASS'
-      - name: Commit patched runtime
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.9'
+          cache-disabled: true
+      - name: Build Web Admin
+        run: |
+          npm --prefix web-admin install --ignore-scripts --no-audit --no-fund --no-package-lock
+          npm --prefix web-admin run build
+      - name: Test and build Android debug
+        run: gradle --no-daemon testDebugUnitTest assembleDebug
+      - name: Enforce public-repo secret guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -RInE '^[[:space:]]*-----BEGIN (RSA )?PRIVATE KEY-----|"private_key"[[:space:]]*:[[:space:]]*"-----BEGIN|RELEASE_STORE_PASSWORD[[:space:]]*=[[:space:]]*[^$[:space:]]' app web-admin google-apps-script ops docs 2>/dev/null; then
+            echo 'Secret/private-key material detected' >&2
+            exit 1
+          fi
+          echo 'PUBLIC_REPO_SECRET_GUARD=PASS'
+      - name: Commit patched runtime to trigger branch
         shell: bash
         run: |
           set -euo pipefail
@@ -45,5 +79,5 @@ jobs:
           git add web-admin/src/backend-runtime.js firebase.json firestore.rules .github/workflows/deploy-web-admin.yml app/src/main/java/vn/pickpack1291/baohang/network/ApiClient.kt app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt app/src/main/java/vn/pickpack1291/baohang/notifications/OverlayAlertService.kt app/src/main/res/layout/activity_main.xml google-apps-script/DEPLOY_NEON.gs sql/20260819_staff_realtime_coalesce.sql
           git diff --cached --quiet && { echo 'No patch changes'; exit 0; }
           git commit -m 'fix: realtime delivery, staff invalidation and picker UX'
-          git pull --rebase origin main
-          git push origin HEAD:main
+          git pull --rebase origin "$TARGET_BRANCH"
+          git push origin HEAD:"$TARGET_BRANCH"
