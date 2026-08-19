@@ -1,0 +1,7 @@
+http=200
+read=PASS
+eligible_count=35
+unique_codes=35
+duplicate_codes=0
+invent_department=1
+coordinator_position=1
