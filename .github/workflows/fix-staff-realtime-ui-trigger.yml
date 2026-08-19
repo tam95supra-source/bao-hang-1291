@@ -1,0 +1,35 @@
+name: Fix staff realtime UI trigger
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/fix-staff-realtime-ui.trigger'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - run: python3 ops/fix_staff_realtime_ui.py
+      - name: Syntax and source gates
+        run: |
+          node --check web-admin/src/backend-runtime.js
+          node --check web-admin/src/ops-console.js
+          grep -q 'previous === undefined || previous === marker' web-admin/src/backend-runtime.js
+          grep -q 'userTableScrollTop' web-admin/src/ops-console.js
+          grep -q 'theo sự kiện' web-admin/src/ops-console.js
+      - name: Build web
+        run: |
+          npm --prefix web-admin install --ignore-scripts --no-audit --no-fund --no-package-lock
+          npm --prefix web-admin run build
+      - name: Commit patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add web-admin/src/backend-runtime.js web-admin/src/ops-console.js
+          git diff --cached --quiet || git commit -m 'fix(web): dedupe staff reconnect and preserve user filters'
+          git pull --rebase origin main
+          git push origin HEAD:main
