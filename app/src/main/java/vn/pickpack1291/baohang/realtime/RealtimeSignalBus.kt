@@ -28,7 +28,8 @@ object RealtimeSignalBus {
             "config" -> Topic.CONFIG
             else -> return false
         }
-        listeners.forEach { listener -> runCatching { listener(topic) } }
-        return true
+        val current = listeners.toList()
+        current.forEach { listener -> runCatching { listener(topic) } }
+        return current.isNotEmpty()
     }
 }
