@@ -1,4 +1,4 @@
-name: Temp inspect Bao Hang Google deploy capability
+name: Temp verify new staff Sheet
 on:
   push:
     branches: [main]
@@ -6,38 +6,57 @@ on:
 permissions:
   contents: write
 jobs:
-  inspect:
+  verify:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    env:
-      GOOGLE_SHEET_WEBHOOK_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
-      GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
-      GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
-      GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
-      GAS_SCRIPT_ID: ${{ secrets.GAS_SCRIPT_ID }}
-      GAS_DEPLOYMENT_ID: ${{ secrets.GAS_DEPLOYMENT_ID }}
-      CLASP_TOKEN: ${{ secrets.CLASP_TOKEN }}
-      CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
-      GOOGLE_SCRIPT_ID: ${{ secrets.GOOGLE_SCRIPT_ID }}
     steps:
       - uses: actions/checkout@v6
         with: { fetch-depth: 0 }
-      - name: Record presence only and live ping
+      - name: Read exact 1291 HY1 staff set without writes
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p ops
-          : > ops/bao-google-capability.txt
-          for v in GOOGLE_OAUTH_CLIENT_ID GOOGLE_OAUTH_CLIENT_SECRET GOOGLE_OAUTH_REFRESH_TOKEN GAS_SCRIPT_ID GAS_DEPLOYMENT_ID CLASP_TOKEN CLASPRC_JSON GOOGLE_SCRIPT_ID; do
-            if [ -n "${!v:-}" ]; then echo "$v=YES" >> ops/bao-google-capability.txt; else echo "$v=NO" >> ops/bao-google-capability.txt; fi
-          done
-          node <<'NODE'
-          const fs=require('fs'),u=String(process.env.GOOGLE_SHEET_WEBHOOK_URL||'').trim();
-          (async()=>{const r=await fetch(u,{method:'POST',headers:{'content-type':'text/plain;charset=UTF-8'},body:JSON.stringify({action:'ping'})}),t=await r.text();let j={};try{j=JSON.parse(t)}catch{};fs.appendFileSync('ops/bao-google-capability.txt',`live_ping=${r.ok&&j.ok===true?'PASS':'FAIL'}\nlive_staff_sheet_id=${String(j.staff_sheet_id||'')}\nlive_staff_sheet_name=${String(j.staff_sheet_name||'')}\n`);})().catch(e=>{fs.appendFileSync('ops/bao-google-capability.txt','live_ping=FAIL\n')});
-          NODE
-          cat ops/bao-google-capability.txt
-      - name: Commit sanitized capability
+          mkdir -p ops "$RUNNER_TEMP/staff"
+          python3 - <<'PY'
+          import urllib.parse
+          base='https://docs.google.com/spreadsheets/d/1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78/gviz/tq'
+          q="select A,B,D,E,F where G = 1291 and H = 'HY1'"
+          print(base+'?'+urllib.parse.urlencode({'tqx':'out:csv','sheet':'DANH SÁCH NHÂN SỰ','tq':q}))
+          PY
+          URL=$(python3 - <<'PY'
+          import urllib.parse
+          base='https://docs.google.com/spreadsheets/d/1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78/gviz/tq'
+          print(base+'?'+urllib.parse.urlencode({'tqx':'out:csv','sheet':'DANH SÁCH NHÂN SỰ','tq':"select A,B,D,E,F where G = 1291 and H = 'HY1'"}))
+          PY
+          )
+          HTTP=$(curl -sSL --retry 3 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/staff/source.csv" -w '%{http_code}' "$URL")
+          python3 - "$HTTP" <<'PY' > ops/new-staff-sheet-read-check.txt
+          import csv,sys,os
+          http=sys.argv[1]
+          path=os.environ['RUNNER_TEMP']+'/staff/source.csv'
+          rows=[]
+          try:
+              with open(path,encoding='utf-8-sig',newline='') as f: rows=list(csv.reader(f))
+          except Exception as e:
+              print('http='+http);print('read=FAIL');print('error='+type(e).__name__);raise SystemExit(0)
+          data=[]
+          for r in rows[1:]:
+              if len(r)<5: continue
+              code,name,position,contractor,department=[str(x).strip() for x in r[:5]]
+              if code and name: data.append((code,name,position,contractor,department))
+          print('http='+http)
+          print('read='+('PASS' if http=='200' and data else 'FAIL'))
+          print('eligible_count='+str(len(data)))
+          print('unique_codes='+str(len({x[0].lower() for x in data})))
+          print('duplicate_codes='+str(len(data)-len({x[0].lower() for x in data})))
+          print('invent_department='+str(sum(1 for x in data if 'INVENT' in x[4].upper())))
+          print('coordinator_position='+str(sum(1 for x in data if 'ĐIỀU PHỐI' in x[2].upper() or 'DIEU PHOI' in x[2].upper())))
+          PY
+          cat ops/new-staff-sheet-read-check.txt
+          grep -q '^read=PASS$' ops/new-staff-sheet-read-check.txt
+          grep -q '^duplicate_codes=0$' ops/new-staff-sheet-read-check.txt
+      - name: Commit proof
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git add ops/bao-google-capability.txt;git diff --cached --quiet || git commit -m 'chore(temp): record Bao Hang Google deploy capability';git pull --rebase origin main;git push origin HEAD:main
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git add ops/new-staff-sheet-read-check.txt;git diff --cached --quiet || git commit -m 'chore(temp): record new staff Sheet read gate';git pull --rebase origin main;git push origin HEAD:main
