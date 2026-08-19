@@ -49,7 +49,7 @@ class BaoHangApplication : Application() {
             diagnostics.info("outbox_sync_scheduled_on_start", mapOf("pending" to database.outboxCount()))
         }
 
-        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+        registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
             override fun onActivityResumed(activity: Activity) {
                 if (!session.isLoggedIn) return
                 val pending = RealtimeInvalidationStore.consume(this@BaoHangApplication)
