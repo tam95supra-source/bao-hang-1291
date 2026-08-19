@@ -1,4 +1,4 @@
-name: Temp verify new staff Sheet
+name: Temp patch Web account create and staff source
 on:
   push:
     branches: [main]
@@ -6,57 +6,151 @@ on:
 permissions:
   contents: write
 jobs:
-  verify:
+  patch:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
         with: { fetch-depth: 0 }
-      - name: Read exact 1291 HY1 staff set without writes
+      - name: Patch Web runtime, UI and canonical Apps Script source
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p ops "$RUNNER_TEMP/staff"
           python3 - <<'PY'
-          import urllib.parse
-          base='https://docs.google.com/spreadsheets/d/1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78/gviz/tq'
-          q="select A,B,D,E,F where G = 1291 and H = 'HY1'"
-          print(base+'?'+urllib.parse.urlencode({'tqx':'out:csv','sheet':'DANH SÁCH NHÂN SỰ','tq':q}))
+          from pathlib import Path
+          import re
+
+          # Web backend: create Firebase account using public Identity Toolkit REST,
+          # then let authenticated Neon RPC enforce ADMIN / ADMIN_INVENT permissions.
+          p=Path('web-admin/src/backend-runtime.js'); s=p.read_text(encoding='utf-8')
+          marker='function withTestRole(payload, init) {'
+          if 'async function createManagedUser(body, init)' not in s:
+              helper=r'''async function createManagedUser(body, init) {
+  const code = String(body?.employee_code || '').trim()
+  const fullName = String(body?.full_name || '').trim()
+  const role = String(body?.role || '').trim().toUpperCase()
+  const password = String(body?.password || body?.initial_password || '')
+  if (!/^[a-z0-9._-]+$/i.test(code)) return jsonResponse({ error: 'Mã nhân viên không hợp lệ.' }, 400)
+  if (!fullName) return jsonResponse({ error: 'Họ tên không được để trống.' }, 400)
+  if (!['ADMIN_INVENT', 'INVENT', 'PICKER'].includes(role)) return jsonResponse({ error: 'Quyền tài khoản không hợp lệ.' }, 400)
+  if (password.length < 8) return jsonResponse({ error: 'Mật khẩu phải có ít nhất 8 ký tự.' }, 400)
+  const adminToken = bearer(init) || realtimeToken
+  if (!adminToken) return jsonResponse({ error: 'Phiên đăng nhập không tồn tại.' }, 401)
+  const email = `${code.toLowerCase()}@bao-hang-1291.local`
+  let createdIdToken = ''
+  try {
+    const signupResponse = await originalFetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${encodeURIComponent(FIREBASE_API_KEY)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email, password, returnSecureToken: true }),
+    })
+    const signup = await signupResponse.json().catch(() => ({}))
+    if (!signupResponse.ok || !signup.localId || !signup.idToken) {
+      const raw = signup?.error?.message || 'FIREBASE_CREATE_FAILED'
+      const message = String(raw).includes('EMAIL_EXISTS') ? 'Mã nhân viên đã có tài khoản.' : `Không tạo được tài khoản Firebase: ${raw}`
+      return jsonResponse({ error: message }, 400)
+    }
+    createdIdToken = signup.idToken
+    const updateResponse = await originalFetch(`https://identitytoolkit.googleapis.com/v1/accounts:update?key=${encodeURIComponent(FIREBASE_API_KEY)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ idToken: createdIdToken, displayName: fullName, returnSecureToken: true }),
+    })
+    const updated = await updateResponse.json().catch(() => ({}))
+    if (!updateResponse.ok) throw new Error(updated?.error?.message || 'FIREBASE_PROFILE_UPDATE_FAILED')
+    if (updated.idToken) createdIdToken = updated.idToken
+
+    const neonResponse = await originalFetch(`${NEON_API}/rpc/api_admin_create_profile_rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({
+        p_user_id: signup.localId,
+        p_employee_code: code,
+        p_full_name: fullName,
+        p_role: role,
+        p_contractor: String(body?.contractor || ''),
+        p_source_position: String(body?.source_position || ''),
+        p_test_role: testRole(init),
+      }),
+    })
+    const text = await neonResponse.text()
+    let profile = {}
+    try { profile = text ? JSON.parse(text) : {} } catch { profile = { message: text } }
+    if (!neonResponse.ok) throw new Error(profile?.message || profile?.error || `NEON_${neonResponse.status}`)
+    return jsonResponse({ ok: true, profile })
+  } catch (error) {
+    if (createdIdToken) {
+      try {
+        await originalFetch(`https://identitytoolkit.googleapis.com/v1/accounts:delete?key=${encodeURIComponent(FIREBASE_API_KEY)}`, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ idToken: createdIdToken }),
+        })
+      } catch {}
+    }
+    const raw = String(error?.message || error)
+    const message = raw.includes('FORBIDDEN') ? 'Tài khoản hiện tại không có quyền tạo quyền đã chọn.' : raw.includes('EMPLOYEE_CODE_EXISTS') ? 'Mã nhân viên đã tồn tại.' : raw
+    return jsonResponse({ error: message }, raw.includes('FORBIDDEN') ? 403 : 400)
+  }
+}
+
+'''
+              if marker not in s: raise SystemExit('backend helper marker missing')
+              s=s.replace(marker,helper+marker,1)
+          old="if (action === 'create-user') return worker('update-user', { ...body, initial_password: body.initial_password || body.password || '' }, init)"
+          new="if (action === 'create-user') return createManagedUser(body, init)"
+          if old in s: s=s.replace(old,new,1)
+          elif new not in s: raise SystemExit('create-user route marker missing')
+          p.write_text(s,encoding='utf-8')
+
+          # Web UI: never call dead legacy staff-sync-now route.
+          p=Path('web-admin/src/ops-console.js'); s=p.read_text(encoding='utf-8')
+          s=s.replace('`<button class="secondary" id="opsStaffSync">Đồng bộ nguồn ngay</button>`','`<span class="ops-source-label">DỮ LIỆU THEO NGÀY · DANH SÁCH NHÂN SỰ</span>`')
+          s=s.replace("const auto = Boolean(service.config?.staff_auto_sync_enabled);\n    const interval = Number(service.config?.staff_sync_interval_minutes || 60);","const auto = true;\n    const interval = 60;")
+          block=re.compile(r"\n    \$\('#opsStaffSync'\)\.onclick = async \(\) => \{.*?\n    \};",re.S)
+          s,n=block.subn('',s,count=1)
+          if n==0 and "$('#opsStaffSync').onclick" in s: raise SystemExit('staff sync click block not removed')
+          s=s.replace('Nguồn Google Sheet: <b>','DỮ LIỆU THEO NGÀY: <b>')
+          s=s.replace('Tự đồng bộ nguồn: <b>${auto ? `mỗi ${interval} phút` : \'đang tắt\'}</b>','Tự đồng bộ nguồn: <b>mỗi ${interval} phút</b>')
+          p.write_text(s,encoding='utf-8')
+
+          # Canonical worker source: new Sheet columns + role mapping + Admin Event permission.
+          p=Path('google-apps-script/DEPLOY_NEON.gs'); s=p.read_text(encoding='utf-8')
+          s=s.replace("const variants = [\"select A,B,D,E where G = 1291 and H = 'HY1'\",\"select A,B,D,E where G = '1291' and H = 'HY1'\"];", "const variants = [\"select A,B,D,E,F where G = 1291 and H = 'HY1'\",\"select A,B,D,E,F where G = '1291' and H = 'HY1'\"];",1)
+          s=s.replace("const position=String(row[2]||'').trim(),contractor=String(row[3]||'').trim();\n        byCode[code.toLowerCase()]={employee_code:code,full_name:name,contractor:contractor,source_position:position,role:staffRole_(position,code)};", "const position=String(row[2]||'').trim(),contractor=String(row[3]||'').trim(),department=String(row[4]||'').trim();\n        byCode[code.toLowerCase()]={employee_code:code,full_name:name,contractor:contractor,source_position:position,role:staffRole_(position,department,code)};",1)
+          old_role="""function staffRole_(position,code) {
+  if(String(code)===BH_PROTECTED_ADMIN_CODE)return 'ADMIN';
+  const p=String(position||'').toUpperCase();
+  if(p.indexOf('INVENT')>=0)return 'INVENT';
+  return 'PICKER';
+}"""
+          new_role="""function staffRole_(position,department,code) {
+  if(String(code)===BH_PROTECTED_ADMIN_CODE)return 'ADMIN';
+  const p=String(position||'').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').toUpperCase();
+  const d=String(department||'').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').toUpperCase();
+  if(p.indexOf('DIEU PHOI')>=0)return 'ADMIN_INVENT';
+  if(d.indexOf('INVENT')>=0||p.indexOf('INVENT')>=0)return 'INVENT';
+  return 'PICKER';
+}"""
+          if old_role in s:s=s.replace(old_role,new_role,1)
+          elif 'function staffRole_(position,department,code)' not in s: raise SystemExit('staffRole target missing')
+          s=s.replace("if(caller.profile.role==='ADMIN_INVENT' && role!=='PICKER')throw new Error('FORBIDDEN');","if(caller.profile.role==='ADMIN_INVENT' && ['INVENT','PICKER'].indexOf(role)<0)throw new Error('FORBIDDEN');",1)
+          s=s.replace("if(caller.profile.role==='ADMIN_INVENT'&&target.role!=='PICKER')throw new Error('FORBIDDEN');","if(caller.profile.role==='ADMIN_INVENT'&&['INVENT','PICKER'].indexOf(String(target.role||''))<0)throw new Error('FORBIDDEN');",1)
+          for gate in ["const BH_STAFF_SHEET_ID = '1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78';","select A,B,D,E,F where G = 1291 and H = 'HY1'","staffRole_(position,department,code)","['INVENT','PICKER'].indexOf(role)<0"]:
+              if gate not in s: raise SystemExit('worker gate missing '+gate)
+          p.write_text(s,encoding='utf-8')
           PY
-          URL=$(python3 - <<'PY'
-          import urllib.parse
-          base='https://docs.google.com/spreadsheets/d/1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78/gviz/tq'
-          print(base+'?'+urllib.parse.urlencode({'tqx':'out:csv','sheet':'DANH SÁCH NHÂN SỰ','tq':"select A,B,D,E,F where G = 1291 and H = 'HY1'"}))
-          PY
-          )
-          HTTP=$(curl -sSL --retry 3 --retry-all-errors --retry-delay 2 -o "$RUNNER_TEMP/staff/source.csv" -w '%{http_code}' "$URL")
-          python3 - "$HTTP" <<'PY' > ops/new-staff-sheet-read-check.txt
-          import csv,sys,os
-          http=sys.argv[1]
-          path=os.environ['RUNNER_TEMP']+'/staff/source.csv'
-          rows=[]
-          try:
-              with open(path,encoding='utf-8-sig',newline='') as f: rows=list(csv.reader(f))
-          except Exception as e:
-              print('http='+http);print('read=FAIL');print('error='+type(e).__name__);raise SystemExit(0)
-          data=[]
-          for r in rows[1:]:
-              if len(r)<5: continue
-              code,name,position,contractor,department=[str(x).strip() for x in r[:5]]
-              if code and name: data.append((code,name,position,contractor,department))
-          print('http='+http)
-          print('read='+('PASS' if http=='200' and data else 'FAIL'))
-          print('eligible_count='+str(len(data)))
-          print('unique_codes='+str(len({x[0].lower() for x in data})))
-          print('duplicate_codes='+str(len(data)-len({x[0].lower() for x in data})))
-          print('invent_department='+str(sum(1 for x in data if 'INVENT' in x[4].upper())))
-          print('coordinator_position='+str(sum(1 for x in data if 'ĐIỀU PHỐI' in x[2].upper() or 'DIEU PHOI' in x[2].upper())))
-          PY
-          cat ops/new-staff-sheet-read-check.txt
-          grep -q '^read=PASS$' ops/new-staff-sheet-read-check.txt
-          grep -q '^duplicate_codes=0$' ops/new-staff-sheet-read-check.txt
-      - name: Commit proof
+          node --check web-admin/src/backend-runtime.js
+          node --check web-admin/src/ops-console.js
+          cp google-apps-script/DEPLOY_NEON.gs "$RUNNER_TEMP/worker.js"
+          node --check "$RUNNER_TEMP/worker.js"
+          grep -q 'api_admin_create_profile_rpc' web-admin/src/backend-runtime.js
+          ! grep -q "opsStaffSync').onclick" web-admin/src/ops-console.js
+          grep -q "select A,B,D,E,F where G = 1291" google-apps-script/DEPLOY_NEON.gs
+      - name: Commit patch
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git add ops/new-staff-sheet-read-check.txt;git diff --cached --quiet || git commit -m 'chore(temp): record new staff Sheet read gate';git pull --rebase origin main;git push origin HEAD:main
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add web-admin/src/backend-runtime.js web-admin/src/ops-console.js google-apps-script/DEPLOY_NEON.gs
+          git diff --cached --quiet || git commit -m 'fix: create accounts without legacy worker and align staff source'
+          git pull --rebase origin main
+          git push origin HEAD:main
