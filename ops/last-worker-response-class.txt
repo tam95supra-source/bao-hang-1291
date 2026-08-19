@@ -1,0 +1,4 @@
+worker_http=200
+worker_content_type=text/html; charset=utf-8
+worker_body_kind=HTML
+worker_html_title=Error
