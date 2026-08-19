@@ -1,0 +1,50 @@
+name: Temp classify worker response
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/temp-classify-worker-response.yml']
+permissions:
+  contents: write
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    env:
+      WORKER_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }
+      - name: Classify without exposing URL or body
+        shell: bash
+        run: |
+          set -u
+          mkdir -p ops "$RUNNER_TEMP/w"
+          if [ -z "${WORKER_URL:-}" ]; then
+            printf 'worker_secret=EMPTY\n' > ops/last-worker-response-class.txt
+          else
+            code=$(curl -sS -L -D "$RUNNER_TEMP/w/headers" -o "$RUNNER_TEMP/w/body" -w '%{http_code}' -H 'content-type: text/plain;charset=UTF-8' --data-binary '{"action":"ping"}' "$WORKER_URL" || echo 000)
+            ctype=$(grep -i '^content-type:' "$RUNNER_TEMP/w/headers" | tail -n1 | cut -d: -f2- | tr -d '\r' | xargs)
+            kind=OTHER; title=''
+            if jq -e . "$RUNNER_TEMP/w/body" >/dev/null 2>&1; then kind=JSON; fi
+            if grep -qiE '^<!doctype html|<html' "$RUNNER_TEMP/w/body" 2>/dev/null; then kind=HTML; fi
+            title=$(python3 - <<'PY'
+          import os,re,html
+          p=os.environ['RUNNER_TEMP']+'/w/body'
+          s=open(p,errors='replace').read(200000) if os.path.exists(p) else ''
+          m=re.search(r'<title[^>]*>(.*?)</title>',s,re.I|re.S)
+          t=html.unescape(re.sub(r'\s+',' ',m.group(1))).strip() if m else ''
+          print(t[:120].replace('\n',' '))
+          PY
+            )
+            printf 'worker_http=%s\nworker_content_type=%s\nworker_body_kind=%s\nworker_html_title=%s\n' "$code" "$ctype" "$kind" "$title" > ops/last-worker-response-class.txt
+          fi
+          cat ops/last-worker-response-class.txt
+      - name: Commit result
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ops/last-worker-response-class.txt
+          git diff --cached --quiet || git commit -m 'chore: record worker response classification'
+          git pull --rebase origin main
+          git push origin HEAD:main
