@@ -1,65 +1,49 @@
-name: Temp kick worker now
+name: Temp runtime patch verified gate
 
 on:
   push:
     branches: [main]
     paths:
       - 'ops/kick-worker-now.trigger'
-  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  kick:
+  patch:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    env:
-      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-      GOOGLE_SHEET_WEBHOOK_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
-      ADMIN_UID: 44fae0a2-09eb-4226-8412-0f1a1f5d7ef8
-      FIREBASE_PROJECT: bao-hang-1291
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
-      - name: Scope guard and kick worker
+        with:
+          fetch-depth: 0
+      - name: Apply guarded patch
+        id: patch
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
-          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
-          case "$GOOGLE_SHEET_WEBHOOK_URL" in https://script.google.com/macros/s/*/exec) ;; *) exit 11;; esac
-          node <<'NODE' > ops/worker-kick-last.txt
-          const fs=require('fs'),crypto=require('crypto');
-          const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');
-          if(sa.project_id!==process.env.FIREBASE_PROJECT) throw new Error('PROJECT_SCOPE_MISMATCH');
-          const enc=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');
-          const sign=payload=>{const h=enc({alg:'RS256',typ:'JWT'}),p=enc(payload),u=h+'.'+p,s=crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url');return u+'.'+s};
-          async function req(url,opt={}){const r=await fetch(url,opt),t=await r.text();let j={};try{j=t?JSON.parse(t):{}}catch{j={raw:t}};if(!r.ok)throw new Error('HTTP_'+r.status+':'+String(j?.error?.message||j?.error||j?.raw||'').slice(0,200));return j}
-          (async()=>{
-            const g=JSON.parse(fs.readFileSync('app/google-services.json','utf8'));
-            const key=g.client?.[0]?.api_key?.[0]?.current_key;if(!key)throw new Error('API_KEY_MISSING');
-            const now=Math.floor(Date.now()/1000);
-            const custom=sign({iss:sa.client_email,sub:sa.client_email,aud:'https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit',iat:now,exp:now+900,uid:process.env.ADMIN_UID});
-            const auth=await req('https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key='+encodeURIComponent(key),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:custom,returnSecureToken:true})});
-            const out=await req(process.env.GOOGLE_SHEET_WEBHOOK_URL,{method:'POST',headers:{'content-type':'text/plain;charset=UTF-8'},body:JSON.stringify({action:'worker-kick',id_token:auth.idToken,reason:'ADMIN_RESET_INVALIDATION'})});
-            if(out.ok!==true)throw new Error('WORKER_'+String(out.error||'FAILED'));
-            console.log('status=PASS');
-            console.log('source='+String(out.source||''));
-            console.log('realtime_count='+Number(out.realtime?.count||0));
-            console.log('realtime_published='+Number(out.realtime?.published||0));
-            console.log('realtime_failed='+Number(out.realtime?.failed||0));
-          })().catch(e=>{console.log('status=FAIL');console.log('error='+String(e.message).replace(/\n/g,' ').slice(0,400));process.exitCode=2});
-          NODE
-          cat ops/worker-kick-last.txt
-          grep -q '^status=PASS$' ops/worker-kick-last.txt
-          grep -q '^realtime_failed=0$' ops/worker-kick-last.txt
-      - name: Record sanitized proof
-        if: always()
+          set +e
+          python3 ops/patch_runtime_staff.py > "$RUNNER_TEMP/patch.log" 2>&1
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          printf 'exit=%s\n' "$code" > ops/patch-runtime-staff-last.txt
+          tail -n 12 "$RUNNER_TEMP/patch.log" | sed 's/[[:cntrl:]]//g' | head -c 1800 >> ops/patch-runtime-staff-last.txt
+          cat ops/patch-runtime-staff-last.txt
+          exit 0
+      - name: Commit patch and proof
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add ops/worker-kick-last.txt
-          git diff --cached --quiet || git commit -m 'chore(realtime): record worker kick proof'
+          git add ops/patch-runtime-staff-last.txt
+          if [ "${{ steps.patch.outputs.exit_code }}" = '0' ]; then
+            ! grep -q 'cron:' .github/workflows/staff-sync.yml
+            ! grep -q "where G = 1291 and H = 'HY1'" .github/workflows/staff-sync.yml google-apps-script/DEPLOY_NEON.gs
+            git diff --check
+            git add app/src/main/java/vn/pickpack1291/baohang google-apps-script/DEPLOY_NEON.gs .github/workflows/staff-sync.yml
+          fi
+          git diff --cached --quiet || git commit -m 'fix(runtime): reconcile cleared snapshots and event-driven staff source'
           git pull --rebase origin main
           git push origin HEAD:main
+          test "${{ steps.patch.outputs.exit_code }}" = '0'
