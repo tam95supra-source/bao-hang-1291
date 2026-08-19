@@ -1,0 +1,66 @@
+name: Temp finalize hourly staff sync
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/temp-finalize-staff-sync.yml']
+permissions:
+  contents: write
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }
+      - name: Promote cutover workflow to steady-state hourly sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          src=Path('.github/workflows/temp-cutover-staff-source.yml')
+          if not src.exists():
+              dst=Path('.github/workflows/staff-sync.yml')
+              if not dst.exists(): raise SystemExit('STAFF_SYNC_SOURCE_MISSING')
+              src=dst
+          s=src.read_text(encoding='utf-8')
+          s=s.replace('name: Temp cutover staff source to DỮ LIỆU THEO NGÀY','name: Staff sync — DỮ LIỆU THEO NGÀY',1)
+          old="""on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/temp-cutover-staff-source.yml'
+"""
+          new="""on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+"""
+          if old in s:s=s.replace(old,new,1)
+          elif 'schedule:' not in s:raise SystemExit('TRIGGER_BLOCK_MISSING')
+          old_map="""          def upper_ascii(s):
+              s=unicodedata.normalize('NFD',str(s or ''))
+              return ''.join(c for c in s if unicodedata.category(c)!='Mn').upper()
+"""
+          new_map="""          def upper_ascii(s):
+              s=unicodedata.normalize('NFD',str(s or '')).replace('Đ','D').replace('đ','d')
+              return ''.join(c for c in s if unicodedata.category(c)!='Mn').upper()
+"""
+          if old_map in s:s=s.replace(old_map,new_map,1)
+          if "replace('Đ','D').replace('đ','d')" not in s:raise SystemExit('COORDINATOR_NORMALIZATION_MISSING')
+          s=s.replace("p_trigger_source:'DEPLOY'","p_trigger_source:(process.env.GITHUB_EVENT_NAME==='schedule'?'AUTO':'MANUAL')")
+          s=s.replace('ops/staff-source-cutover-result.txt','ops/staff-sync-last.txt')
+          s=s.replace("git add ops/staff-source-cutover-result.txt","git add ops/staff-sync-last.txt")
+          s=s.replace("chore(staff): record new source cutover result","chore(staff): record hourly staff sync result")
+          dst=Path('.github/workflows/staff-sync.yml')
+          dst.write_text(s,encoding='utf-8')
+          if src != dst: src.unlink()
+          PY
+          grep -q "cron: '17 \* \* \* \*'" .github/workflows/staff-sync.yml
+          grep -q "replace('Đ','D').replace('đ','d')" .github/workflows/staff-sync.yml
+          grep -q "GITHUB_EVENT_NAME==='schedule'?'AUTO':'MANUAL'" .github/workflows/staff-sync.yml
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A .github/workflows/staff-sync.yml .github/workflows/temp-cutover-staff-source.yml
+          git diff --cached --quiet || git commit -m 'feat(staff): sync DỮ LIỆU THEO NGÀY hourly'
+          git pull --rebase origin main
+          git push origin HEAD:main
