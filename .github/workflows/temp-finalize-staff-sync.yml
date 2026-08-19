@@ -13,6 +13,8 @@ jobs:
       - uses: actions/checkout@v6
         with: { fetch-depth: 0 }
       - name: Promote cutover workflow to steady-state hourly sync
+        id: finalize
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -21,9 +23,20 @@ jobs:
           grep -q "replace('Đ','D').replace('đ','d')" .github/workflows/staff-sync.yml
           grep -q "GITHUB_EVENT_NAME==='schedule'?'AUTO':'MANUAL'" .github/workflows/staff-sync.yml
           grep -q "STAFF_SHEET_ID: 1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78" .github/workflows/staff-sync.yml
+      - name: Commit finalizer result
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ops
+          if [ "${{ steps.finalize.outcome }}" = success ]; then
+            printf 'status=PASS\nworkflow=staff-sync.yml\ninterval=hourly\nsource_sheet=1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78\nsource_tab=DANH SÁCH NHÂN SỰ\n' > ops/staff-sync-finalize-status.txt
+          else
+            printf 'status=FAIL\n' > ops/staff-sync-finalize-status.txt
+          fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A .github/workflows/staff-sync.yml .github/workflows/temp-cutover-staff-source.yml
+          git add -A .github/workflows/staff-sync.yml .github/workflows/temp-cutover-staff-source.yml ops/staff-sync-finalize-status.txt
           git diff --cached --quiet || git commit -m 'feat(staff): sync DỮ LIỆU THEO NGÀY hourly'
           git pull --rebase origin main
           git push origin HEAD:main
