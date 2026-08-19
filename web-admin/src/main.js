@@ -226,12 +226,32 @@ function renderApp() {
 }
 function renderTab() {
   $$('[data-tab]').forEach((button) => button.classList.toggle('active', button.dataset.tab === state.activeTab));
+  window.__BH_OPS_NORMALIZE__?.();
+  const wv2 = window.__BH_WV2_RENDER__ || {};
+  const ops = window.__BH_OPS_RENDER__ || {};
   const handlers = {
-    overview: renderOverview, events: renderEvents, picker: renderPicker, reports: renderReports,
-    sku: renderSku, users: renderUsers, devices: renderDevices, services: renderIntegrations, logs: renderLogs,
-    sla: renderSla, config: renderConfig, versions: renderVersions,
+    overview: () => (wv2.overview ? wv2.overview() : renderOverview()),
+    events: () => (wv2.events ? wv2.events() : renderEvents()),
+    picker: renderPicker,
+    reports: () => (wv2.reports ? wv2.reports() : renderReports()),
+    sku: renderSku,
+    users: () => (ops.users ? ops.users() : renderUsers()),
+    devices: renderDevices,
+    services: () => (ops.services ? ops.services() : renderIntegrations()),
+    logs: renderLogs,
+    sla: () => (ops.sla ? ops.sla() : renderSla()),
+    config: () => (ops.config ? ops.config() : renderConfig()),
+    versions: renderVersions,
   };
   handlers[state.activeTab]?.();
+}
+let realtimeNoticeTimer = null;
+function showRealtimeNotice(text) {
+  let el = document.getElementById('realtimeNotice');
+  if (!el) { el = document.createElement('div'); el.id = 'realtimeNotice'; el.className = 'realtime-notice'; document.body.appendChild(el); }
+  el.textContent = text; el.hidden = false;
+  clearTimeout(realtimeNoticeTimer);
+  realtimeNoticeTimer = setTimeout(() => { if (el.isConnected) el.hidden = true; }, 2400);
 }
 function scheduleLiveRefresh(kind) {
   if (document.hidden) return;
@@ -240,7 +260,7 @@ function scheduleLiveRefresh(kind) {
     if (kind === 'catalog' && ['sku','overview','picker'].includes(state.activeTab)) renderTab();
     if (kind === 'staff' && ['users','overview'].includes(state.activeTab)) renderTab();
     if (kind === 'issue' && ['events','overview','picker'].includes(state.activeTab)) renderTab();
-  }, 180);
+  }, 220);
 }
 function setRealtimeHealth(value, kind = '') {
   state.realtimeStatus = value;
@@ -266,13 +286,13 @@ async function startRealtime() {
   };
   const canReceiveOperationalRealtime = ['ADMIN','ADMIN_INVENT','INVENT'].includes(actualRole());
   state.catalogChannel = realtimeClient.channel('site:1291:catalog', { config: { private: true } })
-    .on('broadcast', { event: 'catalog_changed' }, () => scheduleLiveRefresh('catalog')).subscribe(subscribeStatus);
+    .on('broadcast', { event: 'catalog_changed' }, () => { showRealtimeNotice('Danh mục SKU vừa cập nhật'); scheduleLiveRefresh('catalog'); }).subscribe(subscribeStatus);
   if (canReceiveOperationalRealtime) {
     state.issueChannel = realtimeClient.channel('site:1291:issues', { config: { private: true } })
-      .on('broadcast', { event: 'issue_changed' }, () => scheduleLiveRefresh('issue'))
+      .on('broadcast', { event: 'issue_changed' }, () => { showRealtimeNotice('Có cập nhật báo hàng mới'); scheduleLiveRefresh('issue'); })
       .subscribe(subscribeStatus);
     state.staffChannel = realtimeClient.channel('site:1291:staff', { config: { private: true } })
-      .on('broadcast', { event: 'staff_changed' }, () => scheduleLiveRefresh('staff')).subscribe(subscribeStatus);
+      .on('broadcast', { event: 'staff_changed' }, () => { showRealtimeNotice('Danh sách nhân sự vừa cập nhật'); scheduleLiveRefresh('staff'); }).subscribe(subscribeStatus);
   }
   setTimeout(() => { if (state.realtimeStatus !== 'ONLINE') ensureFallbackPolling(); }, 6000);
 }

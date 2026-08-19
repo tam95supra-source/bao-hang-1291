@@ -401,3 +401,5 @@ tbody tr:hover { background: #f8fafc; }
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
   .spinner { animation-duration: 1.2s; }
 }
+
+.realtime-notice{position:fixed;right:20px;top:76px;z-index:1200;max-width:360px;padding:10px 14px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;box-shadow:0 8px 28px rgba(15,23,42,.14);font-size:13px;font-weight:700;color:#0f172a;pointer-events:none}.realtime-notice[hidden]{display:none!important}

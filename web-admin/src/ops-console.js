@@ -304,7 +304,7 @@ async function renderUsersView() {
   const content = $('#content');
   if (!content || !isManager()) return;
   content.dataset.opsRender = 'users';
-  content.innerHTML = `${pageHeading('Nhân sự & tài khoản', 'Google Sheet là nguồn chính; tài khoản tạo thêm được quản lý riêng và không ghi ngược vào nguồn.', `<span class="ops-source-label">DỮ LIỆU THEO NGÀY · DANH SÁCH NHÂN SỰ</span>`)}<div class="ops-loading">Đang tải nhân sự…</div>`;
+  if(content.dataset.opsRender!=='users'||!content.querySelector('.ops-users-table'))content.innerHTML = `${pageHeading('Nhân sự & tài khoản', 'Google Sheet là nguồn chính; tài khoản tạo thêm được quản lý riêng và không ghi ngược vào nguồn.', `<span class="ops-source-label">DỮ LIỆU THEO NGÀY · DANH SÁCH NHÂN SỰ</span>`)}<div class="ops-loading">Đang tải nhân sự…</div>`;
   try {
     const [list, sync, service] = await Promise.all([webApi('list-users'), webApi('staff-sync-status'), webApi('service-metrics')]);
     if ($('#content') !== content || content.dataset.opsRender !== 'users') return;
@@ -565,14 +565,12 @@ function enhanceCurrentPage() {
   else if ((tab === 'services' || tab === 'server') && isManager() && content.dataset.opsRender !== 'server') renderServerView();
   else if (tab === 'events') enhanceRecentIssueCards();
 }
-function scheduleEnhance(delay = 120) {
-  clearTimeout(ui.enhanceTimer);
-  ui.enhanceTimer = setTimeout(enhanceCurrentPage, delay);
-}
-
-const observer = new MutationObserver(() => scheduleEnhance());
-observer.observe(document.documentElement, { childList: true, subtree: true });
-window.addEventListener('hashchange', () => scheduleEnhance(40));
-window.addEventListener('pageshow', () => scheduleEnhance(40));
-document.addEventListener('visibilitychange', () => { if (!document.hidden) scheduleEnhance(40); });
-scheduleEnhance(40);
+window.__BH_OPS_RENDER__ = {
+  overview: renderOverviewView,
+  users: renderUsersView,
+  config: renderTimingView,
+  sla: renderTimingView,
+  services: renderServerView,
+  server: renderServerView,
+};
+window.__BH_OPS_NORMALIZE__ = normalizeNavigation;
