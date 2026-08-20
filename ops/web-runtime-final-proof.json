@@ -1,0 +1,8 @@
+{
+  "status": "FAIL",
+  "stage": "AUTH_PIPELINE",
+  "hosting": "https://bao-hang-1291.web.app",
+  "revision": "STAFF_FOCUS_AUTH_V2_20260820-32325142514",
+  "zero_cost_guard": "PASS",
+  "firebase_refresh_to_neon": "UNKNOWN"
+}
