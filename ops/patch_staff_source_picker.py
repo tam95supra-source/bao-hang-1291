@@ -62,6 +62,14 @@ if "map(item => ({...item, role:'PICKER'}))" not in s:
     if anchor not in s:
         raise SystemExit('full sync source normalization anchor not found')
     s = s.replace(anchor, insert, 1)
+
+old_existing = "  if(!changed){result.unchanged++;return}\n  await firebaseUpdate(googleAccess,{localId:String(old.id),email:item.employee_code.toLowerCase()+'@bao-hang-1291.local',displayName:item.full_name,emailVerified:true,disableUser:false,customAttributes:claims(item.employee_code,item.role)});\n  await markGsheet(old.id,item);result.updated++;"
+new_existing = "  await firebaseUpdate(googleAccess,{localId:String(old.id),email:item.employee_code.toLowerCase()+'@bao-hang-1291.local',displayName:item.full_name,emailVerified:true,disableUser:false,customAttributes:claims(item.employee_code,item.role)});\n  if(!changed){result.unchanged++;return}\n  await markGsheet(old.id,item);result.updated++;"
+if new_existing not in s:
+    if old_existing not in s:
+        raise SystemExit('full sync Firebase claim refresh anchor not found')
+    s = s.replace(old_existing, new_existing, 1)
+
 old_pass = "const pass=result.failed===0&&mismatches.length===0&&protectedAdmins.length===1&&gsheetActive.length===source.staff.length;\nconst proof={status:pass?'PASS':'FAIL',source_count:source.staff.length,total_profiles:finalProfiles.length,active_gsheet:gsheetActive.length,protected_admins:protectedAdmins.length,created:result.created,updated:result.updated,unchanged:result.unchanged,deactivated:result.deactivated,failed:result.failed,retries:result.retries,mismatch_count:mismatches.length,role_counts:roleCounts,error_summary:result.errors.slice(0,20).join('; ').slice(0,1500)};"
 new_pass = "const gsheetElevated=gsheetActive.filter(p=>p.role!=='PICKER');\nconst pass=result.failed===0&&mismatches.length===0&&protectedAdmins.length===1&&gsheetActive.length===source.staff.length&&gsheetElevated.length===0;\nconst proof={status:pass?'PASS':'FAIL',source_count:source.staff.length,total_profiles:finalProfiles.length,active_gsheet:gsheetActive.length,gsheet_elevated:gsheetElevated.length,protected_admins:protectedAdmins.length,created:result.created,updated:result.updated,unchanged:result.unchanged,deactivated:result.deactivated,failed:result.failed,retries:result.retries,mismatch_count:mismatches.length,role_counts:roleCounts,error_summary:result.errors.slice(0,20).join('; ').slice(0,1500)};"
 if 'const gsheetElevated=' not in s:
