@@ -1,0 +1,10 @@
+{
+  "status": "FAIL",
+  "stage": "HOSTING_REVISION",
+  "staff_reconnect_baseline": "UNKNOWN",
+  "staff_search_session_state": "UNKNOWN",
+  "cold_load_force_refresh": "UNKNOWN",
+  "auth_required_single_retry": "UNKNOWN",
+  "firebase_refresh_to_neon": "UNKNOWN",
+  "error_tail": ""
+}
