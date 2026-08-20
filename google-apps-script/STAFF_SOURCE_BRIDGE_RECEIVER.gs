@@ -1,14 +1,15 @@
 /*
  * BÁO HÀNG 1291 — source-driven staff bridge receiver.
- * DỮ LIỆU THEO NGÀY emits only change metadata; this receiver authenticates the
- * trigger owner's Google OAuth identity, re-reads the trusted Sheet, then mutates
- * Firebase + Neon only for actual deltas.
+ * DỮ LIỆU THEO NGÀY emits only signed change metadata. Shared HMAC material lives only
+ * in Apps Script Properties; receiver re-reads the trusted Sheet before mutating Firebase/Neon.
  */
 
 const BH_STAFF_BRIDGE = Object.freeze({
   SOURCE_ID: '1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78',
   SOURCE_TAB: 'DANH SÁCH NHÂN SỰ',
   SENDER_EMAIL: 'tam95.supra@gmail.com',
+  HMAC_PROP: 'STAFF_BRIDGE_HMAC_SECRET',
+  HMAC_MAX_SKEW_MS: 300000,
   MAX_DELTA_ROWS: 50,
   MIN_FULL_SOURCE_ROWS: 300,
   MAX_FULL_SOURCE_ROWS: 500,
@@ -28,7 +29,7 @@ function staffSourceBridgeReceive_(body) {
 
   const eventId = String(body.event_id || '').trim();
   if (!/^[A-Za-z0-9._:-]{8,128}$/.test(eventId)) throw new Error('STAFF_BRIDGE_EVENT_ID_INVALID');
-  staffSourceBridgeVerifyGoogleSender_(String(body.oauth_token || ''));
+  staffSourceBridgeVerifySender_(body);
 
   const cache = CacheService.getScriptCache();
   const replayKey = 'BH_STAFF_BRIDGE_' + sha256Hex_(eventId).slice(0, 40);
@@ -51,6 +52,45 @@ function staffSourceBridgeReceive_(body) {
   }));
   props.deleteProperty('LAST_STAFF_SOURCE_BRIDGE_ERROR');
   return Object.assign({ok:true,event_id:eventId,mode:'SOURCE_DRIVEN_DELTA_V1'}, result);
+}
+
+function staffSourceBridgeVerifySender_(body) {
+  const signature = String(body && body.hmac_sha256 || '').trim().toLowerCase();
+  const secret = String(PropertiesService.getScriptProperties().getProperty(BH_STAFF_BRIDGE.HMAC_PROP) || '');
+  if (signature && secret.length >= 32) {
+    const sentAt = Date.parse(String(body.sent_at || ''));
+    if (!Number.isFinite(sentAt) || Math.abs(Date.now() - sentAt) > BH_STAFF_BRIDGE.HMAC_MAX_SKEW_MS) {
+      throw new Error('STAFF_BRIDGE_HMAC_STALE');
+    }
+    const expected = staffSourceBridgeHmacHex_(body, secret);
+    if (!staffSourceBridgeSecureEq_(signature, expected)) throw new Error('STAFF_BRIDGE_HMAC_INVALID');
+    return 'HMAC';
+  }
+  staffSourceBridgeVerifyGoogleSender_(String(body && body.oauth_token || ''));
+  return 'OAUTH';
+}
+
+function staffSourceBridgeCanonical_(payload) {
+  const oldCodes = payload.old_codes && typeof payload.old_codes === 'object' && !Array.isArray(payload.old_codes) ? payload.old_codes : {};
+  const oldPart = Object.keys(oldCodes).sort(function(a,b){
+    const na=Number(a), nb=Number(b);
+    if (Number.isFinite(na) && Number.isFinite(nb) && na !== nb) return na-nb;
+    return String(a).localeCompare(String(b));
+  }).map(function(k){ return String(k) + '=' + String(oldCodes[k] || ''); }).join('&');
+  return [String(payload.action || ''),String(payload.event_id || ''),String(payload.source_id || ''),String(payload.source_tab || ''),String(payload.change_type || ''),String(payload.row_start || ''),String(payload.row_end || ''),String(payload.col_start || ''),String(payload.col_end || ''),String(payload.at || ''),String(payload.sent_at || ''),oldPart].join('\n');
+}
+
+function staffSourceBridgeHmacHex_(payload, secret) {
+  const bytes = Utilities.computeHmacSha256Signature(staffSourceBridgeCanonical_(payload), secret, Utilities.Charset.UTF_8);
+  return bytes.map(function(b){ return ('0' + ((b + 256) % 256).toString(16)).slice(-2); }).join('');
+}
+
+function staffSourceBridgeSecureEq_(a, b) {
+  a=String(a || ''); b=String(b || '');
+  if (a.length !== b.length) return false;
+  let diff=0;
+  for (let i=0;i<a.length;i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }
 
 function staffSourceBridgeVerifyGoogleSender_(oauthToken) {
