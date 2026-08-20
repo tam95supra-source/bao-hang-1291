@@ -99,6 +99,7 @@ jobs:
           if test "$CHANNEL" = beta && test "$VERSION_NAME" = 1.6.8 && test "$VERSION_CODE" = 17; then
             test -s ops/patch-picker-beta-1.6.8.py
             python3 ops/patch-picker-beta-1.6.8.py
+            git restore -- ops/release-request.json
             main='app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt'
             colors='app/src/main/res/values/colors.xml'
             grep -F 'val root = fixedPage(SCREEN_PICKER)' "$main"
