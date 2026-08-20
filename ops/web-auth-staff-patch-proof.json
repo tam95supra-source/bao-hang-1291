@@ -1,0 +1,5 @@
+{
+  "status": "PASS",
+  "stage": "BUILD",
+  "error_tail": "dist/assets/index.esm-CCfX48Rv.js                           31.65 kB │ gzip:  10.36 kB\ndist/assets/index-C95dsU6G.js                              108.96 kB │ gzip:  32.18 kB\ndist/assets/index.esm-Cit97JEj.js                          126.05 kB │ gzip:  35.81 kB\ndist/assets/index.esm-CYSYr9Ff.js                          568.23 kB │ gzip: 166.02 kB\ndist/assets/exceljs.min-DU5thngD.js                        930.50 kB │ gzip: 256.62 kB\n\n\u001b[32m✓ built in 440ms\u001b[39m\n\u001b[33m[plugin builtin:vite-reporter] \n(!) Some chunks are larger than 500 kB after minification. Consider:\n- Using dynamic import() to code-split the application\n- Use build.rolldownOptions.output.codeSplitting to improve chunking: <url>\n- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.\u001b[39m"
+}
