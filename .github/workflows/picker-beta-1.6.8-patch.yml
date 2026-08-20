@@ -2,8 +2,7 @@ name: One-time Picker Beta 1.6.8 patch
 
 on:
   push:
-    branches:
-      - fix/picker-layout-history-beta-1.6.8
+    branches: [main]
     paths:
       - 'ops/picker-beta-1.6.8-trigger.txt'
 
@@ -63,7 +62,7 @@ jobs:
           gradle --no-daemon testDebugUnitTest assembleDebug \
             -PVERSION_NAME=1.6.8 -PVERSION_CODE=17 -POTA_CHANNEL=beta
 
-      - name: Commit validated patch to feature branch
+      - name: Commit validated patch to main
         shell: bash
         run: |
           set -euo pipefail
@@ -75,4 +74,4 @@ jobs:
             ops/release-request.json
           git diff --cached --quiet && { echo 'No patch changes to commit' >&2; exit 1; }
           git commit -m 'feat(android): optimize Picker shortage flow and history'
-          git push origin HEAD:${GITHUB_REF_NAME}
+          git push origin HEAD:main
