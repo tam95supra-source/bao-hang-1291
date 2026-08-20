@@ -1,14 +1,29 @@
 from pathlib import Path
-import re
 
 
 def replace_function(path: str, name: str, replacement: str) -> None:
     p = Path(path)
     src = p.read_text(encoding='utf-8')
-    pattern = rf"function {re.escape(name)}\([^\n]*\) \{{.*?^\}}"
-    out, count = re.subn(pattern, replacement.rstrip(), src, count=1, flags=re.S | re.M)
-    if count != 1:
-        raise SystemExit(f'{path}: function {name} replacement count={count}')
+    start = src.find(f'function {name}(')
+    if start < 0:
+        raise SystemExit(f'{path}: function {name} not found')
+    open_brace = src.find('{', start)
+    if open_brace < 0:
+        raise SystemExit(f'{path}: function {name} opening brace not found')
+    depth = 0
+    end = -1
+    for index in range(open_brace, len(src)):
+        char = src[index]
+        if char == '{':
+            depth += 1
+        elif char == '}':
+            depth -= 1
+            if depth == 0:
+                end = index + 1
+                break
+    if end < 0:
+        raise SystemExit(f'{path}: function {name} closing brace not found')
+    out = src[:start] + replacement.rstrip() + src[end:]
     p.write_text(out + ('' if out.endswith('\n') else '\n'), encoding='utf-8')
 
 
@@ -33,9 +48,10 @@ replace_function(
 workflow = Path('.github/workflows/staff-sync.yml')
 s = workflow.read_text(encoding='utf-8')
 old = "              role='ADMIN_INVENT' if 'DIEU PHOI' in p else ('INVENT' if 'INVENT' in d or 'INVENT' in p else 'PICKER')"
-if old not in s:
+if old not in s and "              role='PICKER'" not in s:
     raise SystemExit('staff-sync role derivation anchor not found')
-s = s.replace(old, "              role='PICKER'", 1)
+if old in s:
+    s = s.replace(old, "              role='PICKER'", 1)
 workflow.write_text(s, encoding='utf-8')
 
 full = Path('ops/full_staff_sync.mjs')
@@ -48,9 +64,10 @@ if "map(item => ({...item, role:'PICKER'}))" not in s:
     s = s.replace(anchor, insert, 1)
 old_pass = "const pass=result.failed===0&&mismatches.length===0&&protectedAdmins.length===1&&gsheetActive.length===source.staff.length;\nconst proof={status:pass?'PASS':'FAIL',source_count:source.staff.length,total_profiles:finalProfiles.length,active_gsheet:gsheetActive.length,protected_admins:protectedAdmins.length,created:result.created,updated:result.updated,unchanged:result.unchanged,deactivated:result.deactivated,failed:result.failed,retries:result.retries,mismatch_count:mismatches.length,role_counts:roleCounts,error_summary:result.errors.slice(0,20).join('; ').slice(0,1500)};"
 new_pass = "const gsheetElevated=gsheetActive.filter(p=>p.role!=='PICKER');\nconst pass=result.failed===0&&mismatches.length===0&&protectedAdmins.length===1&&gsheetActive.length===source.staff.length&&gsheetElevated.length===0;\nconst proof={status:pass?'PASS':'FAIL',source_count:source.staff.length,total_profiles:finalProfiles.length,active_gsheet:gsheetActive.length,gsheet_elevated:gsheetElevated.length,protected_admins:protectedAdmins.length,created:result.created,updated:result.updated,unchanged:result.unchanged,deactivated:result.deactivated,failed:result.failed,retries:result.retries,mismatch_count:mismatches.length,role_counts:roleCounts,error_summary:result.errors.slice(0,20).join('; ').slice(0,1500)};"
-if old_pass not in s:
-    raise SystemExit('full sync proof anchor not found')
-s = s.replace(old_pass, new_pass, 1)
+if 'const gsheetElevated=' not in s:
+    if old_pass not in s:
+        raise SystemExit('full sync proof anchor not found')
+    s = s.replace(old_pass, new_pass, 1)
 full.write_text(s, encoding='utf-8')
 
 print('PATCH_STAFF_SOURCE_PICKER=PASS')
