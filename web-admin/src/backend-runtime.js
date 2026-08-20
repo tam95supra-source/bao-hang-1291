@@ -311,6 +311,7 @@ class BackendChannel {
       return this
     }
     this.closed = false
+    let firstSnapshot = true
     statusCallback?.('CONNECTING')
     firebaseRuntime().then(({ firestore, doc, onSnapshot }) => {
       if (this.closed) return
@@ -324,8 +325,9 @@ class BackendChannel {
           const previous = realtimeSnapshotMarkers.get(topic)
           realtimeSnapshotMarkers.set(topic, marker)
           // Firestore emits the current document immediately after every subscribe.
-          // Treat the first snapshot as a baseline and suppress reconnect duplicates.
-          if (previous === undefined || previous === marker) return
+          // Current state after reconnect is baseline, never a new event.
+          if (firstSnapshot) { firstSnapshot = false; return }
+          if (previous === marker) return
           this.handlers.forEach(({ filter, callback }) => {
             if (!filter?.event || filter.event === event.event_type) callback({ payload: event })
           })

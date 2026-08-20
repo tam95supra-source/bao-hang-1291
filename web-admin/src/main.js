@@ -247,6 +247,7 @@ function renderTab() {
 }
 let realtimeNoticeTimer = null;
 function showRealtimeNotice(text) {
+  if (document.hidden) return;
   let el = document.getElementById('realtimeNotice');
   if (!el) { el = document.createElement('div'); el.id = 'realtimeNotice'; el.className = 'realtime-notice'; document.body.appendChild(el); }
   el.textContent = text; el.hidden = false;
@@ -304,7 +305,11 @@ function ensureFallbackPolling() {
   }, 30_000);
 }
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) stopRealtime(); else if (state.session) startRealtime();
+  if (document.hidden) {
+    const notice = document.getElementById('realtimeNotice');
+    if (notice) notice.hidden = true;
+    stopRealtime();
+  } else if (state.session) startRealtime();
 });
 window.addEventListener('hashchange', () => {
   if (!state.session) return;

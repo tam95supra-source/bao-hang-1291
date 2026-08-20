@@ -5,6 +5,14 @@ const BRIDGE_PUBLIC_KEY = 'compat-public';
 const WEB_API = `${BACKEND_BRIDGE_URL}/api/web-api`;
 const ADMIN_OPS = `${BACKEND_BRIDGE_URL}/api/admin-ops`;
 const SESSION_KEY = 'bao-hang-1291-web-session';
+const USER_VIEW_STATE_KEY = 'bao-hang-1291-staff-view-state';
+function readUserViewState() {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(USER_VIEW_STATE_KEY) || '{}');
+    return { userSearch: String(value.userSearch || ''), userTableScrollTop: Math.max(0, Number(value.userTableScrollTop || 0)) };
+  } catch { return { userSearch: '', userTableScrollTop: 0 }; }
+}
+const savedUserViewState = readUserViewState();
 const ROLE_LABELS = {
   ADMIN: 'Admin hệ thống',
   ADMIN_INVENT: 'Admin Event',
@@ -18,12 +26,15 @@ const ui = {
   overviewClock: null,
   issueBoardCache: null,
   issueBoardAt: 0,
-  userSearch: '',
-  userTableScrollTop: 0,
+  userSearch: savedUserViewState.userSearch,
+  userTableScrollTop: savedUserViewState.userTableScrollTop,
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+function persistUserViewState() {
+  try { sessionStorage.setItem(USER_VIEW_STATE_KEY, JSON.stringify({ userSearch: ui.userSearch, userTableScrollTop: ui.userTableScrollTop })); } catch (_) {}
+}
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[c]));
 function formatTime(value, withSeconds = false) {
   if (!value) return '—';
@@ -306,9 +317,9 @@ async function renderUsersView() {
   const content = $('#content');
   if (!content || !isManager()) return;
   const existingSearch = $('#opsUserSearch');
-  if (existingSearch) ui.userSearch = existingSearch.value;
+  if (existingSearch) { ui.userSearch = existingSearch.value; persistUserViewState(); }
   const existingUserTable = content.querySelector('.ops-users-panel .table-wrap');
-  if (existingUserTable) ui.userTableScrollTop = existingUserTable.scrollTop;
+  if (existingUserTable) { ui.userTableScrollTop = existingUserTable.scrollTop; persistUserViewState(); }
   content.dataset.opsRender = 'users';
   if(content.dataset.opsRender!=='users'||!content.querySelector('.ops-users-table'))content.innerHTML = `${pageHeading('Nhân sự & tài khoản', 'Google Sheet là nguồn chính; tài khoản tạo thêm được quản lý riêng và không ghi ngược vào nguồn.', `<span class="ops-source-label">DỮ LIỆU THEO NGÀY · DANH SÁCH NHÂN SỰ</span>`)}<div class="ops-loading">Đang tải nhân sự…</div>`;
   try {
@@ -359,12 +370,12 @@ async function renderUsersView() {
     const searchInput = $('#opsUserSearch');
     if (searchInput) {
       searchInput.value = ui.userSearch;
-      searchInput.addEventListener('input', () => { ui.userSearch = searchInput.value; draw(); });
+      searchInput.addEventListener('input', () => { ui.userSearch = searchInput.value; persistUserViewState(); draw(); });
     }
     const userTableWrap = content.querySelector('.ops-users-panel .table-wrap');
     if (userTableWrap) {
       userTableWrap.scrollTop = ui.userTableScrollTop;
-      userTableWrap.addEventListener('scroll', () => { ui.userTableScrollTop = userTableWrap.scrollTop; }, { passive: true });
+      userTableWrap.addEventListener('scroll', () => { ui.userTableScrollTop = userTableWrap.scrollTop; persistUserViewState(); }, { passive: true });
     }
     $('#opsCreateUser').addEventListener('submit', async (event) => {
       event.preventDefault();
