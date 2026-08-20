@@ -116,31 +116,59 @@ async function fetchProfile(accessToken, userId) {
   if (!Array.isArray(rows) || !rows.length) throw new Error('Tài khoản chưa có hồ sơ nhân sự.');
   return rows[0];
 }
-async function refreshSessionIfNeeded() {
+async function refreshSessionIfNeeded(force = false) {
   if (!state.session) throw new Error('Phiên đăng nhập không tồn tại.');
   const now = Math.floor(Date.now() / 1000);
-  if ((state.session.expires_at || 0) > now + 120) return;
+  if (!force && (state.session.expires_at || 0) > now + 120) return state.session;
   const token = await authToken({ refresh_token: state.session.refresh_token }, 'refresh_token');
+  if (!token?.access_token) throw new Error('Không thể làm mới phiên đăng nhập.');
   saveSession({ ...state.session, access_token: token.access_token, refresh_token: token.refresh_token || state.session.refresh_token, expires_at: now + Number(token.expires_in || 3600) });
   realtimeClient.realtime.setAuth(state.session.access_token);
+  return state.session;
 }
-async function api(action, payload = {}) {
-  await refreshSessionIfNeeded();
+window.__BH_AUTH__ = {
+  ensureSession: async (force = false) => { await refreshSessionIfNeeded(force); return state.session; },
+  getSession: () => state.session,
+};
+async function responseNeedsAuthRefresh(response) {
+  if (response.status === 401) return true;
+  const text = await response.clone().text().catch(() => '');
+  return /(^|[^A-Z_])AUTH_REQUIRED([^A-Z_]|$)/.test(text);
+}
+async function api(action, payload = {}, allowAuthRetry = true) {
+  await refreshSessionIfNeeded(false);
   const headers = { 'content-type': 'application/json', apikey: BRIDGE_PUBLIC_KEY, authorization: `Bearer ${state.session.access_token}` };
   if (state.testRole) headers['x-admin-test-role'] = state.testRole;
   const response = await fetch(`${API_BASE}/${encodeURIComponent(action)}`, { method: 'POST', headers, body: JSON.stringify(payload) });
-  if (response.status === 401) {
+  if (await responseNeedsAuthRefresh(response)) {
+    if (allowAuthRetry) {
+      try {
+        await refreshSessionIfNeeded(true);
+        return api(action, payload, false);
+      } catch (_) {}
+    }
     clearSession();
-    renderLogin('Phiên đăng nhập đã hết hạn.');
-    throw new Error('Phiên đăng nhập đã hết hạn.');
+    renderLogin('Phiên đăng nhập cần xác thực lại.');
+    throw new Error('Phiên đăng nhập cần xác thực lại.');
   }
   return parseResponse(response);
 }
-async function issueWithdraw(action, payload = {}) {
-  await refreshSessionIfNeeded();
+async function issueWithdraw(action, payload = {}, allowAuthRetry = true) {
+  await refreshSessionIfNeeded(false);
   const headers = { 'content-type': 'application/json', apikey: BRIDGE_PUBLIC_KEY, authorization: `Bearer ${state.session.access_token}` };
   if (state.testRole) headers['x-admin-test-role'] = state.testRole;
   const response = await fetch(`${BACKEND_BRIDGE_URL}/api/issue-withdraw/${encodeURIComponent(action)}`, { method: 'POST', headers, body: JSON.stringify(payload) });
+  if (await responseNeedsAuthRefresh(response)) {
+    if (allowAuthRetry) {
+      try {
+        await refreshSessionIfNeeded(true);
+        return issueWithdraw(action, payload, false);
+      } catch (_) {}
+    }
+    clearSession();
+    renderLogin('Phiên đăng nhập cần xác thực lại.');
+    throw new Error('Phiên đăng nhập cần xác thực lại.');
+  }
   return parseResponse(response);
 }
 function setBusy(busy, text = 'Đang xử lý…') {
@@ -550,5 +578,22 @@ async function renderVersions(){
   $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">RELEASE</p><h2>Phiên bản</h2></div></div><article class="card"><h3>OTA</h3><p>Stable và Beta được khóa channel trong APK, signer và SHA được workflow release kiểm tra trước publish.</p><p class="muted">Release mới vẫn đi qua workflow production đã harden; Web không chứa signing key.</p></article><article class="card"><h3>Runtime</h3><p>Dùng mục Thiết bị & thông báo / Log để đối chiếu app version đang chạy. Không coi file build là đã triển khai nếu chưa có evidence runtime.</p></article>`;
 }
 
-state.session = readSession();
-if (state.session) renderApp(); else renderLogin();
+async function bootstrapApp() {
+  state.session = readSession();
+  if (!state.session) { renderLogin(); return; }
+  try {
+    // A stored access token is not trusted on cold load. Refresh Firebase first,
+    // then validate the profile before rendering any authenticated view/RPC.
+    await refreshSessionIfNeeded(true);
+    const userId = state.session?.profile?.id;
+    if (!userId) throw new Error('SESSION_PROFILE_MISSING');
+    const profile = await fetchProfile(state.session.access_token, userId);
+    if (!profile.active) throw new Error('USER_INACTIVE');
+    saveSession({ ...state.session, profile });
+    renderApp();
+  } catch (_) {
+    clearSession();
+    renderLogin('Phiên đăng nhập cần xác thực lại.');
+  }
+}
+bootstrapApp();

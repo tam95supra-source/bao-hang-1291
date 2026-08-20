@@ -64,29 +64,25 @@ function detectedTestRole() {
 }
 function effectiveRole() { return detectedTestRole() || readSession()?.profile?.role || 'PICKER'; }
 function isManager() { return ['ADMIN', 'ADMIN_INVENT'].includes(effectiveRole()); }
-async function refreshSessionIfNeeded() {
+async function refreshSessionIfNeeded(force = false) {
+  if (globalThis.__BH_AUTH__?.ensureSession) return globalThis.__BH_AUTH__.ensureSession(force);
   const session = readSession();
   if (!session) throw new Error('Phiên đăng nhập không tồn tại.');
   const now = Math.floor(Date.now() / 1000);
-  if ((session.expires_at || 0) > now + 90) return session;
+  if (!force && (session.expires_at || 0) > now + 90) return session;
   const response = await fetch(`${BACKEND_BRIDGE_URL}/auth/token?grant_type=refresh_token`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', apikey: BRIDGE_PUBLIC_KEY },
     body: JSON.stringify({ refresh_token: session.refresh_token }),
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error_description || data.message || 'Phiên đăng nhập đã hết hạn.');
-  const updated = {
-    ...session,
-    access_token: data.access_token,
-    refresh_token: data.refresh_token || session.refresh_token,
-    expires_at: now + Number(data.expires_in || 3600),
-  };
+  if (!response.ok || !data.access_token) throw new Error(data.error_description || data.message || 'Phiên đăng nhập đã hết hạn.');
+  const updated = { ...session, access_token: data.access_token, refresh_token: data.refresh_token || session.refresh_token, expires_at: now + Number(data.expires_in || 3600) };
   sessionStorage.setItem(SESSION_KEY, JSON.stringify(updated));
   return updated;
 }
-async function request(base, action, payload = {}) {
-  const session = await refreshSessionIfNeeded();
+async function request(base, action, payload = {}, allowAuthRetry = true) {
+  const session = await refreshSessionIfNeeded(false);
   const headers = {
     'content-type': 'application/json',
     apikey: BRIDGE_PUBLIC_KEY,
@@ -102,7 +98,12 @@ async function request(base, action, payload = {}) {
   if (text) {
     try { data = JSON.parse(text); } catch { data = { error: text }; }
   }
-  if (!response.ok) throw new Error(data.error || data.message || `Lỗi máy chủ ${response.status}`);
+  const authRequired = response.status === 401 || /(^|[^A-Z_])AUTH_REQUIRED([^A-Z_]|$)/.test(String(data.error || data.message || ''));
+  if (authRequired && allowAuthRetry && globalThis.__BH_AUTH__?.ensureSession) {
+    await refreshSessionIfNeeded(true);
+    return request(base, action, payload, false);
+  }
+  if (!response.ok) throw new Error(authRequired ? 'Phiên đăng nhập cần xác thực lại.' : (data.error || data.message || `Lỗi máy chủ ${response.status}`));
   return data;
 }
 const webApi = (action, payload = {}) => request(WEB_API, action, payload);

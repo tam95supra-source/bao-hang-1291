@@ -92,6 +92,7 @@ async function firebasePasswordLogin(body) {
 async function refreshFirebase(body) {
   const refreshToken = String(body.refresh_token || '')
   const { auth } = await firebaseRuntime()
+  if (typeof auth.authStateReady === 'function') await auth.authStateReady()
   if (auth.currentUser) {
     const token = await auth.currentUser.getIdToken(true)
     realtimeToken = token
