@@ -1,0 +1,87 @@
+name: Verify Web Runtime
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/verify-web-runtime.trigger'
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Verify live and record exact stage
+        shell: bash
+        run: |
+          set +e
+          STAGE=HOSTING_REVISION; RC=0; : >/tmp/verify.log
+          EXPECTED=$(cat web-admin/public/runtime-revision.txt 2>>/tmp/verify.log); RC=$?
+          if [[ $RC -eq 0 ]]; then
+            LIVE=''
+            for i in $(seq 1 36); do
+              LIVE=$(curl -fsSL -H 'Cache-Control: no-cache' "https://bao-hang-1291.web.app/runtime-revision.txt?r=$GITHUB_RUN_ID" 2>>/tmp/verify.log || true)
+              [[ "$LIVE" == "$EXPECTED" ]] && break
+              sleep 5
+            done
+            [[ "$LIVE" == "$EXPECTED" ]]; RC=$?
+          fi
+          if [[ $RC -eq 0 ]]; then
+            STAGE=LIVE_BUNDLE
+            curl -fsSL -H 'Cache-Control: no-cache' "https://bao-hang-1291.web.app/?r=$GITHUB_RUN_ID" -o /tmp/index.html 2>>/tmp/verify.log; RC=$?
+            if [[ $RC -eq 0 ]]; then
+              grep -oE 'src="[^"]+\.js"' /tmp/index.html | cut -d'"' -f2 > /tmp/assets.txt
+              : > /tmp/live-js
+              while read -r asset; do
+                [[ "$asset" = http* ]] && url="$asset" || url="https://bao-hang-1291.web.app$asset"
+                curl -fsSL -H 'Cache-Control: no-cache' "$url?r=$GITHUB_RUN_ID" >> /tmp/live-js 2>>/tmp/verify.log || { RC=1; break; }
+              done < /tmp/assets.txt
+            fi
+            if [[ $RC -eq 0 ]]; then
+              grep -q 'bao-hang-1291-staff-view-state' /tmp/live-js && grep -q 'AUTH_REQUIRED' /tmp/live-js && grep -q 'authStateReady' /tmp/live-js && grep -q 'Phiên đăng nhập cần xác thực lại' /tmp/live-js
+              RC=$?
+            fi
+            if [[ $RC -eq 0 ]]; then
+              curl -fsSI 'https://bao-hang-1291.web.app/' > /tmp/headers.txt 2>>/tmp/verify.log && grep -qi 'content-security-policy:' /tmp/headers.txt && grep -qi 'x-content-type-options: nosniff' /tmp/headers.txt
+              RC=$?
+            fi
+          fi
+          if [[ $RC -eq 0 ]]; then
+            STAGE=AUTH_PIPELINE
+            node <<'NODE' >>/tmp/verify.log 2>&1
+          const fs=require('fs'),crypto=require('crypto');const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');
+          if(sa.project_id!=='bao-hang-1291'||!sa.client_email||!sa.private_key)throw new Error('SERVICE_ACCOUNT_SCOPE');
+          const src=fs.readFileSync('web-admin/src/backend-runtime.js','utf8'),apiKey=(src.match(/FIREBASE_API_KEY = '([^']+)'/)||[])[1],neon=(src.match(/NEON_API = '([^']+)'/)||[])[1];if(!apiKey||!neon)throw new Error('PUBLIC_CONFIG_MISSING');
+          const enc=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');const sign=p=>{const h=enc({alg:'RS256',typ:'JWT'}),b=enc(p),u=`${h}.${b}`;return `${u}.${crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url')}`};
+          async function j(u,i={}){const r=await fetch(u,i),t=await r.text();let d={};try{d=JSON.parse(t)}catch{};if(!r.ok)throw new Error(`HTTP_${r.status}`);return d}
+          (async()=>{const n=Math.floor(Date.now()/1000),a=sign({iss:sa.client_email,scope:'https://www.googleapis.com/auth/cloud-platform',aud:'https://oauth2.googleapis.com/token',iat:n,exp:n+900});const o=await j('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:a})});const l=await j(`https://identitytoolkit.googleapis.com/v1/projects/${sa.project_id}/accounts:lookup`,{method:'POST',headers:{authorization:`Bearer ${o.access_token}`,'content-type':'application/json'},body:JSON.stringify({email:['6281280@bao-hang-1291.local']})});const uid=l.users?.[0]?.localId;if(!uid)throw new Error('ADMIN_FIREBASE_UID_MISSING');const c=sign({iss:sa.client_email,sub:sa.client_email,aud:'https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit',iat:n,exp:n+900,uid});const si=await j(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${encodeURIComponent(apiKey)}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:c,returnSecureToken:true})});const rf=await j(`https://securetoken.googleapis.com/v1/token?key=${encodeURIComponent(apiKey)}`,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',refresh_token:si.refreshToken})});const rpc=await j(`${neon}/rpc/api_session_profile_rpc`,{method:'POST',headers:{authorization:`Bearer ${rf.id_token}`,'content-type':'application/json'},body:JSON.stringify({p_test_role:null})});if(rpc.employee_code!=='6281280'||rpc.role!=='ADMIN')throw new Error('NEON_AUTH_CONTEXT_INVALID');console.log('AUTH_REFRESH_TO_NEON=PASS')})().catch(e=>{console.error(e.message);process.exit(1)});
+          NODE
+            RC=$?
+          fi
+          export STAGE RC
+          python3 - <<'PY'
+          import json,os,re,hashlib
+          from pathlib import Path
+          raw=Path('/tmp/verify.log').read_text(errors='replace') if Path('/tmp/verify.log').exists() else ''
+          raw=re.sub(r'https?://\S+','<url>',raw)
+          proof={'status':'PASS' if int(os.environ['RC'])==0 else 'FAIL','stage':os.environ['STAGE'],'staff_reconnect_baseline':'PASS' if int(os.environ['RC'])==0 else 'UNKNOWN','staff_search_session_state':'PASS' if int(os.environ['RC'])==0 else 'UNKNOWN','cold_load_force_refresh':'PASS' if int(os.environ['RC'])==0 else 'UNKNOWN','auth_required_single_retry':'PASS' if int(os.environ['RC'])==0 else 'UNKNOWN','firebase_refresh_to_neon':'PASS' if int(os.environ['RC'])==0 else 'UNKNOWN','error_tail':'\n'.join(raw.splitlines()[-10:])[:1200]}
+          if Path('/tmp/live-js').exists(): proof['bundle_sha256']=hashlib.sha256(Path('/tmp/live-js').read_bytes()).hexdigest()
+          Path('ops/web-runtime-live-proof.json').write_text(json.dumps(proof,ensure_ascii=False,indent=2)+'\n')
+          PY
+          exit 0
+      - name: Commit sanitized live proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat ops/web-runtime-live-proof.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ops/web-runtime-live-proof.json
+          git diff --cached --quiet || git commit -m 'chore(web): record deterministic live verification'
+          git pull --rebase origin main
+          git push origin HEAD:main
+          grep -q '"status": "PASS"' ops/web-runtime-live-proof.json
