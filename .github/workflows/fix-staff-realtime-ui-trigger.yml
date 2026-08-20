@@ -17,10 +17,13 @@ jobs:
       - name: Syntax and source gates
         run: |
           node --check web-admin/src/backend-runtime.js
+          node --check web-admin/src/main.js
           node --check web-admin/src/ops-console.js
-          grep -q 'previous === undefined || previous === marker' web-admin/src/backend-runtime.js
-          grep -q 'userTableScrollTop' web-admin/src/ops-console.js
-          grep -q 'theo sự kiện' web-admin/src/ops-console.js
+          grep -q 'let firstSnapshot = true' web-admin/src/backend-runtime.js
+          grep -q 'if (firstSnapshot) { firstSnapshot = false; return }' web-admin/src/backend-runtime.js
+          grep -q 'if (document.hidden) return;' web-admin/src/main.js
+          grep -q 'bao-hang-1291-staff-view-state' web-admin/src/ops-console.js
+          grep -q 'persistUserViewState' web-admin/src/ops-console.js
       - name: Build web
         run: |
           npm --prefix web-admin install --ignore-scripts --no-audit --no-fund --no-package-lock
@@ -29,7 +32,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add web-admin/src/backend-runtime.js web-admin/src/ops-console.js
-          git diff --cached --quiet || git commit -m 'fix(web): dedupe staff reconnect and preserve user filters'
+          git add web-admin/src/backend-runtime.js web-admin/src/main.js web-admin/src/ops-console.js
+          git diff --cached --quiet || git commit -m 'fix(web): keep staff search stable across browser focus'
           git pull --rebase origin main
           git push origin HEAD:main
