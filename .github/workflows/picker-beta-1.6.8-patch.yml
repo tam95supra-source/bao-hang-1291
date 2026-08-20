@@ -1,0 +1,77 @@
+name: One-time Picker Beta 1.6.8 patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/picker-beta-1.6.8-trigger.txt'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: picker-beta-1-6-8-patch
+  cancel-in-progress: false
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.9'
+          cache-disabled: true
+
+      - name: Apply Picker UI/history patch
+        run: python3 ops/patch-picker-beta-1.6.8.py
+
+      - name: Static invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          main='app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt'
+          colors='app/src/main/res/values/colors.xml'
+          request='ops/release-request.json'
+          grep -F 'val root = fixedPage(SCREEN_PICKER)' "$main"
+          ! grep -F 'fixedPage(SCREEN_PICKER, "Báo thiếu hàng")' "$main"
+          ! grep -F 'SKU đã báo hôm nay • cũ → mới' "$main"
+          grep -F 'Lịch sử báo hàng hôm nay' "$main"
+          grep -F 'isTodayReport(issue.reportedAt) || issue.status.isOpenBucket' "$main"
+          grep -F 'R.color.green_50' "$main"
+          grep -F 'R.color.red_50' "$main"
+          grep -F 'R.color.amber_50' "$main"
+          grep -F 'name="green_50"' "$colors"
+          grep -F 'name="red_50"' "$colors"
+          grep -F 'name="amber_50"' "$colors"
+          jq -e '.action == "publish" and .channel == "beta" and .versionName == "1.6.8" and .versionCode == 17 and .mandatory == true' "$request"
+          git diff --check
+
+      - name: Compile and unit test patched Android
+        run: |
+          set -euo pipefail
+          gradle --no-daemon testDebugUnitTest assembleDebug \
+            -PVERSION_NAME=1.6.8 -PVERSION_CODE=17 -POTA_CHANNEL=beta
+
+      - name: Commit validated patch to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt \
+            app/src/main/res/values/colors.xml \
+            ops/release-request.json
+          git diff --cached --quiet && { echo 'No patch changes to commit' >&2; exit 1; }
+          git commit -m 'feat(android): optimize Picker shortage flow and history'
+          git push origin HEAD:main
