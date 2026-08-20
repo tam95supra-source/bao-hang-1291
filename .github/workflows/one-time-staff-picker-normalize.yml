@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: staff-source-picker-normalize
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   normalize:
