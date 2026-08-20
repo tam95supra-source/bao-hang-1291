@@ -5,5 +5,5 @@
   "versionCode": 17,
   "mandatory": true,
   "releaseNotes": "Beta 1.6.8: tối ưu màn Picker báo thiếu; bỏ tiêu đề Báo thiếu hàng và trạng thái Chưa chọn SKU; đặt nút Báo thiếu cùng dòng với ô nhập SKU, gợi ý SKU xổ xuống dưới; SKU đã chọn hiển thị ngay dưới vùng nhập với nền riêng; tách rõ vùng nhập và lịch sử; lịch sử chỉ giữ báo trong ngày và các SKU ngày cũ còn chưa xử lý; ẩn SKU ngày cũ đã hoàn tất; tô nền xanh nhạt cho Đã có hàng, đỏ nhạt cho Skip, vàng nhạt cho SKU đang xử lý; đổi tiêu đề thành Lịch sử báo hàng hôm nay.",
-  "retry": 1
+  "retry": 2
 }
