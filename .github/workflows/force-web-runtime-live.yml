@@ -1,0 +1,166 @@
+name: Force Web Runtime Live
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/force-web-runtime.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  deploy_verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      FIREBASE_API_KEY: AIzaSyB-n368fntzxsuuLlvte9NXhcuX0DDbTXM
+      NEON_DATA_API: https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1
+      APPS_SCRIPT_WORKER_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      ADMIN_UID: 44fae0a2-09eb-4226-8412-0f1a1f5d7ef8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Build, zero-cost guard, deploy and verify live runtime
+        id: verify
+        shell: bash
+        run: |
+          set -uo pipefail
+          STAGE=INIT
+          LOG="$RUNNER_TEMP/force-web-runtime.log"
+          : > "$LOG"
+          finish_proof() {
+            rc=$?
+            status=PASS
+            if [[ $rc -ne 0 ]]; then status=FAIL; fi
+            export status STAGE rc
+            python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          proof={
+            'status': os.environ.get('status','FAIL'),
+            'stage': os.environ.get('STAGE','UNKNOWN'),
+            'hosting': 'https://bao-hang-1291.web.app',
+            'revision': Path('web-admin/public/runtime-revision.txt').read_text().strip() if Path('web-admin/public/runtime-revision.txt').exists() else '',
+            'zero_cost_guard': 'PASS' if os.environ.get('STAGE') not in ('INIT','ZERO_COST') else ('PASS' if os.environ.get('status')=='PASS' else 'UNKNOWN'),
+            'firebase_refresh_to_neon': 'PASS' if os.environ.get('status')=='PASS' else 'UNKNOWN'
+          }
+          Path('ops/web-runtime-final-proof.json').write_text(json.dumps(proof,ensure_ascii=False,indent=2)+'\n')
+          PY
+            exit $rc
+          }
+          trap finish_proof EXIT
+
+          STAGE=SCOPE
+          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
+          test -n "${APPS_SCRIPT_WORKER_URL:-}"
+          case "$APPS_SCRIPT_WORKER_URL" in https://script.google.com/macros/s/*/exec) ;; *) exit 11;; esac
+          node --check web-admin/src/backend-runtime.js
+          node --check web-admin/src/main.js
+          node --check web-admin/src/ops-console.js
+          grep -q 'let firstSnapshot = true' web-admin/src/backend-runtime.js
+          grep -q 'if (firstSnapshot) { firstSnapshot = false; return }' web-admin/src/backend-runtime.js
+          grep -q 'bao-hang-1291-staff-view-state' web-admin/src/ops-console.js
+          grep -q 'async function bootstrapApp()' web-admin/src/main.js
+          grep -q 'responseNeedsAuthRefresh' web-admin/src/main.js
+
+          STAGE=ZERO_COST
+          node <<'NODE'
+          const crypto=require('crypto');
+          const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');
+          if(!sa.client_email||!sa.private_key||sa.project_id!=='bao-hang-1291') throw new Error('SERVICE_ACCOUNT_SCOPE');
+          const enc=(v)=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');
+          async function access(){
+            const now=Math.floor(Date.now()/1000);
+            const unsigned=`${enc({alg:'RS256',typ:'JWT'})}.${enc({iss:sa.client_email,scope:'https://www.googleapis.com/auth/cloud-platform',aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+900})}`;
+            const sig=crypto.sign('RSA-SHA256',Buffer.from(unsigned),sa.private_key).toString('base64url');
+            const r=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:`${unsigned}.${sig}`})});
+            if(!r.ok) throw new Error('OAUTH_TOKEN'); return (await r.json()).access_token;
+          }
+          (async()=>{const a=await access(); const r=await fetch('https://cloudbilling.googleapis.com/v1/projects/bao-hang-1291/billingInfo',{headers:{Authorization:`Bearer ${a}`}}); if(!r.ok) throw new Error('BILLING_READ'); const b=await r.json(); if(b.billingEnabled===true) throw new Error('COST_GUARD_STOP'); console.log('COST_GUARD=PASS billingEnabled=false');})().catch(e=>{console.error(e.message);process.exit(3)});
+          NODE
+
+          STAGE=BUILD
+          mkdir -p web-admin/public
+          cp docs/templates/MAU_NHAN_SU_BAO_HANG_1291.xlsx web-admin/public/MAU_NHAN_SU_BAO_HANG_1291.xlsx
+          npm --prefix web-admin install --ignore-scripts --no-audit --no-fund --no-package-lock >>"$LOG" 2>&1
+          npm --prefix web-admin run build >>"$LOG" 2>&1
+          test -f web-admin/dist/runtime-revision.txt
+          grep -R -F 'bao-hang-1291-staff-view-state' web-admin/dist/assets >/dev/null
+          grep -R -F 'AUTH_REQUIRED' web-admin/dist/assets >/dev/null
+
+          STAGE=DEPLOY
+          umask 077
+          SA_FILE="$RUNNER_TEMP/firebase-sa.json"
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$SA_FILE"
+          jq -e '.project_id == "bao-hang-1291" and .client_email and .private_key' "$SA_FILE" >/dev/null
+          export GOOGLE_APPLICATION_CREDENTIALS="$SA_FILE"
+          npx --yes firebase-tools@14.17.0 deploy --only hosting,firestore:rules --project bao-hang-1291 --non-interactive >>"$LOG" 2>&1
+
+          STAGE=HOSTING_REVISION
+          expected="$(tr -d '\r\n' < web-admin/public/runtime-revision.txt)"
+          live=''
+          for i in {1..12}; do
+            live="$(curl -fsSL --retry 2 --retry-all-errors --retry-delay 1 "https://bao-hang-1291.web.app/runtime-revision.txt?cb=$RANDOM" 2>/dev/null | tr -d '\r\n' || true)"
+            [[ "$live" == "$expected" ]] && break
+            sleep 2
+          done
+          [[ "$live" == "$expected" ]]
+          curl -fsSI https://bao-hang-1291.web.app/ | grep -qi '^content-security-policy:'
+          curl -fsSI https://bao-hang-1291.web.app/ | grep -qi '^x-content-type-options: nosniff'
+
+          STAGE=AUTH_PIPELINE
+          node <<'NODE'
+          const crypto=require('crypto');
+          const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');
+          const apiKey=process.env.FIREBASE_API_KEY;
+          const uid=process.env.ADMIN_UID;
+          const neon=process.env.NEON_DATA_API;
+          const enc=(v)=>Buffer.from(JSON.stringify(v)).toString('base64url');
+          function customToken(){
+            const now=Math.floor(Date.now()/1000);
+            const unsigned=`${enc({alg:'RS256',typ:'JWT'})}.${enc({iss:sa.client_email,sub:sa.client_email,aud:'https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit',iat:now,exp:now+3600,uid})}`;
+            const sig=crypto.sign('RSA-SHA256',Buffer.from(unsigned),sa.private_key).toString('base64url');
+            return `${unsigned}.${sig}`;
+          }
+          async function neonProfile(idToken){
+            const r=await fetch(`${neon}/rpc/api_session_profile_rpc`,{method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${idToken}`},body:JSON.stringify({p_test_role:null})});
+            const t=await r.text(); if(!r.ok) throw new Error(`NEON_AUTH_${r.status}`);
+            const j=JSON.parse(t); if(j?.profile?.employee_code!=='6281280'||j?.profile?.role!=='ADMIN') throw new Error('NEON_PROFILE_MISMATCH');
+          }
+          (async()=>{
+            let r=await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${encodeURIComponent(apiKey)}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:customToken(),returnSecureToken:true})});
+            let j=await r.json(); if(!r.ok||!j.idToken||!j.refreshToken) throw new Error('CUSTOM_TOKEN_EXCHANGE');
+            await neonProfile(j.idToken);
+            r=await fetch(`https://securetoken.googleapis.com/v1/token?key=${encodeURIComponent(apiKey)}`,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',refresh_token:j.refreshToken})});
+            j=await r.json(); if(!r.ok||!j.id_token) throw new Error('REFRESH_TOKEN_EXCHANGE');
+            await neonProfile(j.id_token);
+            console.log('AUTH_PIPELINE=PASS');
+          })().catch(e=>{console.error(e.message);process.exit(4)});
+          NODE
+
+          STAGE=COMPLETE
+          rm -f "$SA_FILE"
+
+      - name: Commit sanitized proof
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f ops/web-runtime-final-proof.json || printf '%s\n' '{"status":"FAIL","stage":"RUNNER"}' > ops/web-runtime-final-proof.json
+          cat ops/web-runtime-final-proof.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ops/web-runtime-final-proof.json
+          git diff --cached --quiet || git commit -m 'chore(web): record production runtime verification'
+          git pull --rebase origin main
+          git push origin HEAD:main
+          grep -q '"status": "PASS"' ops/web-runtime-final-proof.json
