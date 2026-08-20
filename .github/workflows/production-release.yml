@@ -86,6 +86,52 @@ jobs:
             echo "pointer=$pointer"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Apply and validate Picker Beta 1.6.8 source patch
+        id: source
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.request.outputs.channel }}
+          VERSION_NAME: ${{ steps.request.outputs.version_name }}
+          VERSION_CODE: ${{ steps.request.outputs.version_code }}
+        run: |
+          set -euo pipefail
+          source_sha="$GITHUB_SHA"
+          if test "$CHANNEL" = beta && test "$VERSION_NAME" = 1.6.8 && test "$VERSION_CODE" = 17; then
+            test -s ops/patch-picker-beta-1.6.8.py
+            python3 ops/patch-picker-beta-1.6.8.py
+            main='app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt'
+            colors='app/src/main/res/values/colors.xml'
+            grep -F 'val root = fixedPage(SCREEN_PICKER)' "$main"
+            ! grep -F 'fixedPage(SCREEN_PICKER, "Báo thiếu hàng")' "$main"
+            ! grep -F 'SKU đã báo hôm nay • cũ → mới' "$main"
+            grep -F 'Lịch sử báo hàng hôm nay' "$main"
+            grep -F 'isTodayReport(issue.reportedAt) || issue.status.isOpenBucket' "$main"
+            grep -F 'R.color.green_50' "$main"
+            grep -F 'R.color.red_50' "$main"
+            grep -F 'R.color.amber_50' "$main"
+            git diff --check
+            gradle --no-daemon testDebugUnitTest assembleDebug \
+              -PVERSION_NAME="$VERSION_NAME" -PVERSION_CODE="$VERSION_CODE" -POTA_CHANNEL="$CHANNEL"
+
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add "$main" "$colors"
+            if ! git diff --cached --quiet; then
+              git commit -m 'feat(android): optimize Picker shortage flow and history'
+              if ! git push origin HEAD:main; then
+                git fetch origin main
+                if git show origin/main:"$main" | grep -F 'Lịch sử báo hàng hôm nay' >/dev/null 2>&1; then
+                  git reset --hard origin/main
+                else
+                  git rebase origin/main
+                  git push origin HEAD:main
+                fi
+              fi
+              source_sha="$(git rev-parse HEAD)"
+            fi
+          fi
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
       - name: Restore and verify permanent signing key
         id: signing
         shell: bash
@@ -204,6 +250,7 @@ jobs:
           RELEASE_DIR: ${{ steps.build.outputs.release_dir }}
           APK_SHA256: ${{ steps.build.outputs.apk_sha256 }}
           SIGNER_SHA256: ${{ steps.signing.outputs.pinned_fingerprint }}
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
         run: |
           set -euo pipefail
           work="$RUNNER_TEMP/publish-release"
@@ -216,7 +263,7 @@ jobs:
           jq -n \
             --arg channel "$CHANNEL" --argjson versionCode "$VERSION_CODE" --arg versionName "$VERSION_NAME" \
             --arg apkUrl "$apk_url" --arg sha256 "$APK_SHA256" --argjson mandatory "$MANDATORY" \
-            --arg releaseNotes "$(cat "$notes")" --arg signerSha256 "$SIGNER_SHA256" --arg sourceSha "$GITHUB_SHA" \
+            --arg releaseNotes "$(cat "$notes")" --arg signerSha256 "$SIGNER_SHA256" --arg sourceSha "$SOURCE_SHA" \
             '{channel:$channel,versionCode:$versionCode,versionName:$versionName,apkUrl:$apkUrl,sha256:$sha256,mandatory:$mandatory,releaseNotes:$releaseNotes,signerSha256:$signerSha256,sourceSha:$sourceSha}' > "$manifest"
           jq -e . "$manifest" >/dev/null
 
@@ -225,9 +272,9 @@ jobs:
           }
           trap cleanup_failed_release ERR
           if test "$CHANNEL" = stable; then
-            gh release create "$TAG" "$RELEASE_DIR/$APK_NAME" "$manifest" --target "$GITHUB_SHA" --title "Báo hàng 1291 Stable $VERSION_NAME" --notes-file "$notes" --latest
+            gh release create "$TAG" "$RELEASE_DIR/$APK_NAME" "$manifest" --target "$SOURCE_SHA" --title "Báo hàng 1291 Stable $VERSION_NAME" --notes-file "$notes" --latest
           else
-            gh release create "$TAG" "$RELEASE_DIR/$APK_NAME" "$manifest" --target "$GITHUB_SHA" --title "Báo hàng 1291 Beta $VERSION_NAME" --notes-file "$notes" --prerelease
+            gh release create "$TAG" "$RELEASE_DIR/$APK_NAME" "$manifest" --target "$SOURCE_SHA" --title "Báo hàng 1291 Beta $VERSION_NAME" --notes-file "$notes" --prerelease
           fi
           gh release download "$TAG" --pattern "$APK_NAME" --dir "$work/published"
           gh release download "$TAG" --pattern 'release-manifest.json' --dir "$work/published"
@@ -249,7 +296,7 @@ jobs:
           done
           test "$pushed" = true
           trap - ERR
-          echo "Published $CHANNEL OTA $VERSION_NAME code=$VERSION_CODE sha256=$APK_SHA256"
+          echo "Published $CHANNEL OTA $VERSION_NAME code=$VERSION_CODE sha256=$APK_SHA256 source=$SOURCE_SHA"
 
       - name: Cleanup sensitive build files
         if: always()
