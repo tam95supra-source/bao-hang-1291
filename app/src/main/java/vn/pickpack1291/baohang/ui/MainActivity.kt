@@ -51,6 +51,10 @@ import vn.pickpack1291.baohang.data.UserRole
 import vn.pickpack1291.baohang.importer.XlsxImporter
 import vn.pickpack1291.baohang.realtime.RealtimeClient
 import vn.pickpack1291.baohang.update.AppUpdater
+import java.time.Instant
+import java.time.LocalDate
+import java.time.OffsetDateTime
+import java.time.ZoneId
 
 class MainActivity : AppCompatActivity() {
     private val app by lazy { application as BaoHangApplication }
@@ -491,43 +495,91 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showPicker() {
-        val root = fixedPage(SCREEN_PICKER, "Báo thiếu hàng")
+        val root = fixedPage(SCREEN_PICKER)
         val recent = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.TOP
         }
 
+        val entryRegion = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            setBackgroundResource(R.drawable.bg_card)
+        }
+        val inputRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
         val suggestionsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val selected = infoBox("Chưa chọn SKU")
+        val selected = text("", 14, false).apply {
+            visibility = View.GONE
+            setPadding(dp(12), dp(9), dp(12), dp(9))
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(10).toFloat()
+                setColor(getColor(R.color.blue_50))
+                setStroke(dp(1), getColor(R.color.blue_600))
+            }
+        }
         val input = EditText(this).apply {
             hint = "Nhập ít nhất 3 số của SKU"
             inputType = InputType.TYPE_CLASS_NUMBER
             filters = arrayOf(InputFilter.LengthFilter(8))
             setSingleLine(true)
+            minimumWidth = 0
         }
-        val reportButton = button("Báo thiếu", ButtonTone.DANGER) {}
-        reportButton.isEnabled = false
+        val reportButton = button("Báo thiếu", ButtonTone.DANGER) {}.apply {
+            isEnabled = false
+            setSingleLine(true)
+            textSize = 14f
+            minWidth = 0
+            minimumWidth = 0
+            setPadding(dp(6), 0, dp(6), 0)
+        }
         var chosen: SkuItem? = null
         var internalTextChange = false
 
-        root.addView(suggestionsBox)
-        root.addView(selected)
-        root.addView(text("Nhập hoặc quét mã SKU", 12, true).apply { setPadding(dp(2), dp(3), 0, dp(2)) })
-        root.addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)))
-        root.addView(reportButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply { setMargins(0, dp(3), 0, dp(8)) })
-        root.addView(text("SKU đã báo hôm nay • cũ → mới", 14, true).apply { setPadding(0, dp(4), 0, dp(4)) })
+        entryRegion.addView(text("Nhập hoặc quét mã SKU", 12, true).apply { setPadding(dp(2), 0, 0, dp(4)) })
+        inputRow.addView(
+            input,
+            LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(0, 0, dp(6), 0) }
+        )
+        inputRow.addView(reportButton, LinearLayout.LayoutParams(dp(104), dp(50)))
+        entryRegion.addView(inputRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        entryRegion.addView(
+            selected,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                setMargins(0, dp(6), 0, 0)
+            }
+        )
+        entryRegion.addView(
+            suggestionsBox,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                setMargins(0, dp(2), 0, 0)
+            }
+        )
+        root.addView(
+            entryRegion,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                setMargins(0, 0, 0, dp(10))
+            }
+        )
+
+        root.addView(text("Lịch sử báo hàng hôm nay", 14, true).apply { setPadding(dp(2), dp(2), 0, dp(6)) })
         val historyScroll = ScrollView(this).apply { isFillViewport = true }
         historyScroll.addView(recent, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(historyScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
         fun clearSelection() {
             chosen = null
-            selected.text = "Chưa chọn SKU"
+            selected.text = ""
+            selected.visibility = View.GONE
             reportButton.isEnabled = false
         }
         fun select(item: SkuItem) {
             chosen = item
             selected.text = "SKU ${item.sku}\n${item.productName}"
+            selected.visibility = View.VISIBLE
             reportButton.isEnabled = true
             searchJob?.cancel()
             suggestionsBox.removeAllViews()
@@ -548,14 +600,20 @@ class MainActivity : AppCompatActivity() {
                 })
                 return
             }
-            items.take(7).forEach { item ->
+            items.take(5).forEach { item ->
                 val suggestion = button("${item.sku}  •  ${item.productName}", ButtonTone.SECONDARY) { select(item) }.apply {
                     gravity = Gravity.START or Gravity.CENTER_VERTICAL
                     textAlignment = View.TEXT_ALIGNMENT_VIEW_START
+                    textSize = 13f
+                    minHeight = dp(44)
+                    setPadding(dp(8), 0, dp(8), 0)
                 }
-                suggestionsBox.addView(suggestion, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    setMargins(0, dp(1), 0, dp(1))
-                })
+                suggestionsBox.addView(
+                    suggestion,
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        setMargins(0, dp(1), 0, dp(1))
+                    }
+                )
             }
         }
         fun suggestions(query: String) {
@@ -618,20 +676,41 @@ class MainActivity : AppCompatActivity() {
                 .onSuccess { issues ->
                     target.removeAllViews()
                     target.gravity = Gravity.TOP
-                    if (issues.isEmpty()) target.addView(infoBox("Chưa có báo thiếu."))
-                    val ordered = issues.sortedBy { issue ->
+                    val visibleIssues = issues.filter { issue ->
+                        isTodayReport(issue.reportedAt) || issue.status.isOpenBucket
+                    }
+                    if (visibleIssues.isEmpty()) target.addView(infoBox("Chưa có lịch sử báo hàng cần hiển thị."))
+                    val ordered = visibleIssues.sortedBy { issue ->
                         if (issue.status == IssueStatus.WITHDRAWN) issue.withdrawnAt.ifBlank { issue.reportedAt } else issue.reportedAt
                     }
                     ordered.take(50).forEach { issue ->
+                        val isOldUnresolved = !isTodayReport(issue.reportedAt) && issue.status.isOpenBucket
+                        val (fillColor, strokeColor) = when {
+                            issue.status == IssueStatus.AVAILABLE -> getColor(R.color.green_50) to getColor(R.color.green_600)
+                            issue.status == IssueStatus.SKIP_ALLOWED -> getColor(R.color.red_50) to getColor(R.color.red_600)
+                            issue.status.isOpenBucket -> getColor(R.color.amber_50) to getColor(R.color.amber_500)
+                            else -> getColor(R.color.surface_subtle) to getColor(R.color.border)
+                        }
                         val row = LinearLayout(this@MainActivity).apply {
                             orientation = LinearLayout.VERTICAL
                             setPadding(dp(12), dp(10), dp(12), dp(10))
-                            setBackgroundResource(R.drawable.bg_card)
+                            background = GradientDrawable().apply {
+                                shape = GradientDrawable.RECTANGLE
+                                cornerRadius = dp(10).toFloat()
+                                setColor(fillColor)
+                                setStroke(dp(1), strokeColor)
+                            }
                         }
                         row.addView(text("${issue.status.label} • SKU ${issue.sku}", 16, true))
                         row.addView(text(issue.productName, 13, true).apply { setPadding(0, dp(2), 0, dp(2)) })
-                        val time = if (issue.status == IssueStatus.WITHDRAWN && issue.withdrawnAt.isNotBlank()) "Thu hồi lúc ${shortTime(issue.withdrawnAt)}" else "Báo lúc ${shortTime(issue.reportedAt)}"
-                        row.addView(text(time, 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
+                        val time = if (issue.status == IssueStatus.WITHDRAWN && issue.withdrawnAt.isNotBlank()) {
+                            "Thu hồi lúc ${shortTime(issue.withdrawnAt)}"
+                        } else {
+                            "Báo lúc ${shortTime(issue.reportedAt)}"
+                        }
+                        row.addView(text(if (isOldUnresolved) "Chưa xử lý từ ngày trước • $time" else time, 12, false).apply {
+                            setTextColor(getColor(R.color.text_secondary))
+                        })
                         val remainingMs = issue.withdrawRemainingMs.coerceIn(0L, 30_000L)
                         if (issue.canWithdraw && remainingMs > 0L) {
                             val expiresAtElapsed = SystemClock.elapsedRealtime() + remainingMs
@@ -647,9 +726,17 @@ class MainActivity : AppCompatActivity() {
                             }, remainingMs + 25L)
                             row.addView(withdrawButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { setMargins(0, dp(6), 0, 0) })
                         }
-                        target.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(3), 0, dp(3)) })
+                        target.addView(
+                            row,
+                            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                                setMargins(0, dp(3), 0, dp(3))
+                            }
+                        )
                     }
-                }.onFailure { target.removeAllViews(); target.addView(infoBox("Không tải được lịch sử: ${it.message}")) }
+                }.onFailure {
+                    target.removeAllViews()
+                    target.addView(infoBox("Không tải được lịch sử: ${it.message}"))
+                }
         }
     }
 
@@ -991,6 +1078,17 @@ class MainActivity : AppCompatActivity() {
         setPadding(dp(12), dp(10), dp(12), dp(10))
         setBackgroundResource(R.drawable.bg_card)
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(4), 0, dp(4)) }
+    }
+
+    private fun isTodayReport(iso: String): Boolean {
+        if (iso.isBlank()) return false
+        val zone = ZoneId.systemDefault()
+        val reportDate = runCatching {
+            OffsetDateTime.parse(iso).atZoneSameInstant(zone).toLocalDate()
+        }.recoverCatching {
+            Instant.parse(iso).atZone(zone).toLocalDate()
+        }.getOrNull()
+        return reportDate == LocalDate.now(zone)
     }
 
     private fun shortTime(iso: String): String = iso.replace('T', ' ').take(16)

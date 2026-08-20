@@ -15,4 +15,8 @@
     <color name="text_secondary">#607184</color>
     <color name="border">#DCE4EB</color>
     <color name="border_strong">#B8C5D1</color>
+    <color name="green_50">#E8F5EE</color>
+    <color name="red_50">#FDECEC</color>
+    <color name="amber_50">#FFF4D6</color>
+    <color name="blue_50">#EAF2FF</color>
 </resources>
