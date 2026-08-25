@@ -1,11 +1,11 @@
 {
   "channel": "beta",
-  "versionCode": 19,
-  "versionName": "1.6.10",
-  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.10/bao-hang-1291-beta-1.6.10.apk",
-  "sha256": "4d08e4c3fbecabff6e5dbaec1ed57925c98c98cdc25de76d9b3c19f7c41d14e7",
+  "versionCode": 20,
+  "versionName": "1.6.11",
+  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.11/bao-hang-1291-beta-1.6.11.apk",
+  "sha256": "6f70884583cb0a9e9d5ccd049d1668606b70490b8fe292644bded040a2e6739c",
   "mandatory": true,
-  "releaseNotes": "Beta 1.6.10: tối ưu màn Người báo hàng với 4 tab trên cùng một hàng, tự co chữ để không tràn; Đang xử lý sắp xếp cũ đến mới theo thời gian Picker báo, Đã có hàng/Đã bỏ qua/Picker thu hồi sắp xếp mới đến cũ theo thời gian cập nhật; card rút gọn còn SKU - số lượt báo, tên sản phẩm, người xử lí và thời gian; bỏ trạng thái/v2-v3/nội dung dư; sửa realtime UI APK bằng FCM kết hợp Firestore foreground marker watch 6 giây, chỉ refetch Neon khi marker đổi và tự dừng khi app ra nền để giữ free tier.",
+  "releaseNotes": "Beta 1.6.11: giữ toàn bộ tối ưu màn Người báo hàng của 1.6.10; hoàn thiện realtime UI theo mô hình FCM push + Firestore foreground fallback cho Người báo hàng/Admin vận hành; Picker không polling Firestore để bảo vệ quota/free tier khi số thiết bị tăng; fallback chỉ refetch Neon khi marker issue thay đổi và tự dừng khi app ra nền.",
   "signerSha256": "2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0",
-  "sourceSha": "eb54c930afcbd1d940756dda765386fc86aa57be"
+  "sourceSha": "b0d0063a0f1d64127f62045a5bd37fed3ae3676d"
 }
