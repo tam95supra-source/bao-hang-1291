@@ -87,7 +87,8 @@ jobs:
                     'row.addView(withdrawButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply {', 'withdraw-height')
           rep(withdraw_anchor, 'withdrawButton = button("Thu hồi\\nbáo thiếu", ButtonTone.DANGER)', 'withdraw-label')
 
-          rep('if (iso.isBlank()) return "—"', 'if (iso.isBlank() || iso.equals("null", ignoreCase = true)) return "—"', 'null-time')
+          rep_after('private fun clockTime(iso: String): String {', 'if (iso.isBlank()) return "—"',
+                    'if (iso.isBlank() || iso.equals("null", ignoreCase = true)) return "—"', 'null-time')
 
           p.write_text(s)
           PY
