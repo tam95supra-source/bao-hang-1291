@@ -38,6 +38,13 @@ function safe(value) {
     .replace(/[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/g, '[JWT_REDACTED]')
     .slice(0, 1000);
 }
+function jwtMeta(token) {
+  const [headerPart, payloadPart] = String(token || '').split('.');
+  const header = JSON.parse(Buffer.from(headerPart, 'base64url').toString('utf8'));
+  const payload = JSON.parse(Buffer.from(payloadPart, 'base64url').toString('utf8'));
+  const customKeys = Object.keys(payload).filter((key) => !['aud','auth_time','email','email_verified','exp','firebase','iat','iss','sub','user_id'].includes(key));
+  return { alg:header.alg || '', kid:header.kid || '', iss:payload.iss || '', aud:payload.aud || '', customKeys };
+}
 async function deadline(label, promise, ms) {
   let timer;
   try {
@@ -57,6 +64,9 @@ async function firebasePasswordSignIn(code, password) {
   });
   const payload = await response.json();
   if (!response.ok || !payload.idToken || !payload.localId) throw new Error(`FIREBASE_PASSWORD_SIGNIN_${code}_HTTP_${response.status}:${safe(payload?.error?.message)}`);
+  const meta = jwtMeta(payload.idToken);
+  if (meta.customKeys.includes('role') || meta.customKeys.includes('employee_code') || meta.customKeys.includes('app_role')) throw new Error(`FIREBASE_TOKEN_SHAPE_DRIFT_${code}:${meta.customKeys.join(',')}`);
+  console.log(`FIREBASE_TOKEN_META code=${code} alg=${meta.alg} iss=${meta.iss} aud=${meta.aud} custom_role_claims=false`);
   return payload;
 }
 async function firebaseCustomSignIn(customToken) {
@@ -65,6 +75,9 @@ async function firebaseCustomSignIn(customToken) {
   });
   const payload = await response.json();
   if (!response.ok || !payload.idToken || payload.localId !== ADMIN_UID) throw new Error(`FIREBASE_ADMIN_CUSTOM_SIGNIN_HTTP_${response.status}:${safe(payload?.error?.message)}`);
+  const meta = jwtMeta(payload.idToken);
+  if (meta.customKeys.includes('role') || meta.customKeys.includes('employee_code') || meta.customKeys.includes('app_role')) throw new Error(`FIREBASE_TOKEN_SHAPE_DRIFT_ADMIN:${meta.customKeys.join(',')}`);
+  console.log(`FIREBASE_TOKEN_META code=${ADMIN_CODE} alg=${meta.alg} iss=${meta.iss} aud=${meta.aud} custom_role_claims=false`);
   return payload;
 }
 async function rpc(token, name, body = {}) {
@@ -103,7 +116,6 @@ async function deleteTempUsers(adminAuth) {
 async function createTempUsers(adminAuth, password) {
   for (const user of USERS) {
     await adminAuth.createUser({ uid:user.uid, email:emailFor(user.code), password, displayName:`__E2E_${user.role}__`, disabled:false, emailVerified:true });
-    await adminAuth.setCustomUserClaims(user.uid, { role:'authenticated', employee_code:user.code, app_role:user.role });
   }
 }
 function installPageGuards(page, tag) {
@@ -349,7 +361,7 @@ async function main() {
       const profile = await assertProfile(auth, user.code, user.role);
       if (!authByRole[user.role]) authByRole[user.role] = { auth, profile };
     }
-    const customToken = await adminAuth.createCustomToken(ADMIN_UID, { role:'authenticated', employee_code:ADMIN_CODE, app_role:'ADMIN' });
+    const customToken = await adminAuth.createCustomToken(ADMIN_UID);
     const adminSignIn = await firebaseCustomSignIn(customToken);
     const adminProfile = await assertProfile(adminSignIn, ADMIN_CODE, 'ADMIN');
     authByRole.ADMIN = { auth:adminSignIn, profile:adminProfile };
