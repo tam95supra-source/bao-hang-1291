@@ -23,6 +23,17 @@ async function fetchDeadline(url, init = {}, timeoutMs = 12000) {
   return fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
 }
 
+function decodeJwtPart(part) {
+  return JSON.parse(Buffer.from(part, 'base64url').toString('utf8'));
+}
+
+function safeResponseText(value) {
+  return String(value || '')
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [REDACTED]')
+    .replace(/[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/g, '[JWT_REDACTED]')
+    .slice(0, 1200);
+}
+
 async function deleteTestUser(auth) {
   try {
     await auth.deleteUser(TEST_UID);
@@ -59,13 +70,22 @@ async function main() {
       throw new Error(`Firebase password sign-in failed HTTP ${signInResponse.status}: ${signIn?.error?.message || 'invalid response'}`);
     }
 
+    const [jwtHeaderPart, jwtPayloadPart] = signIn.idToken.split('.');
+    const jwtHeader = decodeJwtPart(jwtHeaderPart);
+    const jwtPayload = decodeJwtPart(jwtPayloadPart);
+    console.log(`FIREBASE_ID_TOKEN_META alg=${jwtHeader.alg || ''} kid=${jwtHeader.kid || ''} iss=${jwtPayload.iss || ''} aud=${jwtPayload.aud || ''} sub_is_test=${jwtPayload.sub === TEST_UID}`);
+
     const profileResponse = await fetchDeadline(`${NEON_DATA_API}/rpc/api_session_profile_rpc`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${signIn.idToken}` },
       body: JSON.stringify({ p_test_role: null }),
     });
-    const profilePayload = await profileResponse.json();
-    if (!profileResponse.ok) throw new Error(`Neon session profile failed HTTP ${profileResponse.status}`);
+    const profileRaw = await profileResponse.text();
+    let profilePayload = null;
+    try { profilePayload = JSON.parse(profileRaw); } catch {}
+    if (!profileResponse.ok) {
+      throw new Error(`Neon session profile failed HTTP ${profileResponse.status}: ${safeResponseText(profileRaw) || '[empty body]'}`);
+    }
     if (profilePayload?.profile?.employee_code !== TEST_CODE || profilePayload?.profile?.role !== 'PICKER' || profilePayload?.profile?.active !== true) {
       throw new Error('Neon session profile did not resolve the isolated E2E user');
     }
