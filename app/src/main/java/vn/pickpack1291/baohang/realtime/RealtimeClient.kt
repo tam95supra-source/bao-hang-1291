@@ -17,12 +17,12 @@ import java.util.concurrent.TimeUnit
 /**
  * Foreground realtime invalidation client.
  *
- * FCM remains the fastest push path. A lightweight authenticated Firestore
- * marker watch runs only while the app is foreground and guarantees that UI
- * invalidation still arrives when an FCM delta is delayed or missed. The watch
- * reads one tiny document every 6 seconds; canonical business data is always
- * refetched from Neon after the marker changes.
- * Foreground-only quota guard is enforced by MainActivity.onStop().
+ * FCM remains the fastest push path for every role. INVENT / ADMIN_INVENT / ADMIN
+ * additionally use a lightweight authenticated Firestore marker watch while the
+ * app is foreground, so the operator board still invalidates when an FCM delta is
+ * delayed or missed. PICKER does not poll Firestore: critical Picker state remains
+ * push-driven, avoiding unnecessary reads as Picker device count grows.
+ * Canonical business data is always refetched from Neon after the marker changes.
  */
 class RealtimeClient(
     private val diagnostics: DiagnosticsLogger,
@@ -45,6 +45,7 @@ class RealtimeClient(
     private var pollJob: Job? = null
     private var lastIssueMarker: String? = null
     private var firestoreOnline: Boolean? = null
+    private var markerWatchEnabled = false
 
     private val listener: (RealtimeSignalBus.Topic) -> Unit = listener@ { topic ->
         if (!running) return@listener
@@ -65,14 +66,24 @@ class RealtimeClient(
         if (running) return
 
         running = true
+        markerWatchEnabled = role != UserRole.PICKER
         lastIssueMarker = null
         firestoreOnline = null
         RealtimeSignalBus.subscribe(listener)
-        onStatus(Status.CONNECTING)
-        diagnostics.info("realtime_foreground_started", mapOf("role" to role.name, "firestore_interval_seconds" to 6))
 
+        if (!markerWatchEnabled) {
+            onStatus(Status.ONLINE)
+            diagnostics.info("realtime_fcm_only_started", mapOf("role" to role.name))
+            return
+        }
+
+        onStatus(Status.CONNECTING)
+        diagnostics.info(
+            "realtime_foreground_started",
+            mapOf("role" to role.name, "firestore_interval_seconds" to 6, "scope" to "operator_only")
+        )
         pollJob = scope.launch {
-            while (isActive && running) {
+            while (isActive && running && markerWatchEnabled) {
                 pollIssueMarker()
                 delay(FIRESTORE_POLL_MS)
             }
@@ -82,6 +93,7 @@ class RealtimeClient(
     fun stop() {
         if (!running) return
         running = false
+        markerWatchEnabled = false
         pollJob?.cancel()
         pollJob = null
         lastIssueMarker = null
@@ -98,7 +110,7 @@ class RealtimeClient(
 
     private fun pollIssueMarker() {
         val token = accessToken
-        if (!running || token.isBlank()) return
+        if (!running || !markerWatchEnabled || token.isBlank()) return
         runCatching {
             val request = Request.Builder()
                 .url(FIRESTORE_ISSUES_DOC)
@@ -119,7 +131,7 @@ class RealtimeClient(
                 val previous = lastIssueMarker
                 lastIssueMarker = marker
                 markFirestoreState(true, null)
-                if (previous != null && previous != marker && running) {
+                if (previous != null && previous != marker && running && markerWatchEnabled) {
                     diagnostics.info("realtime_firestore_issue_changed", mapOf("marker" to marker.take(120)))
                     onIssueChanged()
                 }
