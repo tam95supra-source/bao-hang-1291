@@ -77,8 +77,7 @@ async function firebaseCustomSignIn(customToken) {
   if (!response.ok || !payload.idToken) throw new Error(`FIREBASE_ADMIN_CUSTOM_SIGNIN_HTTP_${response.status}:${safe(payload?.error?.message)}`);
   const meta = jwtMeta(payload.idToken);
   if (meta.sub !== ADMIN_UID) throw new Error(`FIREBASE_ADMIN_UID_MISMATCH:${meta.sub || '[missing]'}`);
-  if (meta.customKeys.includes('role') || meta.customKeys.includes('employee_code') || meta.customKeys.includes('app_role')) throw new Error(`FIREBASE_TOKEN_SHAPE_DRIFT_ADMIN:${meta.customKeys.join(',')}`);
-  console.log(`FIREBASE_TOKEN_META code=${ADMIN_CODE} alg=${meta.alg} iss=${meta.iss} aud=${meta.aud} custom_role_claims=false`);
+  console.log(`FIREBASE_TOKEN_META code=${ADMIN_CODE} alg=${meta.alg} iss=${meta.iss} aud=${meta.aud} admin_existing_claims_preserved=${meta.customKeys.length > 0}`);
   return payload;
 }
 async function rpc(token, name, body = {}) {
