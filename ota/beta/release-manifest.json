@@ -1,11 +1,11 @@
 {
   "channel": "beta",
-  "versionCode": 21,
-  "versionName": "1.6.12",
-  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.12/bao-hang-1291-beta-1.6.12.apk",
-  "sha256": "4c473223b18eef198d0a9aaae4932f11412be5e08de0f1d2eba7d07811038643",
+  "versionCode": 22,
+  "versionName": "1.6.13",
+  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.13/bao-hang-1291-beta-1.6.13.apk",
+  "sha256": "a6c80e4266da7be54096920e54c9f0da4648f56c6d41127222f77d97d2963ba1",
   "mandatory": true,
-  "releaseNotes": "Beta 1.6.12: tối ưu mật độ giao diện Người báo hàng và Người lấy hàng; 4 tab tự co chữ trên một hàng để không mất text; SKU được ưu tiên nổi bật, số lượt báo và dòng người xử lí được thu nhỏ/gói trên một dòng; bỏ dòng Nhập hoặc quét mã SKU; lịch sử Picker chuyển sang 3 dòng SKU/trạng thái, tên sản phẩm, thời gian Báo hết và Invent phản hồi; nhận diện chính xác INVENT CẬP NHẬT LẠI CÓ HÀNG từ audit RESTORE_AVAILABLE; giảm padding, khoảng cách và độ bo góc để hiển thị nhiều SKU hơn.",
+  "releaseNotes": "Beta 1.6.13: tăng chiều cao 4 tab Người báo hàng và cho nhãn xuống 2 dòng căn giữa với cỡ chữ dễ đọc hơn; sửa nút Thu hồi báo thiếu và Báo lại đã có hàng thành 2 dòng cao 48dp để không bị che chữ; lịch sử Người lấy hàng ở trạng thái ĐANG XỬ LÝ chỉ hiển thị thời gian Báo hết, không còn Invent phản hồi null; chỉ hiện thời gian Invent phản hồi khi có dữ liệu hợp lệ; tiêu đề trạng thái dài được phép xuống tối đa 2 dòng để không bị cắt.",
   "signerSha256": "2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0",
-  "sourceSha": "f5f1ab57d916dd3e59910fb966282d2ba1185c68"
+  "sourceSha": "aa95994838473a50a12bf03fb864b18608e06c0f"
 }
