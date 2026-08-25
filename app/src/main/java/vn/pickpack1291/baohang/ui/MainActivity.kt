@@ -231,7 +231,7 @@ class MainActivity : AppCompatActivity() {
         updateBackButton()
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(10), dp(14), dp(10))
+            setPadding(dp(10), dp(6), dp(10), dp(6))
         }
         container.addView(root, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         if (title.isNotBlank()) root.addView(text(title, 21, true).apply { setPadding(0, 0, 0, dp(6)) })
@@ -309,7 +309,7 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, dp(4))
         }
-        root.addView(tabs, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)))
+        root.addView(tabs, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)))
 
         val listScroll = ScrollView(this).apply { isFillViewport = true }
         val boardContainer = LinearLayout(this).apply {
@@ -358,33 +358,34 @@ class MainActivity : AppCompatActivity() {
             val tab = button(label) { selected = index; inventSelectedTab = index; draw() }.apply {
                 minWidth = 0
                 minimumWidth = 0
-                minHeight = dp(44)
-                setPadding(dp(2), 0, dp(2), 0)
+                minHeight = dp(40)
+                setPadding(dp(1), 0, dp(1), 0)
                 setSingleLine(true)
-                setAutoSizeTextTypeUniformWithConfiguration(9, 12, 1, TypedValue.COMPLEX_UNIT_SP)
+                includeFontPadding = false
+                setAutoSizeTextTypeUniformWithConfiguration(7, 11, 1, TypedValue.COMPLEX_UNIT_SP)
             }
             val badge = text("", 9, true).apply {
                 gravity = Gravity.CENTER
                 setTextColor(getColor(R.color.white))
-                minWidth = dp(17)
-                minHeight = dp(17)
-                setPadding(dp(3), 0, dp(3), 0)
+                minWidth = dp(14)
+                minHeight = dp(14)
+                setPadding(dp(2), 0, dp(2), 0)
                 background = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
-                    cornerRadius = dp(9).toFloat()
+                    cornerRadius = dp(7).toFloat()
                     setColor(getColor(R.color.red_600))
                     setStroke(dp(1), getColor(R.color.white))
                 }
                 visibility = View.GONE
             }
             val tabFrame = FrameLayout(this)
-            tabFrame.addView(tab, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44), Gravity.CENTER))
-            tabFrame.addView(badge, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(18), Gravity.TOP or Gravity.END).apply {
+            tabFrame.addView(tab, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40), Gravity.CENTER))
+            tabFrame.addView(badge, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(15), Gravity.TOP or Gravity.END).apply {
                 setMargins(0, 0, dp(1), 0)
             })
             tabButtons += tab
             tabBadges += badge
-            tabs.addView(tabFrame, LinearLayout.LayoutParams(0, dp(46), 1f).apply {
+            tabs.addView(tabFrame, LinearLayout.LayoutParams(0, dp(42), 1f).apply {
                 setMargins(dp(1), 0, dp(1), 0)
             })
         }
@@ -401,70 +402,96 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun issueCard(issue: StockIssue, bucket: Int, refresh: () -> Unit): View {
-        val elevated = app.session.effectiveRole in setOf(UserRole.ADMIN, UserRole.ADMIN_INVENT)
-        val card = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(10), dp(7), dp(10), dp(7))
-            setBackgroundResource(R.drawable.bg_card)
-        }
-        card.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            setMargins(0, dp(2), 0, dp(2))
-        }
-
-        card.addView(text("SKU - ${issue.sku} - ${issue.reportCount} lượt báo", 15, true))
-        card.addView(text(issue.productName, 13, true).apply { setPadding(0, dp(1), 0, dp(2)) })
-
-        val actor = when (bucket) {
-            3 -> issue.latestReporterName
-            else -> issue.handledByName.ifBlank { issue.assignedName }
-        }
-        val actorTime = when (bucket) {
-            3 -> issue.withdrawnAt.ifBlank { issue.updatedAt }
-            1, 2 -> issue.updatedAt
-            else -> if (actor.isNotBlank()) issue.updatedAt else ""
-        }
-        val handler = if (actor.isBlank()) {
-            "Người xử lí: Chưa nhận"
-        } else if (actorTime.isBlank()) {
-            "Người xử lí: $actor"
-        } else {
-            "Người xử lí: $actor lúc ${fullDateTime(actorTime)}"
-        }
-        card.addView(text(handler, 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
-
-        if (bucket == 0) {
-            val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            actions.addView(
-                button("Có hàng", ButtonTone.SUCCESS) { confirmIssueUpdate(issue, "AVAILABLE", refresh) }.apply {
-                    textSize = 12f
-                    minHeight = dp(42)
-                    setPadding(dp(4), 0, dp(4), 0)
-                },
-                LinearLayout.LayoutParams(0, dp(42), 1f).apply { setMargins(0, dp(4), dp(2), 0) }
-            )
-            actions.addView(
-                button("Cho SKIP", ButtonTone.DANGER) { confirmIssueUpdate(issue, "NOT_FOUND", refresh) }.apply {
-                    textSize = 12f
-                    minHeight = dp(42)
-                    setPadding(dp(4), 0, dp(4), 0)
-                },
-                LinearLayout.LayoutParams(0, dp(42), 1f).apply { setMargins(dp(2), dp(4), 0, 0) }
-            )
-            card.addView(actions)
-        } else if (bucket == 2) {
-            val canRestore = elevated || (app.session.effectiveRole == UserRole.INVENT && issue.assignedId == app.session.profile?.id)
-            if (canRestore) {
-                card.addView(
-                    button("Báo lại đã có hàng", ButtonTone.SUCCESS) { confirmRestoreSkipped(issue, refresh) }.apply {
-                        textSize = 12f
-                        minHeight = dp(42)
-                    },
-                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)).apply { setMargins(0, dp(4), 0, 0) }
-                )
-            }
-        }
-        return card
+    val elevated = app.session.effectiveRole in setOf(UserRole.ADMIN, UserRole.ADMIN_INVENT)
+    val card = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(7), dp(4), dp(7), dp(4))
+        setBackgroundResource(R.drawable.bg_card)
     }
+    card.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+        setMargins(0, dp(1), 0, dp(1))
+    }
+
+    val header = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+    }
+    header.addView(
+        text("SKU - ${issue.sku}", 18, true).apply {
+            setSingleLine(true)
+            includeFontPadding = false
+            setAutoSizeTextTypeUniformWithConfiguration(14, 18, 1, TypedValue.COMPLEX_UNIT_SP)
+        },
+        LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+    )
+    header.addView(
+        text("${issue.reportCount} lượt báo", 10, false).apply {
+            setSingleLine(true)
+            includeFontPadding = false
+            setTextColor(getColor(R.color.text_secondary))
+            setPadding(dp(5), 0, 0, 0)
+        }
+    )
+    card.addView(header)
+    card.addView(text(issue.productName, 12, true).apply {
+        includeFontPadding = false
+        setPadding(0, dp(1), 0, dp(1))
+    })
+
+    val actor = when (bucket) {
+        3 -> issue.latestReporterName
+        else -> issue.handledByName.ifBlank { issue.assignedName }
+    }
+    val actorTime = when (bucket) {
+        3 -> issue.withdrawnAt.ifBlank { issue.updatedAt }
+        1, 2 -> issue.updatedAt
+        else -> if (actor.isNotBlank()) issue.updatedAt else ""
+    }
+    val handler = when {
+        actor.isBlank() -> "Người xử lí: Chưa nhận"
+        actorTime.isBlank() -> "Người xử lí: $actor"
+        else -> "Người xử lí: $actor lúc ${clockTime(actorTime)}"
+    }
+    card.addView(text(handler, 10, false).apply {
+        setTextColor(getColor(R.color.text_secondary))
+        setSingleLine(true)
+        includeFontPadding = false
+        setAutoSizeTextTypeUniformWithConfiguration(7, 10, 1, TypedValue.COMPLEX_UNIT_SP)
+    })
+
+    if (bucket == 0) {
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        actions.addView(
+            button("Có hàng", ButtonTone.SUCCESS) { confirmIssueUpdate(issue, "AVAILABLE", refresh) }.apply {
+                textSize = 11f
+                minHeight = dp(38)
+                setPadding(dp(3), 0, dp(3), 0)
+            },
+            LinearLayout.LayoutParams(0, dp(38), 1f).apply { setMargins(0, dp(3), dp(1), 0) }
+        )
+        actions.addView(
+            button("Cho SKIP", ButtonTone.DANGER) { confirmIssueUpdate(issue, "NOT_FOUND", refresh) }.apply {
+                textSize = 11f
+                minHeight = dp(38)
+                setPadding(dp(3), 0, dp(3), 0)
+            },
+            LinearLayout.LayoutParams(0, dp(38), 1f).apply { setMargins(dp(1), dp(3), 0, 0) }
+        )
+        card.addView(actions)
+    } else if (bucket == 2) {
+        val canRestore = elevated || (app.session.effectiveRole == UserRole.INVENT && issue.assignedId == app.session.profile?.id)
+        if (canRestore) {
+            card.addView(
+                button("Báo lại đã có hàng", ButtonTone.SUCCESS) { confirmRestoreSkipped(issue, refresh) }.apply {
+                    textSize = 11f
+                    minHeight = dp(38)
+                },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply { setMargins(0, dp(3), 0, 0) }
+            )
+        }
+    }
+    return card
+}
 
     private fun confirmIssueUpdate(issue: StockIssue, action: String, refresh: () -> Unit) {
         val isSkip = action == "NOT_FOUND"
@@ -541,7 +568,7 @@ class MainActivity : AppCompatActivity() {
 
         val entryRegion = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(10), dp(8), dp(10), dp(8))
+            setPadding(dp(7), dp(4), dp(7), dp(4))
             setBackgroundResource(R.drawable.bg_card)
         }
         val inputRow = LinearLayout(this).apply {
@@ -551,10 +578,10 @@ class MainActivity : AppCompatActivity() {
         val suggestionsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val selected = text("", 14, false).apply {
             visibility = View.GONE
-            setPadding(dp(12), dp(9), dp(12), dp(9))
+            setPadding(dp(7), dp(4), dp(7), dp(4))
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(10).toFloat()
+                cornerRadius = dp(7).toFloat()
                 setColor(getColor(R.color.blue_50))
                 setStroke(dp(1), getColor(R.color.blue_600))
             }
@@ -577,17 +604,16 @@ class MainActivity : AppCompatActivity() {
         var chosen: SkuItem? = null
         var internalTextChange = false
 
-        entryRegion.addView(text("Nhập hoặc quét mã SKU", 12, true).apply { setPadding(dp(2), 0, 0, dp(4)) })
         inputRow.addView(
             input,
-            LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(0, 0, dp(6), 0) }
+            LinearLayout.LayoutParams(0, dp(46), 1f).apply { setMargins(0, 0, dp(4), 0) }
         )
-        inputRow.addView(reportButton, LinearLayout.LayoutParams(dp(104), dp(50)))
+        inputRow.addView(reportButton, LinearLayout.LayoutParams(dp(96), dp(46)))
         entryRegion.addView(inputRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         entryRegion.addView(
             selected,
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                setMargins(0, dp(6), 0, 0)
+                setMargins(0, dp(4), 0, 0)
             }
         )
         entryRegion.addView(
@@ -599,11 +625,11 @@ class MainActivity : AppCompatActivity() {
         root.addView(
             entryRegion,
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                setMargins(0, 0, 0, dp(10))
+                setMargins(0, 0, 0, dp(6))
             }
         )
 
-        root.addView(text("Lịch sử báo hàng hôm nay", 14, true).apply { setPadding(dp(2), dp(2), 0, dp(6)) })
+        root.addView(text("Lịch sử báo hàng hôm nay", 13, true).apply { setPadding(dp(1), dp(1), 0, dp(3)) })
         val historyScroll = ScrollView(this).apply { isFillViewport = true }
         historyScroll.addView(recent, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(historyScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -709,74 +735,93 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadMyIssues(target: LinearLayout) {
-        lifecycleScope.launch {
-            runCatching { app.repository.loadMyIssues() }
-                .onSuccess { issues ->
-                    target.removeAllViews()
-                    target.gravity = Gravity.TOP
-                    val visibleIssues = issues.filter { issue ->
-                        isTodayReport(issue.reportedAt) || issue.status.isOpenBucket
-                    }
-                    if (visibleIssues.isEmpty()) target.addView(infoBox("Chưa có lịch sử báo hàng cần hiển thị."))
-                    val ordered = visibleIssues.sortedBy { issue ->
-                        if (issue.status == IssueStatus.WITHDRAWN) issue.withdrawnAt.ifBlank { issue.reportedAt } else issue.reportedAt
-                    }
-                    ordered.take(50).forEach { issue ->
-                        val isOldUnresolved = !isTodayReport(issue.reportedAt) && issue.status.isOpenBucket
-                        val (fillColor, strokeColor) = when {
-                            issue.status == IssueStatus.AVAILABLE -> getColor(R.color.green_50) to getColor(R.color.green_600)
-                            issue.status == IssueStatus.SKIP_ALLOWED -> getColor(R.color.red_50) to getColor(R.color.red_600)
-                            issue.status.isOpenBucket -> getColor(R.color.amber_50) to getColor(R.color.amber_500)
-                            else -> getColor(R.color.surface_subtle) to getColor(R.color.border)
-                        }
-                        val row = LinearLayout(this@MainActivity).apply {
-                            orientation = LinearLayout.VERTICAL
-                            setPadding(dp(12), dp(10), dp(12), dp(10))
-                            background = GradientDrawable().apply {
-                                shape = GradientDrawable.RECTANGLE
-                                cornerRadius = dp(10).toFloat()
-                                setColor(fillColor)
-                                setStroke(dp(1), strokeColor)
-                            }
-                        }
-                        row.addView(text("${issue.status.label} • SKU ${issue.sku}", 16, true))
-                        row.addView(text(issue.productName, 13, true).apply { setPadding(0, dp(2), 0, dp(2)) })
-                        val time = if (issue.status == IssueStatus.WITHDRAWN && issue.withdrawnAt.isNotBlank()) {
-                            "Thu hồi lúc ${shortTime(issue.withdrawnAt)}"
-                        } else {
-                            "Báo lúc ${shortTime(issue.reportedAt)}"
-                        }
-                        row.addView(text(if (isOldUnresolved) "Chưa xử lý từ ngày trước • $time" else time, 12, false).apply {
-                            setTextColor(getColor(R.color.text_secondary))
-                        })
-                        val remainingMs = issue.withdrawRemainingMs.coerceIn(0L, 30_000L)
-                        if (issue.canWithdraw && remainingMs > 0L) {
-                            val expiresAtElapsed = SystemClock.elapsedRealtime() + remainingMs
-                            lateinit var withdrawButton: Button
-                            withdrawButton = button("Thu hồi báo thiếu", ButtonTone.DANGER) {
-                                if (SystemClock.elapsedRealtime() >= expiresAtElapsed) {
-                                    withdrawButton.visibility = View.GONE
-                                    toast("Đã quá 30 giây nên không thể thu hồi SKU ${issue.sku}")
-                                } else confirmWithdrawIssue(issue, target, expiresAtElapsed, withdrawButton)
-                            }
-                            withdrawButton.postDelayed({
-                                if (SystemClock.elapsedRealtime() >= expiresAtElapsed) withdrawButton.visibility = View.GONE
-                            }, remainingMs + 25L)
-                            row.addView(withdrawButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { setMargins(0, dp(6), 0, 0) })
-                        }
-                        target.addView(
-                            row,
-                            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                                setMargins(0, dp(3), 0, dp(3))
-                            }
-                        )
-                    }
-                }.onFailure {
-                    target.removeAllViews()
-                    target.addView(infoBox("Không tải được lịch sử: ${it.message}"))
+    lifecycleScope.launch {
+        runCatching { app.repository.loadMyIssues() }
+            .onSuccess { issues ->
+                target.removeAllViews()
+                target.gravity = Gravity.TOP
+                val visibleIssues = issues.filter { issue ->
+                    isTodayReport(issue.reportedAt) || issue.status.isOpenBucket
                 }
-        }
+                if (visibleIssues.isEmpty()) target.addView(infoBox("Chưa có lịch sử báo hàng cần hiển thị."))
+                val ordered = visibleIssues.sortedByDescending { issue ->
+                    if (issue.status == IssueStatus.WITHDRAWN) issue.withdrawnAt.ifBlank { issue.reportedAt } else issue.reportedAt
+                }
+                ordered.take(50).forEach { issue ->
+                    val (fillColor, strokeColor) = when {
+                        issue.status == IssueStatus.AVAILABLE -> getColor(R.color.green_50) to getColor(R.color.green_600)
+                        issue.status == IssueStatus.SKIP_ALLOWED -> getColor(R.color.red_50) to getColor(R.color.red_600)
+                        issue.status.isOpenBucket -> getColor(R.color.amber_50) to getColor(R.color.amber_500)
+                        else -> getColor(R.color.surface_subtle) to getColor(R.color.border)
+                    }
+                    val row = LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        setPadding(dp(7), dp(4), dp(7), dp(4))
+                        background = GradientDrawable().apply {
+                            shape = GradientDrawable.RECTANGLE
+                            cornerRadius = dp(7).toFloat()
+                            setColor(fillColor)
+                            setStroke(dp(1), strokeColor)
+                        }
+                    }
+                    val statusText = when {
+                        issue.status == IssueStatus.AVAILABLE && issue.restoredAvailable -> "INVENT CẬP NHẬT LẠI CÓ HÀNG"
+                        issue.status == IssueStatus.AVAILABLE -> "ĐÃ CÓ HÀNG"
+                        issue.status.isOpenBucket -> "ĐANG XỬ LÝ"
+                        issue.status == IssueStatus.SKIP_ALLOWED -> "ĐÃ BỎ QUA"
+                        issue.status == IssueStatus.WITHDRAWN -> "ĐÃ THU HỒI"
+                        else -> issue.status.label
+                    }
+                    row.addView(text("SKU ${issue.sku} - $statusText", 14, true).apply {
+                        setSingleLine(true)
+                        includeFontPadding = false
+                        setAutoSizeTextTypeUniformWithConfiguration(8, 14, 1, TypedValue.COMPLEX_UNIT_SP)
+                    })
+                    row.addView(text(issue.productName, 12, true).apply {
+                        includeFontPadding = false
+                        setPadding(0, dp(1), 0, dp(1))
+                    })
+                    val responseIso = issue.inventRespondedAt.ifBlank {
+                        if (issue.status in setOf(IssueStatus.AVAILABLE, IssueStatus.SKIP_ALLOWED)) issue.updatedAt else ""
+                    }
+                    val response = responseIso.takeIf { it.isNotBlank() }?.let(::clockTime) ?: "—"
+                    row.addView(text("Báo hết ${clockTime(issue.reportedAt)}, Invent phản hồi $response", 10, false).apply {
+                        setTextColor(getColor(R.color.text_secondary))
+                        setSingleLine(true)
+                        includeFontPadding = false
+                        setAutoSizeTextTypeUniformWithConfiguration(8, 10, 1, TypedValue.COMPLEX_UNIT_SP)
+                    })
+
+                    val remainingMs = issue.withdrawRemainingMs.coerceIn(0L, 30_000L)
+                    if (issue.canWithdraw && remainingMs > 0L) {
+                        val expiresAtElapsed = SystemClock.elapsedRealtime() + remainingMs
+                        lateinit var withdrawButton: Button
+                        withdrawButton = button("Thu hồi báo thiếu", ButtonTone.DANGER) {
+                            if (SystemClock.elapsedRealtime() >= expiresAtElapsed) {
+                                withdrawButton.visibility = View.GONE
+                                toast("Đã quá 30 giây nên không thể thu hồi SKU ${issue.sku}")
+                            } else confirmWithdrawIssue(issue, target, expiresAtElapsed, withdrawButton)
+                        }.apply {
+                            textSize = 11f
+                            minHeight = dp(38)
+                        }
+                        withdrawButton.postDelayed({
+                            if (SystemClock.elapsedRealtime() >= expiresAtElapsed) withdrawButton.visibility = View.GONE
+                        }, remainingMs + 25L)
+                        row.addView(withdrawButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply {
+                            setMargins(0, dp(3), 0, 0)
+                        })
+                    }
+                    target.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        setMargins(0, dp(1), 0, dp(1))
+                    })
+                }
+            }.onFailure {
+                target.removeAllViews()
+                target.addView(infoBox("Không tải được lịch sử: ${it.message}"))
+            }
     }
+}
 
     private fun confirmWithdrawIssue(issue: StockIssue, target: LinearLayout, expiresAtElapsed: Long, withdrawButton: Button) {
         if (SystemClock.elapsedRealtime() >= expiresAtElapsed) {
@@ -1128,6 +1173,15 @@ class MainActivity : AppCompatActivity() {
         }.getOrNull()
         return reportDate == LocalDate.now(zone)
     }
+
+    private fun clockTime(iso: String): String {
+    if (iso.isBlank()) return "—"
+    val zone = ZoneId.systemDefault()
+    val value = runCatching { OffsetDateTime.parse(iso).atZoneSameInstant(zone) }
+        .recoverCatching { Instant.parse(iso).atZone(zone) }
+        .getOrNull() ?: return iso.substringAfter('T', iso).take(8)
+    return DateTimeFormatter.ofPattern("HH:mm:ss").format(value)
+}
 
     private fun fullDateTime(iso: String): String {
         if (iso.isBlank()) return "—"

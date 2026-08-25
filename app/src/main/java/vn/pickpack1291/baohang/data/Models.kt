@@ -100,7 +100,9 @@ data class StockIssue(
     val withdrawnAt: String = "",
     val withdrawAllowedUntil: String = "",
     val withdrawRemainingMs: Long = 0L,
-    val canWithdraw: Boolean = false
+    val canWithdraw: Boolean = false,
+    val restoredAvailable: Boolean = false,
+    val inventRespondedAt: String = ""
 ) {
     companion object {
         fun fromJson(json: JSONObject) = StockIssue(
@@ -122,7 +124,9 @@ data class StockIssue(
             withdrawnAt = json.optString("withdrawn_at"),
             withdrawAllowedUntil = json.optString("withdraw_allowed_until"),
             withdrawRemainingMs = json.optLong("withdraw_remaining_ms", 0L).coerceAtLeast(0L),
-            canWithdraw = json.optBoolean("can_withdraw", false)
+            canWithdraw = json.optBoolean("can_withdraw", false),
+            restoredAvailable = json.optBoolean("restored_available", false),
+            inventRespondedAt = json.optString("invent_responded_at")
         )
     }
 }
