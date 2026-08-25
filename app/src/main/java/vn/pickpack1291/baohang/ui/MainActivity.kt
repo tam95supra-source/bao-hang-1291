@@ -12,6 +12,7 @@ import android.text.Editable
 import android.text.InputFilter
 import android.text.InputType
 import android.text.TextWatcher
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -55,6 +56,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 class MainActivity : AppCompatActivity() {
     private val app by lazy { application as BaoHangApplication }
@@ -296,25 +298,26 @@ class MainActivity : AppCompatActivity() {
     private fun showInventBoard() {
         val isInvent = app.session.effectiveRole == UserRole.INVENT
         val root = fixedPage(SCREEN_INVENT, if (isInvent) "" else "Xử lý báo hàng")
-        val listScroll = ScrollView(this).apply { isFillViewport = true }
-        val boardContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.BOTTOM
-        }
-        listScroll.addView(boardContainer, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        root.addView(listScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-
-        root.addView(text("Lịch sử chỉ lưu trữ trong ngày, cần nhiều hơn vui lòng liên hệ admin", 11, false).apply {
-            setTextColor(getColor(R.color.text_secondary))
-            setPadding(dp(2), dp(6), dp(2), dp(4))
-        })
-        val tabs = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        root.addView(tabs)
 
         var board: IssueBoard? = null
         var selected = inventSelectedTab.coerceIn(0, 3)
         val tabButtons = mutableListOf<Button>()
         val tabBadges = mutableListOf<TextView>()
+
+        val tabs = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, dp(4))
+        }
+        root.addView(tabs, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)))
+
+        val listScroll = ScrollView(this).apply { isFillViewport = true }
+        val boardContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.TOP
+        }
+        listScroll.addView(boardContainer, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        root.addView(listScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
         fun updateTabs() {
             val counts = board?.let { listOf(it.claimedCount, it.availableCount, it.skippedCount, it.withdrawnCount) } ?: listOf(0, 0, 0, 0)
@@ -338,51 +341,54 @@ class MainActivity : AppCompatActivity() {
                 3 -> data.withdrawn
                 else -> data.claimed
             }
-            val ordered = raw.sortedByDescending { issue ->
-                when (selected) {
-                    3 -> issue.withdrawnAt.ifBlank { issue.updatedAt }
-                    1, 2 -> issue.updatedAt
-                    else -> issue.reportedAt
-                }
+            val ordered = when (selected) {
+                0 -> raw.sortedBy { it.reportedAt }
+                1, 2 -> raw.sortedByDescending { it.updatedAt }
+                3 -> raw.sortedByDescending { it.withdrawnAt.ifBlank { it.updatedAt } }
+                else -> raw
             }
             boardContainer.removeAllViews()
             if (ordered.isEmpty()) boardContainer.addView(infoBox("Không có SKU trong nhóm này."))
             ordered.forEach { issue -> boardContainer.addView(issueCard(issue, selected) { inventRefresh?.invoke() }) }
             updateTabs()
-            listScroll.post { listScroll.fullScroll(View.FOCUS_DOWN) }
         }
 
-        val labels = listOf("Đang xử lý", "Đã có hàng", "Đã bỏ qua", "Picker thu hồi SKU")
-        labels.chunked(2).forEachIndexed { rowIndex, rowLabels ->
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
-            rowLabels.forEachIndexed { columnIndex, label ->
-                val index = rowIndex * 2 + columnIndex
-                val tab = button(label) { selected = index; inventSelectedTab = index; draw() }
-                val badge = text("", 11, true).apply {
-                    gravity = Gravity.CENTER
-                    setTextColor(getColor(R.color.white))
-                    minWidth = dp(22)
-                    minHeight = dp(22)
-                    setPadding(dp(5), 0, dp(5), 0)
-                    background = GradientDrawable().apply {
-                        shape = GradientDrawable.RECTANGLE
-                        cornerRadius = dp(12).toFloat()
-                        setColor(getColor(R.color.red_600))
-                        setStroke(dp(2), getColor(R.color.white))
-                    }
-                    elevation = dp(4).toFloat()
-                    visibility = View.GONE
-                }
-                val tabFrame = FrameLayout(this)
-                tabFrame.addView(tab, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), Gravity.BOTTOM))
-                tabFrame.addView(badge, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(24), Gravity.TOP or Gravity.END).apply { setMargins(0, 0, dp(1), 0) })
-                tabButtons += tab
-                tabBadges += badge
-                row.addView(tabFrame, LinearLayout.LayoutParams(0, dp(52), 1f).apply { setMargins(dp(2), dp(1), dp(2), dp(1)) })
+        val labels = listOf("Đang xử lý", "Đã có hàng", "Đã bỏ qua", "Picker thu hồi")
+        labels.forEachIndexed { index, label ->
+            val tab = button(label) { selected = index; inventSelectedTab = index; draw() }.apply {
+                minWidth = 0
+                minimumWidth = 0
+                minHeight = dp(44)
+                setPadding(dp(2), 0, dp(2), 0)
+                setSingleLine(true)
+                setAutoSizeTextTypeUniformWithConfiguration(9, 12, 1, TypedValue.COMPLEX_UNIT_SP)
             }
-            tabs.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            val badge = text("", 9, true).apply {
+                gravity = Gravity.CENTER
+                setTextColor(getColor(R.color.white))
+                minWidth = dp(17)
+                minHeight = dp(17)
+                setPadding(dp(3), 0, dp(3), 0)
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    cornerRadius = dp(9).toFloat()
+                    setColor(getColor(R.color.red_600))
+                    setStroke(dp(1), getColor(R.color.white))
+                }
+                visibility = View.GONE
+            }
+            val tabFrame = FrameLayout(this)
+            tabFrame.addView(tab, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44), Gravity.CENTER))
+            tabFrame.addView(badge, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(18), Gravity.TOP or Gravity.END).apply {
+                setMargins(0, 0, dp(1), 0)
+            })
+            tabButtons += tab
+            tabBadges += badge
+            tabs.addView(tabFrame, LinearLayout.LayoutParams(0, dp(46), 1f).apply {
+                setMargins(dp(1), 0, dp(1), 0)
+            })
         }
-        tabs.setPadding(0, dp(2), 0, 0)
+
         updateTabs()
         inventRefresh = {
             lifecycleScope.launch {
@@ -398,32 +404,64 @@ class MainActivity : AppCompatActivity() {
         val elevated = app.session.effectiveRole in setOf(UserRole.ADMIN, UserRole.ADMIN_INVENT)
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(13), dp(11), dp(13), dp(11))
+            setPadding(dp(10), dp(7), dp(10), dp(7))
             setBackgroundResource(R.drawable.bg_card)
         }
-        card.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(4), 0, dp(4)) }
-        val recurrent = if (issue.recurrence30m) " • BÁO LẠI TRONG 30 PHÚT" else ""
-        card.addView(text("SKU ${issue.sku}", 18, true))
-        card.addView(text(issue.productName, 14, true).apply { setPadding(0, dp(2), 0, dp(4)) })
-        val summary = if (bucket == 3) "${issue.status.label} • v${issue.issueVersion}" else "${issue.status.label} • ${issue.reportCount} lượt • v${issue.issueVersion}$recurrent"
-        card.addView(text(summary, 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
-        if (bucket == 3) {
-            card.addView(text("Picker: ${issue.latestReporterName.ifBlank { "—" }} • Thu hồi lúc ${shortTime(issue.withdrawnAt)}", 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
-            card.addView(text(if (issue.latestMessage.isNotBlank()) issue.latestMessage else "Đã ghi nhận thu hồi báo thiếu.", 12, false).apply { setPadding(0, dp(4), 0, 0) })
-        } else if (bucket in 1..2) {
-            val actor = issue.handledByName.ifBlank { issue.assignedName }
-            card.addView(text("Thao tác: ${actor.ifBlank { "—" }} • ${shortTime(issue.updatedAt)}", 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
-        } else {
-            card.addView(text("Báo lúc ${shortTime(issue.reportedAt)}", 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
+        card.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            setMargins(0, dp(2), 0, dp(2))
         }
+
+        card.addView(text("SKU - ${issue.sku} - ${issue.reportCount} lượt báo", 15, true))
+        card.addView(text(issue.productName, 13, true).apply { setPadding(0, dp(1), 0, dp(2)) })
+
+        val actor = when (bucket) {
+            3 -> issue.latestReporterName
+            else -> issue.handledByName.ifBlank { issue.assignedName }
+        }
+        val actorTime = when (bucket) {
+            3 -> issue.withdrawnAt.ifBlank { issue.updatedAt }
+            1, 2 -> issue.updatedAt
+            else -> if (actor.isNotBlank()) issue.updatedAt else ""
+        }
+        val handler = if (actor.isBlank()) {
+            "Người xử lí: Chưa nhận"
+        } else if (actorTime.isBlank()) {
+            "Người xử lí: $actor"
+        } else {
+            "Người xử lí: $actor lúc ${fullDateTime(actorTime)}"
+        }
+        card.addView(text(handler, 12, false).apply { setTextColor(getColor(R.color.text_secondary)) })
+
         if (bucket == 0) {
             val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            actions.addView(button("Có hàng", ButtonTone.SUCCESS) { confirmIssueUpdate(issue, "AVAILABLE", refresh) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(0, dp(5), dp(2), 0) })
-            actions.addView(button("Cho SKIP", ButtonTone.DANGER) { confirmIssueUpdate(issue, "NOT_FOUND", refresh) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(dp(2), dp(5), 0, 0) })
+            actions.addView(
+                button("Có hàng", ButtonTone.SUCCESS) { confirmIssueUpdate(issue, "AVAILABLE", refresh) }.apply {
+                    textSize = 12f
+                    minHeight = dp(42)
+                    setPadding(dp(4), 0, dp(4), 0)
+                },
+                LinearLayout.LayoutParams(0, dp(42), 1f).apply { setMargins(0, dp(4), dp(2), 0) }
+            )
+            actions.addView(
+                button("Cho SKIP", ButtonTone.DANGER) { confirmIssueUpdate(issue, "NOT_FOUND", refresh) }.apply {
+                    textSize = 12f
+                    minHeight = dp(42)
+                    setPadding(dp(4), 0, dp(4), 0)
+                },
+                LinearLayout.LayoutParams(0, dp(42), 1f).apply { setMargins(dp(2), dp(4), 0, 0) }
+            )
             card.addView(actions)
         } else if (bucket == 2) {
             val canRestore = elevated || (app.session.effectiveRole == UserRole.INVENT && issue.assignedId == app.session.profile?.id)
-            if (canRestore) card.addView(button("Báo lại đã có hàng", ButtonTone.SUCCESS) { confirmRestoreSkipped(issue, refresh) })
+            if (canRestore) {
+                card.addView(
+                    button("Báo lại đã có hàng", ButtonTone.SUCCESS) { confirmRestoreSkipped(issue, refresh) }.apply {
+                        textSize = 12f
+                        minHeight = dp(42)
+                    },
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)).apply { setMargins(0, dp(4), 0, 0) }
+                )
+            }
         }
         return card
     }
@@ -1089,6 +1127,15 @@ class MainActivity : AppCompatActivity() {
             Instant.parse(iso).atZone(zone).toLocalDate()
         }.getOrNull()
         return reportDate == LocalDate.now(zone)
+    }
+
+    private fun fullDateTime(iso: String): String {
+        if (iso.isBlank()) return "—"
+        val zone = ZoneId.systemDefault()
+        val value = runCatching { OffsetDateTime.parse(iso).atZoneSameInstant(zone) }
+            .recoverCatching { Instant.parse(iso).atZone(zone) }
+            .getOrNull() ?: return iso.replace('T', ' ').take(19)
+        return DateTimeFormatter.ofPattern("HH:mm:ss dd/MM/yyyy").format(value)
     }
 
     private fun shortTime(iso: String): String = iso.replace('T', ' ').take(16)

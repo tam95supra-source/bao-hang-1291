@@ -1,15 +1,27 @@
 package vn.pickpack1291.baohang.realtime
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
 import vn.pickpack1291.baohang.data.UserRole
 import vn.pickpack1291.baohang.diagnostics.DiagnosticsLogger
+import java.util.concurrent.TimeUnit
 
 /**
- * Lightweight foreground realtime invalidation client.
+ * Foreground realtime invalidation client.
  *
- * Android uses no database WebSocket. Firebase Cloud Messaging
- * delivers small REALTIME_DELTA hints, and this client fans them into the same
- * callbacks used by the existing UI. Database state remains authoritative and
- * every callback refetches canonical state from Neon.
+ * FCM remains the fastest push path. A lightweight authenticated Firestore
+ * marker watch runs only while the app is foreground and guarantees that UI
+ * invalidation still arrives when an FCM delta is delayed or missed. The watch
+ * reads one tiny document every 6 seconds; canonical business data is always
+ * refetched from Neon after the marker changes.
  */
 class RealtimeClient(
     private val diagnostics: DiagnosticsLogger,
@@ -21,7 +33,17 @@ class RealtimeClient(
 ) {
     enum class Status { CONNECTING, ONLINE, FALLBACK, OFFLINE }
 
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val http = OkHttpClient.Builder()
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
+        .build()
+
     @Volatile private var running = false
+    @Volatile private var accessToken = ""
+    private var pollJob: Job? = null
+    private var lastIssueMarker: String? = null
+    private var firestoreOnline: Boolean? = null
 
     private val listener: (RealtimeSignalBus.Topic) -> Unit = listener@ { topic ->
         if (!running) return@listener
@@ -34,32 +56,93 @@ class RealtimeClient(
     }
 
     fun start(token: String, role: UserRole) {
+        accessToken = token
         if (token.isBlank()) {
             onStatus(Status.OFFLINE)
             return
         }
         if (running) return
+
         running = true
+        lastIssueMarker = null
+        firestoreOnline = null
         RealtimeSignalBus.subscribe(listener)
-        onStatus(Status.ONLINE)
-        diagnostics.info(
-            "realtime_fcm_bus_started",
-            mapOf("role" to role.name)
-        )
+        onStatus(Status.CONNECTING)
+        diagnostics.info("realtime_foreground_started", mapOf("role" to role.name, "firestore_interval_seconds" to 6))
+
+        pollJob = scope.launch {
+            while (isActive && running) {
+                pollIssueMarker()
+                delay(FIRESTORE_POLL_MS)
+            }
+        }
     }
 
     fun stop() {
         if (!running) return
         running = false
+        pollJob?.cancel()
+        pollJob = null
+        lastIssueMarker = null
+        firestoreOnline = null
         RealtimeSignalBus.unsubscribe(listener)
         onStatus(Status.OFFLINE)
-        diagnostics.info("realtime_fcm_bus_stopped")
+        diagnostics.info("realtime_foreground_stopped")
     }
 
     fun updateAccessToken(token: String) {
-        // FCM registration is independent from Firebase ID-token refresh.
-        if (running && token.isBlank()) {
-            diagnostics.warn("realtime_fcm_bus_blank_token")
+        accessToken = token
+        if (running && token.isBlank()) diagnostics.warn("realtime_blank_token")
+    }
+
+    private fun pollIssueMarker() {
+        val token = accessToken
+        if (!running || token.isBlank()) return
+        runCatching {
+            val request = Request.Builder()
+                .url(FIRESTORE_ISSUES_DOC)
+                .header("Authorization", "Bearer $token")
+                .header("Accept", "application/json")
+                .get()
+                .build()
+            http.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) error("HTTP_${response.code}")
+                val json = JSONObject(response.body?.string().orEmpty())
+                val marker = json.optString("updateTime").ifBlank {
+                    val fields = json.optJSONObject("fields")
+                    val id = fields?.optJSONObject("entity_id")?.optString("stringValue").orEmpty()
+                    val version = fields?.optJSONObject("entity_version")?.optString("integerValue").orEmpty()
+                    "$id|$version"
+                }
+                if (marker.isBlank()) return@use
+                val previous = lastIssueMarker
+                lastIssueMarker = marker
+                markFirestoreState(true, null)
+                if (previous != null && previous != marker && running) {
+                    diagnostics.info("realtime_firestore_issue_changed", mapOf("marker" to marker.take(120)))
+                    onIssueChanged()
+                }
+            }
+        }.onFailure { error ->
+            markFirestoreState(false, error.message ?: error.javaClass.simpleName)
         }
+    }
+
+    private fun markFirestoreState(online: Boolean, error: String?) {
+        if (firestoreOnline == online) return
+        firestoreOnline = online
+        if (online) {
+            onStatus(Status.ONLINE)
+            diagnostics.info("realtime_firestore_watch_online")
+        } else {
+            onStatus(Status.FALLBACK)
+            diagnostics.warn("realtime_firestore_watch_fallback", mapOf("error" to error.orEmpty().take(200)))
+        }
+    }
+
+    companion object {
+        private const val FIRESTORE_POLL_MS = 6_000L
+        private const val FIRESTORE_ISSUES_DOC =
+            "https://firestore.googleapis.com/v1/projects/bao-hang-1291/databases/(default)/documents/realtime/issues"
     }
 }
