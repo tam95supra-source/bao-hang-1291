@@ -75,6 +75,15 @@ async function main() {
     const jwtPayload = decodeJwtPart(jwtPayloadPart);
     console.log(`FIREBASE_ID_TOKEN_META alg=${jwtHeader.alg || ''} kid=${jwtHeader.kid || ''} iss=${jwtPayload.iss || ''} aud=${jwtPayload.aud || ''} sub_is_test=${jwtPayload.sub === TEST_UID}`);
 
+    const probeResponse = await fetchDeadline(`${NEON_DATA_API}/rpc/api_auth_probe_rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${signIn.idToken}` },
+      body: '{}',
+    });
+    const probeRaw = await probeResponse.text();
+    if (!probeResponse.ok) throw new Error(`Neon auth probe failed HTTP ${probeResponse.status}: ${safeResponseText(probeRaw) || '[empty body]'}`);
+    console.log(`NEON_AUTH_CONTEXT=${safeResponseText(probeRaw)}`);
+
     const profileResponse = await fetchDeadline(`${NEON_DATA_API}/rpc/api_session_profile_rpc`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${signIn.idToken}` },
