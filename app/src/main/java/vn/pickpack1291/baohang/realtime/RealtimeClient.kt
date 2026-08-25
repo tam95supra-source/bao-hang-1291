@@ -22,6 +22,7 @@ import java.util.concurrent.TimeUnit
  * invalidation still arrives when an FCM delta is delayed or missed. The watch
  * reads one tiny document every 6 seconds; canonical business data is always
  * refetched from Neon after the marker changes.
+ * Foreground-only quota guard is enforced by MainActivity.onStop().
  */
 class RealtimeClient(
     private val diagnostics: DiagnosticsLogger,
