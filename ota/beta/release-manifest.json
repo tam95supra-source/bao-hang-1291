@@ -1,11 +1,11 @@
 {
   "channel": "beta",
-  "versionCode": 22,
-  "versionName": "1.6.13",
-  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.13/bao-hang-1291-beta-1.6.13.apk",
-  "sha256": "a6c80e4266da7be54096920e54c9f0da4648f56c6d41127222f77d97d2963ba1",
+  "versionCode": 23,
+  "versionName": "1.6.14",
+  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.14/bao-hang-1291-beta-1.6.14.apk",
+  "sha256": "4292cb4ddfd22a8ae809b2a32b3d7474b2f6ebb1d696cb6639bd6ec0c5535696",
   "mandatory": true,
-  "releaseNotes": "Beta 1.6.13: tăng chiều cao 4 tab Người báo hàng và cho nhãn xuống 2 dòng căn giữa với cỡ chữ dễ đọc hơn; sửa nút Thu hồi báo thiếu và Báo lại đã có hàng thành 2 dòng cao 48dp để không bị che chữ; lịch sử Người lấy hàng ở trạng thái ĐANG XỬ LÝ chỉ hiển thị thời gian Báo hết, không còn Invent phản hồi null; chỉ hiện thời gian Invent phản hồi khi có dữ liệu hợp lệ; tiêu đề trạng thái dài được phép xuống tối đa 2 dòng để không bị cắt.",
+  "releaseNotes": "Beta 1.6.14: nút Báo lại đã có hàng hiển thị trên một dòng; tăng chiều cao và khoảng đệm phía dưới của 4 tab Người báo hàng để đường viền bo không che chữ; chuyển thao tác Báo thiếu của Người lấy hàng sang phản hồi UI tức thì, xóa SKU đã chọn và đưa ngay vào lịch sử với trạng thái đang đồng bộ trong khi request chạy nền; chuyển Có hàng/Cho SKIP của Người báo hàng sang optimistic UI, đổi tab và số lượng ngay khi xác nhận; nếu backend từ chối hoặc mất kết nối thì tự rollback UI và báo lỗi, không hiển thị thành công giả.",
   "signerSha256": "2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0",
-  "sourceSha": "aa95994838473a50a12bf03fb864b18608e06c0f"
+  "sourceSha": "f3d0326585762e8a609287c7de1b1eae13d9a600"
 }
