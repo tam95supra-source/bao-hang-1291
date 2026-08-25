@@ -43,7 +43,7 @@ function jwtMeta(token) {
   const header = JSON.parse(Buffer.from(headerPart, 'base64url').toString('utf8'));
   const payload = JSON.parse(Buffer.from(payloadPart, 'base64url').toString('utf8'));
   const customKeys = Object.keys(payload).filter((key) => !['aud','auth_time','email','email_verified','exp','firebase','iat','iss','sub','user_id'].includes(key));
-  return { alg:header.alg || '', kid:header.kid || '', iss:payload.iss || '', aud:payload.aud || '', customKeys };
+  return { alg:header.alg || '', kid:header.kid || '', iss:payload.iss || '', aud:payload.aud || '', sub:payload.sub || '', customKeys };
 }
 async function deadline(label, promise, ms) {
   let timer;
@@ -74,8 +74,9 @@ async function firebaseCustomSignIn(customToken) {
     method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ token:customToken, returnSecureToken:true }),
   });
   const payload = await response.json();
-  if (!response.ok || !payload.idToken || payload.localId !== ADMIN_UID) throw new Error(`FIREBASE_ADMIN_CUSTOM_SIGNIN_HTTP_${response.status}:${safe(payload?.error?.message)}`);
+  if (!response.ok || !payload.idToken) throw new Error(`FIREBASE_ADMIN_CUSTOM_SIGNIN_HTTP_${response.status}:${safe(payload?.error?.message)}`);
   const meta = jwtMeta(payload.idToken);
+  if (meta.sub !== ADMIN_UID) throw new Error(`FIREBASE_ADMIN_UID_MISMATCH:${meta.sub || '[missing]'}`);
   if (meta.customKeys.includes('role') || meta.customKeys.includes('employee_code') || meta.customKeys.includes('app_role')) throw new Error(`FIREBASE_TOKEN_SHAPE_DRIFT_ADMIN:${meta.customKeys.join(',')}`);
   console.log(`FIREBASE_TOKEN_META code=${ADMIN_CODE} alg=${meta.alg} iss=${meta.iss} aud=${meta.aud} custom_role_claims=false`);
   return payload;
