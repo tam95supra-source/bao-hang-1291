@@ -1,11 +1,11 @@
 {
   "channel": "beta",
-  "versionCode": 18,
-  "versionName": "1.6.9",
-  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.9/bao-hang-1291-beta-1.6.9.apk",
-  "sha256": "a2d5dc3b3fc202edb258cfe0568016e65c70c426727bd09d38fb19ff7b93fbb2",
+  "versionCode": 19,
+  "versionName": "1.6.10",
+  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.10/bao-hang-1291-beta-1.6.10.apk",
+  "sha256": "4d08e4c3fbecabff6e5dbaec1ed57925c98c98cdc25de76d9b3c19f7c41d14e7",
   "mandatory": true,
-  "releaseNotes": "Beta 1.6.9: sửa lỗi ISSUE_NOT_OWNED khi Người báo hàng xác nhận Có hàng/Cho SKIP trên issue chưa có người nhận; issue chưa nhận được claim nguyên tử cho chính người thao tác, issue đã thuộc người khác vẫn được bảo vệ; lọc bảng xử lý theo ownership cho INVENT; kích worker realtime ngay sau khi Picker báo thiếu để APK nhận FCM delta và tự cập nhật thay vì chờ worker định kỳ nhiều phút.",
+  "releaseNotes": "Beta 1.6.10: tối ưu màn Người báo hàng với 4 tab trên cùng một hàng, tự co chữ để không tràn; Đang xử lý sắp xếp cũ đến mới theo thời gian Picker báo, Đã có hàng/Đã bỏ qua/Picker thu hồi sắp xếp mới đến cũ theo thời gian cập nhật; card rút gọn còn SKU - số lượt báo, tên sản phẩm, người xử lí và thời gian; bỏ trạng thái/v2-v3/nội dung dư; sửa realtime UI APK bằng FCM kết hợp Firestore foreground marker watch 6 giây, chỉ refetch Neon khi marker đổi và tự dừng khi app ra nền để giữ free tier.",
   "signerSha256": "2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0",
-  "sourceSha": "d194745923cc17b9e4688c5562969ec24aa840e0"
+  "sourceSha": "eb54c930afcbd1d940756dda765386fc86aa57be"
 }
