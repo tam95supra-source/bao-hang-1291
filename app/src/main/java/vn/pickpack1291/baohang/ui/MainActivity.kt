@@ -309,7 +309,7 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, dp(4))
         }
-        root.addView(tabs, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)))
+        root.addView(tabs, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(60)))
 
         val listScroll = ScrollView(this).apply { isFillViewport = true }
         val boardContainer = LinearLayout(this).apply {
@@ -353,16 +353,20 @@ class MainActivity : AppCompatActivity() {
             updateTabs()
         }
 
-        val labels = listOf("Đang xử lý", "Đã có hàng", "Đã bỏ qua", "Picker thu hồi")
+        val labels = listOf("Đang\nxử lý", "Đã có\nhàng", "Đã bỏ\nqua", "Picker\nthu hồi")
         labels.forEachIndexed { index, label ->
             val tab = button(label) { selected = index; inventSelectedTab = index; draw() }.apply {
                 minWidth = 0
                 minimumWidth = 0
-                minHeight = dp(40)
-                setPadding(dp(1), 0, dp(1), 0)
-                setSingleLine(true)
+                minHeight = 0
+                minimumHeight = 0
+                setPadding(dp(2), dp(2), dp(2), dp(2))
+                setSingleLine(false)
+                maxLines = 2
+                gravity = Gravity.CENTER
+                textAlignment = View.TEXT_ALIGNMENT_CENTER
                 includeFontPadding = false
-                setAutoSizeTextTypeUniformWithConfiguration(7, 11, 1, TypedValue.COMPLEX_UNIT_SP)
+                setAutoSizeTextTypeUniformWithConfiguration(11, 13, 1, TypedValue.COMPLEX_UNIT_SP)
             }
             val badge = text("", 9, true).apply {
                 gravity = Gravity.CENTER
@@ -379,13 +383,13 @@ class MainActivity : AppCompatActivity() {
                 visibility = View.GONE
             }
             val tabFrame = FrameLayout(this)
-            tabFrame.addView(tab, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40), Gravity.CENTER))
+            tabFrame.addView(tab, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56), Gravity.CENTER))
             tabFrame.addView(badge, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(15), Gravity.TOP or Gravity.END).apply {
                 setMargins(0, 0, dp(1), 0)
             })
             tabButtons += tab
             tabBadges += badge
-            tabs.addView(tabFrame, LinearLayout.LayoutParams(0, dp(42), 1f).apply {
+            tabs.addView(tabFrame, LinearLayout.LayoutParams(0, dp(58), 1f).apply {
                 setMargins(dp(1), 0, dp(1), 0)
             })
         }
@@ -482,11 +486,18 @@ class MainActivity : AppCompatActivity() {
         val canRestore = elevated || (app.session.effectiveRole == UserRole.INVENT && issue.assignedId == app.session.profile?.id)
         if (canRestore) {
             card.addView(
-                button("Báo lại đã có hàng", ButtonTone.SUCCESS) { confirmRestoreSkipped(issue, refresh) }.apply {
-                    textSize = 11f
-                    minHeight = dp(38)
+                button("Báo lại\nđã có hàng", ButtonTone.SUCCESS) { confirmRestoreSkipped(issue, refresh) }.apply {
+                    textSize = 12f
+                    minHeight = 0
+                    minimumHeight = 0
+                    setSingleLine(false)
+                    maxLines = 2
+                    gravity = Gravity.CENTER
+                    includeFontPadding = false
+                    setPadding(dp(6), dp(2), dp(6), dp(2))
+                    setAutoSizeTextTypeUniformWithConfiguration(10, 12, 1, TypedValue.COMPLEX_UNIT_SP)
                 },
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply { setMargins(0, dp(3), 0, 0) }
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { setMargins(0, dp(3), 0, 0) }
             )
         }
     }
@@ -773,19 +784,25 @@ class MainActivity : AppCompatActivity() {
                         else -> issue.status.label
                     }
                     row.addView(text("SKU ${issue.sku} - $statusText", 14, true).apply {
-                        setSingleLine(true)
+                        setSingleLine(false)
+                        maxLines = 2
                         includeFontPadding = false
-                        setAutoSizeTextTypeUniformWithConfiguration(8, 14, 1, TypedValue.COMPLEX_UNIT_SP)
+                        setAutoSizeTextTypeUniformWithConfiguration(10, 14, 1, TypedValue.COMPLEX_UNIT_SP)
                     })
                     row.addView(text(issue.productName, 12, true).apply {
                         includeFontPadding = false
                         setPadding(0, dp(1), 0, dp(1))
                     })
-                    val responseIso = issue.inventRespondedAt.ifBlank {
-                        if (issue.status in setOf(IssueStatus.AVAILABLE, IssueStatus.SKIP_ALLOWED)) issue.updatedAt else ""
+                    val rawResponseIso = issue.inventRespondedAt.trim()
+                    val responseIso = when {
+                        issue.status.isOpenBucket -> ""
+                        rawResponseIso.isNotBlank() && !rawResponseIso.equals("null", ignoreCase = true) && rawResponseIso != "—" -> rawResponseIso
+                        issue.status in setOf(IssueStatus.AVAILABLE, IssueStatus.SKIP_ALLOWED) && issue.updatedAt.isNotBlank() && !issue.updatedAt.equals("null", ignoreCase = true) -> issue.updatedAt
+                        else -> ""
                     }
-                    val response = responseIso.takeIf { it.isNotBlank() }?.let(::clockTime) ?: "—"
-                    row.addView(text("Báo hết ${clockTime(issue.reportedAt)}, Invent phản hồi $response", 10, false).apply {
+                    val timingText = if (responseIso.isBlank()) "Báo hết ${clockTime(issue.reportedAt)}"
+                        else "Báo hết ${clockTime(issue.reportedAt)}, Invent phản hồi ${clockTime(responseIso)}"
+                    row.addView(text(timingText, 10, false).apply {
                         setTextColor(getColor(R.color.text_secondary))
                         setSingleLine(true)
                         includeFontPadding = false
@@ -796,19 +813,26 @@ class MainActivity : AppCompatActivity() {
                     if (issue.canWithdraw && remainingMs > 0L) {
                         val expiresAtElapsed = SystemClock.elapsedRealtime() + remainingMs
                         lateinit var withdrawButton: Button
-                        withdrawButton = button("Thu hồi báo thiếu", ButtonTone.DANGER) {
+                        withdrawButton = button("Thu hồi\nbáo thiếu", ButtonTone.DANGER) {
                             if (SystemClock.elapsedRealtime() >= expiresAtElapsed) {
                                 withdrawButton.visibility = View.GONE
                                 toast("Đã quá 30 giây nên không thể thu hồi SKU ${issue.sku}")
                             } else confirmWithdrawIssue(issue, target, expiresAtElapsed, withdrawButton)
                         }.apply {
-                            textSize = 11f
-                            minHeight = dp(38)
+                            textSize = 12f
+                            minHeight = 0
+                            minimumHeight = 0
+                            setSingleLine(false)
+                            maxLines = 2
+                            gravity = Gravity.CENTER
+                            includeFontPadding = false
+                            setPadding(dp(6), dp(2), dp(6), dp(2))
+                            setAutoSizeTextTypeUniformWithConfiguration(10, 12, 1, TypedValue.COMPLEX_UNIT_SP)
                         }
                         withdrawButton.postDelayed({
                             if (SystemClock.elapsedRealtime() >= expiresAtElapsed) withdrawButton.visibility = View.GONE
                         }, remainingMs + 25L)
-                        row.addView(withdrawButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply {
+                        row.addView(withdrawButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply {
                             setMargins(0, dp(3), 0, 0)
                         })
                     }
@@ -1175,7 +1199,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun clockTime(iso: String): String {
-    if (iso.isBlank()) return "—"
+    if (iso.isBlank() || iso.equals("null", ignoreCase = true)) return "—"
     val zone = ZoneId.systemDefault()
     val value = runCatching { OffsetDateTime.parse(iso).atZoneSameInstant(zone) }
         .recoverCatching { Instant.parse(iso).atZone(zone) }
