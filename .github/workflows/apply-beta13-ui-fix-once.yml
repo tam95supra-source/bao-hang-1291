@@ -21,6 +21,7 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           p = Path('app/src/main/java/vn/pickpack1291/baohang/ui/MainActivity.kt')
           s = p.read_text()
@@ -32,96 +33,60 @@ jobs:
                   raise SystemExit(f'{name}: expected 1 match, got {n}')
               s = s.replace(old, new, 1)
 
+          def rep_after(anchor, old, new, name):
+              global s
+              a = s.find(anchor)
+              if a < 0:
+                  raise SystemExit(f'{name}: anchor not found')
+              i = s.find(old, a)
+              if i < 0:
+                  raise SystemExit(f'{name}: target not found after anchor')
+              s = s[:i] + new + s[i+len(old):]
+
           rep('root.addView(tabs, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)))',
               'root.addView(tabs, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(60)))', 'tabs-height')
           rep('val labels = listOf("Đang xử lý", "Đã có hàng", "Đã bỏ qua", "Picker thu hồi")',
               'val labels = listOf("Đang\\nxử lý", "Đã có\\nhàng", "Đã bỏ\\nqua", "Picker\\nthu hồi")', 'tab-labels')
-          rep('''                minHeight = dp(40)
-                setPadding(dp(1), 0, dp(1), 0)
-                setSingleLine(true)
-                includeFontPadding = false
-                setAutoSizeTextTypeUniformWithConfiguration(7, 11, 1, TypedValue.COMPLEX_UNIT_SP)''',
-              '''                minHeight = 0
-                minimumHeight = 0
-                setPadding(dp(2), dp(2), dp(2), dp(2))
-                setSingleLine(false)
-                maxLines = 2
-                gravity = Gravity.CENTER
-                textAlignment = View.TEXT_ALIGNMENT_CENTER
-                includeFontPadding = false
-                setAutoSizeTextTypeUniformWithConfiguration(11, 13, 1, TypedValue.COMPLEX_UNIT_SP)''', 'tab-text')
-          rep('tabFrame.addView(tab, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40), Gravity.CENTER))',
-              'tabFrame.addView(tab, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56), Gravity.CENTER))', 'tab-frame')
-          rep('tabs.addView(tabFrame, LinearLayout.LayoutParams(0, dp(42), 1f).apply {',
-              'tabs.addView(tabFrame, LinearLayout.LayoutParams(0, dp(58), 1f).apply {', 'tab-cell')
 
-          rep('''                button("Báo lại đã có hàng", ButtonTone.SUCCESS) { confirmRestoreSkipped(issue, refresh) }.apply {
-                    textSize = 11f
-                    minHeight = dp(38)
-                },
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply { setMargins(0, dp(3), 0, 0) }''',
-              '''                button("Báo lại\\nđã có hàng", ButtonTone.SUCCESS) { confirmRestoreSkipped(issue, refresh) }.apply {
-                    textSize = 12f
-                    minHeight = 0
-                    minimumHeight = 0
-                    setSingleLine(false)
-                    maxLines = 2
-                    gravity = Gravity.CENTER
-                    includeFontPadding = false
-                    setPadding(dp(6), dp(2), dp(6), dp(2))
-                    setAutoSizeTextTypeUniformWithConfiguration(10, 12, 1, TypedValue.COMPLEX_UNIT_SP)
-                },
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { setMargins(0, dp(3), 0, 0) }''', 'restore-button')
+          tab_anchor = 'val labels = listOf("Đang\\nxử lý"'
+          rep_after(tab_anchor, 'minHeight = dp(40)', 'minHeight = 0\n                minimumHeight = 0', 'tab-min-height')
+          rep_after(tab_anchor, 'setPadding(dp(1), 0, dp(1), 0)', 'setPadding(dp(2), dp(2), dp(2), dp(2))', 'tab-padding')
+          rep_after(tab_anchor, 'setSingleLine(true)', 'setSingleLine(false)\n                maxLines = 2\n                gravity = Gravity.CENTER\n                textAlignment = View.TEXT_ALIGNMENT_CENTER', 'tab-lines')
+          rep_after(tab_anchor, 'setAutoSizeTextTypeUniformWithConfiguration(7, 11, 1, TypedValue.COMPLEX_UNIT_SP)',
+                    'setAutoSizeTextTypeUniformWithConfiguration(11, 13, 1, TypedValue.COMPLEX_UNIT_SP)', 'tab-font')
+          rep_after(tab_anchor,
+                    'tabFrame.addView(tab, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40), Gravity.CENTER))',
+                    'tabFrame.addView(tab, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56), Gravity.CENTER))', 'tab-frame')
+          rep_after(tab_anchor, 'tabs.addView(tabFrame, LinearLayout.LayoutParams(0, dp(42), 1f).apply {',
+                    'tabs.addView(tabFrame, LinearLayout.LayoutParams(0, dp(58), 1f).apply {', 'tab-cell')
 
-          rep('''                    row.addView(text("SKU ${issue.sku} - $statusText", 14, true).apply {
-                        setSingleLine(true)
-                        includeFontPadding = false
-                        setAutoSizeTextTypeUniformWithConfiguration(8, 14, 1, TypedValue.COMPLEX_UNIT_SP)
-                    })''',
-              '''                    row.addView(text("SKU ${issue.sku} - $statusText", 14, true).apply {
-                        setSingleLine(false)
-                        maxLines = 2
-                        includeFontPadding = false
-                        setAutoSizeTextTypeUniformWithConfiguration(10, 14, 1, TypedValue.COMPLEX_UNIT_SP)
-                    })''', 'history-header')
+          restore_anchor = 'button("Báo lại đã có hàng", ButtonTone.SUCCESS)'
+          rep_after(restore_anchor, 'textSize = 11f', 'textSize = 12f', 'restore-font')
+          rep_after(restore_anchor, 'minHeight = dp(38)',
+                    'minHeight = 0\n                    minimumHeight = 0\n                    setSingleLine(false)\n                    maxLines = 2\n                    gravity = Gravity.CENTER\n                    includeFontPadding = false\n                    setPadding(dp(6), dp(2), dp(6), dp(2))\n                    setAutoSizeTextTypeUniformWithConfiguration(10, 12, 1, TypedValue.COMPLEX_UNIT_SP)', 'restore-style')
+          rep_after(restore_anchor, 'LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply { setMargins(0, dp(3), 0, 0) }',
+                    'LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { setMargins(0, dp(3), 0, 0) }', 'restore-height')
+          rep(restore_anchor, 'button("Báo lại\\nđã có hàng", ButtonTone.SUCCESS)', 'restore-label')
 
-          rep('''                    val responseIso = issue.inventRespondedAt.ifBlank {
-                        if (issue.status in setOf(IssueStatus.AVAILABLE, IssueStatus.SKIP_ALLOWED)) issue.updatedAt else ""
-                    }
-                    val response = responseIso.takeIf { it.isNotBlank() }?.let(::clockTime) ?: "—"
-                    row.addView(text("Báo hết ${clockTime(issue.reportedAt)}, Invent phản hồi $response", 10, false).apply {''',
-              '''                    val rawResponseIso = issue.inventRespondedAt.trim()
-                    val responseIso = when {
-                        issue.status.isOpenBucket -> ""
-                        rawResponseIso.isNotBlank() && !rawResponseIso.equals("null", ignoreCase = true) && rawResponseIso != "—" -> rawResponseIso
-                        issue.status in setOf(IssueStatus.AVAILABLE, IssueStatus.SKIP_ALLOWED) && issue.updatedAt.isNotBlank() && !issue.updatedAt.equals("null", ignoreCase = true) -> issue.updatedAt
-                        else -> ""
-                    }
-                    val timingText = if (responseIso.isBlank()) "Báo hết ${clockTime(issue.reportedAt)}"
-                        else "Báo hết ${clockTime(issue.reportedAt)}, Invent phản hồi ${clockTime(responseIso)}"
-                    row.addView(text(timingText, 10, false).apply {''', 'picker-timing')
+          history_anchor = 'row.addView(text("SKU ${issue.sku} - $statusText", 14, true).apply {'
+          rep_after(history_anchor, 'setSingleLine(true)', 'setSingleLine(false)\n                        maxLines = 2', 'history-lines')
+          rep_after(history_anchor, 'setAutoSizeTextTypeUniformWithConfiguration(8, 14, 1, TypedValue.COMPLEX_UNIT_SP)',
+                    'setAutoSizeTextTypeUniformWithConfiguration(10, 14, 1, TypedValue.COMPLEX_UNIT_SP)', 'history-font')
 
-          rep('withdrawButton = button("Thu hồi báo thiếu", ButtonTone.DANGER) {',
-              'withdrawButton = button("Thu hồi\\nbáo thiếu", ButtonTone.DANGER) {', 'withdraw-label')
-          rep('''                        }.apply {
-                            textSize = 11f
-                            minHeight = dp(38)
-                        }
-                        withdrawButton.postDelayed({''',
-              '''                        }.apply {
-                            textSize = 12f
-                            minHeight = 0
-                            minimumHeight = 0
-                            setSingleLine(false)
-                            maxLines = 2
-                            gravity = Gravity.CENTER
-                            includeFontPadding = false
-                            setPadding(dp(6), dp(2), dp(6), dp(2))
-                            setAutoSizeTextTypeUniformWithConfiguration(10, 12, 1, TypedValue.COMPLEX_UNIT_SP)
-                        }
-                        withdrawButton.postDelayed({''', 'withdraw-style')
-          rep('row.addView(withdrawButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply {',
-              'row.addView(withdrawButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply {', 'withdraw-height')
+          pattern = re.compile(r'''\s*val responseIso = issue\.inventRespondedAt\.ifBlank \{\n\s*if \(issue\.status in setOf\(IssueStatus\.AVAILABLE, IssueStatus\.SKIP_ALLOWED\)\) issue\.updatedAt else ""\n\s*\}\n\s*val response = responseIso\.takeIf \{ it\.isNotBlank\(\) \}\?\.let\(::clockTime\) \?: "—"\n\s*row\.addView\(text\("Báo hết \$\{clockTime\(issue\.reportedAt\)\}, Invent phản hồi \$response", 10, false\)\.apply \{''')
+          replacement = '''\n                    val rawResponseIso = issue.inventRespondedAt.trim()\n                    val responseIso = when {\n                        issue.status.isOpenBucket -> ""\n                        rawResponseIso.isNotBlank() && !rawResponseIso.equals("null", ignoreCase = true) && rawResponseIso != "—" -> rawResponseIso\n                        issue.status in setOf(IssueStatus.AVAILABLE, IssueStatus.SKIP_ALLOWED) && issue.updatedAt.isNotBlank() && !issue.updatedAt.equals("null", ignoreCase = true) -> issue.updatedAt\n                        else -> ""\n                    }\n                    val timingText = if (responseIso.isBlank()) "Báo hết ${clockTime(issue.reportedAt)}"\n                        else "Báo hết ${clockTime(issue.reportedAt)}, Invent phản hồi ${clockTime(responseIso)}"\n                    row.addView(text(timingText, 10, false).apply {'''
+          s, n = pattern.subn(replacement, s, count=1)
+          if n != 1:
+              raise SystemExit(f'picker-timing: expected 1 match, got {n}')
+
+          withdraw_anchor = 'withdrawButton = button("Thu hồi báo thiếu", ButtonTone.DANGER)'
+          rep_after(withdraw_anchor, 'textSize = 11f', 'textSize = 12f', 'withdraw-font')
+          rep_after(withdraw_anchor, 'minHeight = dp(38)',
+                    'minHeight = 0\n                            minimumHeight = 0\n                            setSingleLine(false)\n                            maxLines = 2\n                            gravity = Gravity.CENTER\n                            includeFontPadding = false\n                            setPadding(dp(6), dp(2), dp(6), dp(2))\n                            setAutoSizeTextTypeUniformWithConfiguration(10, 12, 1, TypedValue.COMPLEX_UNIT_SP)', 'withdraw-style')
+          rep_after(withdraw_anchor, 'row.addView(withdrawButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply {',
+                    'row.addView(withdrawButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply {', 'withdraw-height')
+          rep(withdraw_anchor, 'withdrawButton = button("Thu hồi\\nbáo thiếu", ButtonTone.DANGER)', 'withdraw-label')
+
           rep('if (iso.isBlank()) return "—"', 'if (iso.isBlank() || iso.equals("null", ignoreCase = true)) return "—"', 'null-time')
 
           p.write_text(s)
