@@ -109,6 +109,7 @@ class ApiClient(
         val json = invoke("report-shortage", JSONObject().put("sku", sku).put("client_request_id", clientRequestId))
         val issue = StockIssue.fromJson(json.getJSONObject("issue"))
         emitIssueRealtimeBestEffort(issue, "report_shortage")
+        kickWorkerBestEffort("report_shortage")
         return ReportResult(
             issue,
             json.optBoolean("already_reported", false),
