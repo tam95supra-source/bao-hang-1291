@@ -1,7 +1,7 @@
 -- BÁO HÀNG 1291 — production hotfix 2026-08-25
 -- Scope: eliminate false ISSUE_NOT_OWNED on unclaimed active issues while preserving ownership isolation.
 -- INVENT may take an unclaimed active issue as part of the same transaction before AVAILABLE/NOT_FOUND.
--- An issue already owned by another account remains forbidden.
+-- An issue already owned by another account remains forbidden, except an idempotent retry of the same final state.
 
 CREATE OR REPLACE FUNCTION public.api_update_issue_rpc(
   p_issue_id uuid,
@@ -19,12 +19,16 @@ DECLARE
   v_uid uuid := public.app_uid();
   v_claimed_by uuid;
   v_status public.issue_status;
+  v_action text := upper(trim(p_action));
+  v_same_final boolean := false;
   r jsonb;
 BEGIN
   v_role := public.require_role_rpc(
     p_test_role,
     ARRAY['ADMIN','ADMIN_INVENT','INVENT']::public.user_role[]
   );
+
+  IF v_action = 'SKIP_ALLOWED' THEN v_action := 'NOT_FOUND'; END IF;
 
   IF v_role = 'INVENT'::public.user_role THEN
     SELECT i.claimed_by, i.status
@@ -37,19 +41,25 @@ BEGIN
       RAISE EXCEPTION 'ISSUE_NOT_FOUND';
     END IF;
 
-    IF v_claimed_by IS NULL
-       AND v_status IN ('OPEN','CLAIMED','SEARCHING','REPLENISHING') THEN
-      -- Canonical OPEN -> CLAIMED transition is recorded before the final action.
-      PERFORM public.update_issue_atomic(p_issue_id, v_uid, 'CLAIM');
-      v_claimed_by := v_uid;
-    END IF;
+    v_same_final :=
+      (v_action = 'AVAILABLE' AND v_status = 'AVAILABLE')
+      OR (v_action = 'NOT_FOUND' AND v_status = 'SKIP_ALLOWED');
 
-    IF v_claimed_by IS DISTINCT FROM v_uid THEN
-      RAISE EXCEPTION 'ISSUE_NOT_OWNED';
+    IF NOT v_same_final THEN
+      IF v_claimed_by IS NULL
+         AND v_status IN ('OPEN','CLAIMED','SEARCHING','REPLENISHING') THEN
+        -- Canonical OPEN -> CLAIMED transition is recorded before the final action.
+        PERFORM public.update_issue_atomic(p_issue_id, v_uid, 'CLAIM');
+        v_claimed_by := v_uid;
+      END IF;
+
+      IF v_claimed_by IS DISTINCT FROM v_uid THEN
+        RAISE EXCEPTION 'ISSUE_NOT_OWNED';
+      END IF;
     END IF;
   END IF;
 
-  r := public.update_issue_rpc(p_issue_id, p_action, p_client_request_id);
+  r := public.update_issue_rpc(p_issue_id, v_action, p_client_request_id);
   RETURN jsonb_build_object('issue', r);
 END
 $function$;
@@ -69,12 +79,16 @@ DECLARE
   v_uid uuid := public.app_uid();
   v_claimed_by uuid;
   v_status public.issue_status;
+  v_action text := upper(trim(p_action));
+  v_same_final boolean := false;
   r jsonb;
 BEGIN
   v_role := public.require_role_rpc(
     p_test_role,
     ARRAY['ADMIN','ADMIN_INVENT','INVENT']::public.user_role[]
   );
+
+  IF v_action = 'SKIP_ALLOWED' THEN v_action := 'NOT_FOUND'; END IF;
 
   IF v_role = 'INVENT'::public.user_role THEN
     SELECT i.claimed_by, i.status
@@ -87,18 +101,24 @@ BEGIN
       RAISE EXCEPTION 'ISSUE_NOT_FOUND';
     END IF;
 
-    IF v_claimed_by IS NULL
-       AND v_status IN ('OPEN','CLAIMED','SEARCHING','REPLENISHING') THEN
-      PERFORM public.update_issue_atomic(p_issue_id, v_uid, 'CLAIM');
-      v_claimed_by := v_uid;
-    END IF;
+    v_same_final :=
+      (v_action = 'AVAILABLE' AND v_status = 'AVAILABLE')
+      OR (v_action = 'NOT_FOUND' AND v_status = 'SKIP_ALLOWED');
 
-    IF v_claimed_by IS DISTINCT FROM v_uid THEN
-      RAISE EXCEPTION 'ISSUE_NOT_OWNED';
+    IF NOT v_same_final THEN
+      IF v_claimed_by IS NULL
+         AND v_status IN ('OPEN','CLAIMED','SEARCHING','REPLENISHING') THEN
+        PERFORM public.update_issue_atomic(p_issue_id, v_uid, 'CLAIM');
+        v_claimed_by := v_uid;
+      END IF;
+
+      IF v_claimed_by IS DISTINCT FROM v_uid THEN
+        RAISE EXCEPTION 'ISSUE_NOT_OWNED';
+      END IF;
     END IF;
   END IF;
 
-  r := public.update_issue_rpc(p_issue_id, p_action);
+  r := public.update_issue_rpc(p_issue_id, v_action);
   RETURN jsonb_build_object('issue', r);
 END
 $function$;
