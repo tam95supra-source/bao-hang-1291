@@ -1,11 +1,11 @@
 {
   "channel": "beta",
-  "versionCode": 17,
-  "versionName": "1.6.8",
-  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.8/bao-hang-1291-beta-1.6.8.apk",
-  "sha256": "0047e2c767172621d2719250c86c993d9ddd9ae0075635f7756bee0b5ec98345",
+  "versionCode": 18,
+  "versionName": "1.6.9",
+  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.9/bao-hang-1291-beta-1.6.9.apk",
+  "sha256": "a2d5dc3b3fc202edb258cfe0568016e65c70c426727bd09d38fb19ff7b93fbb2",
   "mandatory": true,
-  "releaseNotes": "Beta 1.6.8: tối ưu màn Picker báo thiếu; bỏ tiêu đề Báo thiếu hàng và trạng thái Chưa chọn SKU; đặt nút Báo thiếu cùng dòng với ô nhập SKU, gợi ý SKU xổ xuống dưới; SKU đã chọn hiển thị ngay dưới vùng nhập với nền riêng; tách rõ vùng nhập và lịch sử; lịch sử chỉ giữ báo trong ngày và các SKU ngày cũ còn chưa xử lý; ẩn SKU ngày cũ đã hoàn tất; tô nền xanh nhạt cho Đã có hàng, đỏ nhạt cho Skip, vàng nhạt cho SKU đang xử lý; đổi tiêu đề thành Lịch sử báo hàng hôm nay.",
+  "releaseNotes": "Beta 1.6.9: sửa lỗi ISSUE_NOT_OWNED khi Người báo hàng xác nhận Có hàng/Cho SKIP trên issue chưa có người nhận; issue chưa nhận được claim nguyên tử cho chính người thao tác, issue đã thuộc người khác vẫn được bảo vệ; lọc bảng xử lý theo ownership cho INVENT; kích worker realtime ngay sau khi Picker báo thiếu để APK nhận FCM delta và tự cập nhật thay vì chờ worker định kỳ nhiều phút.",
   "signerSha256": "2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0",
-  "sourceSha": "c081389431b073a922c84ac8022b69b7617046f5"
+  "sourceSha": "d194745923cc17b9e4688c5562969ec24aa840e0"
 }
