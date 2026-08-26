@@ -173,14 +173,18 @@ async function attach() {
   }
   if (unsubscribe && boundUid === s.profile.id) return;
   if (unsubscribe) unsubscribe();
+  unsubscribe = null;
+  boundUid = '';
+
+  const app = getApps()[0] || initializeApp({ apiKey: FIREBASE_API_KEY, authDomain: `${FIREBASE_PROJECT}.web.app`, projectId: FIREBASE_PROJECT });
+  const auth = getAuth(app);
+  if (typeof auth.authStateReady === 'function') await auth.authStateReady();
+  if (!auth.currentUser || auth.currentUser.uid !== s.profile.id) return;
+
   boundUid = s.profile.id;
   firstSnapshot = true;
   lastMarker = '';
   versions.clear();
-
-  const app = getApps()[0] || initializeApp({ apiKey: FIREBASE_API_KEY, authDomain: `${FIREBASE_PROJECT}.web.app`, projectId: FIREBASE_PROJECT });
-  const auth = getAuth(app);
-  if (auth.currentUser && auth.currentUser.uid !== boundUid) return;
   const firestore = getFirestore(app);
   unsubscribe = onSnapshot(doc(firestore, 'realtime', 'issues'), (snapshot) => {
     if (!snapshot.exists() || snapshot.metadata?.hasPendingWrites) return;
@@ -196,7 +200,12 @@ async function attach() {
     if (version) versions.set(id, version);
     window.__BH_PICKER_REALTIME_METRICS__.events++;
     void reconcileEvent(event).catch((error) => console.warn('picker realtime patch failed', error?.message || error));
-  }, (error) => console.warn('picker realtime channel failed', error?.message || error));
+  }, (error) => {
+    unsubscribe = null;
+    boundUid = '';
+    console.warn('picker realtime channel failed', error?.message || error);
+    queueMicrotask(() => attach().catch(() => {}));
+  });
 
   bindWithdrawButtons(document);
 }
