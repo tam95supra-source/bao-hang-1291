@@ -56,6 +56,21 @@ async function jsonFetch(url, options = {}, timeoutMs = 20000) {
   return data;
 }
 
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+async function readRetry(label, fn, attempts = 3) {
+  let last;
+  for (let i = 1; i <= attempts; i++) {
+    try { return await fn(); }
+    catch (err) {
+      last = err;
+      if (i === attempts) break;
+      console.log(`${label}_RETRY=${i}`);
+      await sleep(i * 2500);
+    }
+  }
+  throw last;
+}
+
 async function accessToken() {
   const body = new URLSearchParams({
     client_id: req('GOOGLE_OAUTH_CLIENT_ID'),
@@ -106,19 +121,19 @@ async function main() {
   if (project.scriptId !== scriptId) throw new Error('SCRIPT_ID_READBACK_MISMATCH');
   console.log('APPS_SCRIPT_PROJECT_READBACK=PASS');
 
-  const head = await jsonFetch(`${apiBase}/projects/${encodeURIComponent(scriptId)}/content`, {headers:authHeaders(token)});
+  const head = await readRetry('APPS_SCRIPT_HEAD_READBACK', () => jsonFetch(`${apiBase}/projects/${encodeURIComponent(scriptId)}/content`, {headers:authHeaders(token)}, 45000));
   if (!Array.isArray(head.files) || !head.files.length) throw new Error('LIVE_CONTENT_EMPTY');
   if (!head.files.some(f => f?.name === 'appsscript' && f?.type === 'JSON')) throw new Error('LIVE_MANIFEST_MISSING');
   const liveTarget = pickReceiver(head.files);
   const liveBeforeHash = sha256(liveTarget.source || '');
 
-  const deploymentBefore = await jsonFetch(`${apiBase}/projects/${encodeURIComponent(scriptId)}/deployments/${encodeURIComponent(deploymentId)}`, {headers:authHeaders(token)});
+  const deploymentBefore = await readRetry('APPS_SCRIPT_DEPLOYMENT_READBACK', () => jsonFetch(`${apiBase}/projects/${encodeURIComponent(scriptId)}/deployments/${encodeURIComponent(deploymentId)}`, {headers:authHeaders(token)}, 30000));
   if (deploymentBefore.deploymentId !== deploymentId) throw new Error('DEPLOYMENT_ID_READBACK_MISMATCH');
   const cfg = deploymentBefore.deploymentConfig || {};
   if (cfg.scriptId && cfg.scriptId !== scriptId) throw new Error('DEPLOYMENT_SCRIPT_ID_MISMATCH');
   const oldVersion = Number(cfg.versionNumber || 0);
   if (!Number.isInteger(oldVersion) || oldVersion < 1) throw new Error('DEPLOYMENT_VERSION_INVALID');
-  const oldVersionContent = await jsonFetch(`${apiBase}/projects/${encodeURIComponent(scriptId)}/content?versionNumber=${oldVersion}`, {headers:authHeaders(token)});
+  const oldVersionContent = await readRetry('APPS_SCRIPT_VERSION_READBACK', () => jsonFetch(`${apiBase}/projects/${encodeURIComponent(scriptId)}/content?versionNumber=${oldVersion}`, {headers:authHeaders(token)}, 45000));
   const oldVersionTarget = pickReceiver(oldVersionContent.files || []);
   const deployedBeforeHash = sha256(oldVersionTarget.source || '');
   console.log('APPS_SCRIPT_EXISTING_DEPLOYMENT_READBACK=PASS');
@@ -165,13 +180,13 @@ async function main() {
     console.log('APPS_SCRIPT_EXISTING_DEPLOYMENT_UPDATE=ALREADY');
   }
 
-  const versionContent = await jsonFetch(`${apiBase}/projects/${encodeURIComponent(scriptId)}/content?versionNumber=${versionNumber}`, {headers:authHeaders(token)});
+  const versionContent = await readRetry('APPS_SCRIPT_FINAL_SOURCE_READBACK', () => jsonFetch(`${apiBase}/projects/${encodeURIComponent(scriptId)}/content?versionNumber=${versionNumber}`, {headers:authHeaders(token)}, 45000));
   const versionTarget = pickReceiver(versionContent.files || []);
   const deployedAfterHash = sha256(versionTarget.source || '');
   if (deployedAfterHash !== canonicalHash) throw new Error('DEPLOYED_SOURCE_HASH_MISMATCH');
   assertCanonical(versionTarget.source || '');
 
-  const deploymentAfter = await jsonFetch(`${apiBase}/projects/${encodeURIComponent(scriptId)}/deployments/${encodeURIComponent(deploymentId)}`, {headers:authHeaders(token)});
+  const deploymentAfter = await readRetry('APPS_SCRIPT_FINAL_DEPLOYMENT_READBACK', () => jsonFetch(`${apiBase}/projects/${encodeURIComponent(scriptId)}/deployments/${encodeURIComponent(deploymentId)}`, {headers:authHeaders(token)}, 30000));
   if (deploymentAfter.deploymentId !== deploymentId) throw new Error('FINAL_DEPLOYMENT_ID_MISMATCH');
   if (Number(deploymentAfter.deploymentConfig?.versionNumber || 0) !== versionNumber) throw new Error('FINAL_DEPLOYMENT_VERSION_MISMATCH');
 
@@ -180,9 +195,9 @@ async function main() {
   const pathParts = u.pathname.split('/').filter(Boolean);
   const webhookDeploymentId = pathParts[2] || '';
   if (webhookDeploymentId !== deploymentId) throw new Error('WEBHOOK_DEPLOYMENT_POINTER_MISMATCH');
-  const ping = await jsonFetch(webhook, {
+  const ping = await readRetry('APPS_SCRIPT_WEBAPP_PING', () => jsonFetch(webhook, {
     method:'POST', headers:{'content-type':'text/plain;charset=UTF-8'}, body:JSON.stringify({action:'ping'})
-  }, 20000);
+  }, 30000));
   if (ping.ok !== true || ping.project !== 'bao-hang-1291') throw new Error('LIVE_WEBAPP_PING_FAILED');
   console.log('APPS_SCRIPT_LIVE_WEBAPP_PING=PASS');
 
