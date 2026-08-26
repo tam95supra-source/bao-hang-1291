@@ -338,7 +338,9 @@ function enhanceStaticUi() {
   applyRoleState();
   fixBranding();
   const profile = session()?.profile;
-  if (profile && $('.user span')) $('.user span').textContent = ROLE_LABELS[profile.role] || profile.role;
+  const roleLabel = profile ? (ROLE_LABELS[profile.role] || profile.role) : '';
+  const roleNode = $('.user span');
+  if (roleNode && roleLabel && roleNode.textContent !== roleLabel) roleNode.textContent = roleLabel;
 }
 
 const observer = new MutationObserver(() => {

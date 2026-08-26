@@ -5,33 +5,39 @@ on:
     branches: [main]
     paths:
       - 'scripts/targeted-admin-bootstrap-e2e.cjs'
-      - '.github/workflows/targeted-admin-bootstrap.yml'
+  workflow_run:
+    workflows: ['Deploy Web Admin']
+    types: [completed]
   workflow_dispatch:
 
 concurrency:
-  group: targeted-admin-bootstrap-${{ github.ref }}
-  cancel-in-progress: true
+  group: targeted-admin-bootstrap-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
   admin-bootstrap:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
       NEON_DATA_API: https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Scope guard
         shell: bash
         run: |
           set -euo pipefail
+          EXPECTED_SHA='${{ github.event.workflow_run.head_sha || github.sha }}'
           test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
-          test "$GITHUB_REF_NAME" = 'main'
           test "$NEON_DATA_API" = 'https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1'
-          echo "TARGET_SCOPE_GUARD=PASS sha=$(git rev-parse HEAD) production=https://bao-hang-1291.web.app"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          echo "TARGET_SCOPE_GUARD=PASS sha=$EXPECTED_SHA production=https://bao-hang-1291.web.app"
 
       - name: Zero-cost guard
         shell: bash

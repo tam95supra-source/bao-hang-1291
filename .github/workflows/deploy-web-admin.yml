@@ -150,7 +150,8 @@ jobs:
           grep -qi '^x-content-type-options: nosniff' "$RUNNER_TEMP/web-headers.txt"
           echo 'WEB_ADMIN_LIVE_SMOKE=PASS'
 
-      - name: Verify live password login and realtime bootstrap
+      - name: Verify full live login and realtime acceptance
+        if: github.event_name == 'workflow_dispatch'
         shell: bash
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
