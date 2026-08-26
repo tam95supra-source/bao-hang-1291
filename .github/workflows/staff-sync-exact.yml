@@ -1,0 +1,165 @@
+name: Staff exact reconciliation acceptance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/staff-sync-exact.request'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: bao-hang-staff-source-recovery
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      GOOGLE_SHEET_WEBHOOK_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
+      STAFF_SHEET_ID: 1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78
+      STAFF_SHEET_NAME: DANH SÁCH NHÂN SỰ
+      STAFF_CREATE_CONCURRENCY: 8
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Capture exact live staff snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
+          test -n "${FIREBASE_SERVICE_ACCOUNT:-}"
+          case "$GOOGLE_SHEET_WEBHOOK_URL" in https://script.google.com/macros/s/*/exec) ;; *) exit 11;; esac
+          rm -f ops/full-staff-sync-last.json
+          rm -rf acceptance-evidence
+          mkdir -p "$RUNNER_TEMP/staff" acceptance-evidence
+          URL=$(python3 - <<'PY'
+          import os,urllib.parse
+          base='https://docs.google.com/spreadsheets/d/'+os.environ['STAFF_SHEET_ID']+'/gviz/tq'
+          print(base+'?'+urllib.parse.urlencode({'tqx':'out:csv','sheet':os.environ['STAFF_SHEET_NAME'],'tq':'select A,B,D,E,F'}))
+          PY
+          )
+          curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 "$URL" -o "$RUNNER_TEMP/staff/source.csv"
+          python3 - <<'PY'
+          import csv,datetime,hashlib,json,os
+          rows=list(csv.reader(open(os.environ['RUNNER_TEMP']+'/staff/source.csv',encoding='utf-8-sig',newline='')))
+          by={}; valid=duplicates=invalid=0
+          for r in rows[1:]:
+              if len(r)<5:
+                  invalid+=1; continue
+              code,name,position,contractor,department=[str(x or '').strip() for x in r[:5]]
+              if not code or not name:
+                  invalid+=1; continue
+              valid+=1
+              if code in by:
+                  duplicates+=1; continue
+              by[code]={'employee_code':code,'full_name':name,'contractor':contractor,'source_position':position,'department':department,'role':'PICKER'}
+          staff=[by[k] for k in sorted(by)]
+          canonical=json.dumps(staff,ensure_ascii=False,separators=(',',':'),sort_keys=True)
+          digest=hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+          meta={'captured_at':datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00','Z'),'raw_rows':max(0,len(rows)-1),'valid_rows':valid,'unique_count':len(staff),'duplicate_count':duplicates,'invalid_count':invalid,'digest':digest}
+          json.dump({'meta':meta,'staff':staff},open(os.environ['RUNNER_TEMP']+'/staff/source.json','w'),ensure_ascii=False,separators=(',',':'))
+          json.dump(meta,open('acceptance-evidence/staff-snapshot-meta.json','w'),ensure_ascii=False,indent=2)
+          ok=350 <= len(staff) <= 2000 and duplicates==0 and invalid==0
+          print('STAFF_SNAPSHOT_CAPTURE='+('PASS' if ok else 'FAIL'))
+          print('snapshot_unique='+str(len(staff)))
+          print('snapshot_duplicate='+str(duplicates))
+          print('snapshot_invalid='+str(invalid))
+          print('snapshot_digest='+digest)
+          if not ok: raise SystemExit('STAFF_SNAPSHOT_INVALID')
+          PY
+
+      - name: Reconcile exact GSHEET set and Firebase Auth
+        id: reconcile
+        shell: bash
+        env:
+          STAFF_SOURCE_JSON: ${{ runner.temp }}/staff/source.json
+        run: |
+          set -euo pipefail
+          node ops/run_full_staff_sync_compat.mjs
+          jq -e '.status == "PASS"' ops/full-staff-sync-last.json >/dev/null
+
+      - name: Assemble sanitized proof
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RECONCILE_OUTCOME: ${{ steps.reconcile.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p acceptance-evidence
+          if ! test -s ops/full-staff-sync-last.json; then
+            printf '{"status":"FAIL","markers":{"STAFF_RECONCILIATION_READBACK":"FAIL"}}\n' > ops/full-staff-sync-last.json
+          fi
+          JOB_ID=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" | jq -r '.jobs[] | select(.name=="reconcile") | .id' | head -n1)
+          test -n "$JOB_ID"
+          export JOB_ID
+          python3 - <<'PY'
+          import json,os
+          d=json.load(open('ops/full-staff-sync-last.json'))
+          d['execution']={'commit_sha':os.environ['GITHUB_SHA'],'run_id':int(os.environ['GITHUB_RUN_ID']),'job_id':int(os.environ['JOB_ID'])}
+          d['reconcile_outcome']=os.environ.get('RECONCILE_OUTCOME','')
+          json.dump(d,open('acceptance-evidence/staff-reconciliation.json','w'),ensure_ascii=False,indent=2)
+          PY
+
+      - name: Reject secret material from evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -RniE 'private_key|client_secret|access_token|id_token|FIREBASE_SERVICE_ACCOUNT|GOOGLE_SHEET_WEBHOOK_URL' acceptance-evidence; then
+            echo SECRET_MATERIAL_DETECTED >&2
+            exit 1
+          fi
+
+      - name: Upload reconciliation proof
+        if: always()
+        id: proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: staff-reconciliation-proof-${{ github.run_id }}
+          path: acceptance-evidence
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Add artifact receipt to final evidence
+        if: always()
+        shell: bash
+        env:
+          PROOF_ARTIFACT_ID: ${{ steps.proof.outputs.artifact-id }}
+          PROOF_ARTIFACT_URL: ${{ steps.proof.outputs.artifact-url }}
+        run: |
+          set -euo pipefail
+          test -n "$PROOF_ARTIFACT_ID"
+          python3 - <<'PY'
+          import json,os
+          p='acceptance-evidence/staff-reconciliation.json'
+          d=json.load(open(p)); d.setdefault('execution',{})['proof_artifact_id']=int(os.environ['PROOF_ARTIFACT_ID']); d['execution']['proof_artifact_url']=os.environ.get('PROOF_ARTIFACT_URL','')
+          json.dump(d,open(p,'w'),ensure_ascii=False,indent=2)
+          PY
+
+      - name: Upload final acceptance evidence
+        if: always()
+        id: final_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-evidence-staff-${{ github.run_id }}
+          path: acceptance-evidence/staff-reconciliation.json
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Enforce required staff markers
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '.status == "PASS"' acceptance-evidence/staff-reconciliation.json >/dev/null
+          for marker in STAFF_SNAPSHOT_CAPTURE STAFF_GSHEET_ACTIVE_SET_EQUAL STAFF_STALE_NEON_INACTIVE STAFF_STALE_FIREBASE_DISABLED STAFF_MANUAL_PRESERVED STAFF_MASS_CHANGE_GUARD STAFF_RECONCILIATION_READBACK; do
+            jq -e --arg m "$marker" '.markers[$m] == "PASS"' acceptance-evidence/staff-reconciliation.json >/dev/null
+            echo "$marker=PASS"
+          done
