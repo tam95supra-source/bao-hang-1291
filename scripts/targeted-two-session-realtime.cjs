@@ -1,448 +1,70 @@
 'use strict';
+const crypto=require('crypto');
+const {initializeApp,cert,deleteApp}=require('firebase-admin/app');
+const {getAuth}=require('firebase-admin/auth');
+const {getFirestore}=require('firebase-admin/firestore');
+const {chromium}=require('playwright-core');
 
-const crypto = require('crypto');
-const { initializeApp, cert, deleteApp } = require('firebase-admin/app');
-const { getAuth } = require('firebase-admin/auth');
-const { getFirestore } = require('firebase-admin/firestore');
-const { chromium } = require('playwright-core');
-
-const SITE = 'https://bao-hang-1291.web.app/';
-const APIKEY = 'AIzaSyB-n368fntzxsuuLlvte9NXhcuX0DDbTXM';
-const NEON = process.env.NEON_DATA_API || '';
-const CHROME = process.env.CHROME_BIN || '';
-const RUN_MARKER = `e2e-two-session-${process.env.GITHUB_RUN_ID || 'local'}-${crypto.randomUUID()}`;
-const SKU_AVAILABLE = '99001291';
-const SKU_SKIP = '99001292';
-const USERS = [
-  { uid: '12910000-0000-4000-8000-00000000e2e1', code: 'e2eweb1291', role: 'PICKER', label: 'PICKER_1' },
-  { uid: '12910000-0000-4000-8000-00000000e2e2', code: 'e2epicker2', role: 'PICKER', label: 'PICKER_2' },
-  { uid: '12910000-0000-4000-8000-00000000e2e3', code: 'e2einvent', role: 'INVENT', label: 'INVENT' },
-  { uid: '12910000-0000-4000-8000-00000000e2e4', code: 'e2eadmininvent', role: 'ADMIN_INVENT', label: 'ADMIN_INVENT' },
+const SITE='https://bao-hang-1291.web.app/';
+const APIKEY='AIzaSyB-n368fntzxsuuLlvte9NXhcuX0DDbTXM';
+const SESSION_KEY='bao-hang-1291-web-session';
+const NEON=process.env.NEON_DATA_API||'';
+const CHROME=process.env.CHROME_BIN||'';
+const RUN_MARKER=`e2e-two-session-${process.env.GITHUB_RUN_ID||'local'}-${crypto.randomUUID()}`;
+const SKU_AVAILABLE='99001291',SKU_SKIP='99001292';
+const USERS=[
+ {uid:'12910000-0000-4000-8000-00000000e2e1',code:'e2eweb1291',role:'PICKER',label:'PICKER_1'},
+ {uid:'12910000-0000-4000-8000-00000000e2e2',code:'e2epicker2',role:'PICKER',label:'PICKER_2'},
+ {uid:'12910000-0000-4000-8000-00000000e2e3',code:'e2einvent',role:'INVENT',label:'INVENT'},
+ {uid:'12910000-0000-4000-8000-00000000e2e4',code:'e2eadmininvent',role:'ADMIN_INVENT',label:'ADMIN_INVENT'},
 ];
-const email = (code) => `${code.toLowerCase()}@bao-hang-1291.local`;
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const safe = (value) => String(value || '')
-  .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [REDACTED]')
-  .replace(/[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/g, '[JWT_REDACTED]')
-  .replace(/refresh_token=[^&\s]+/gi, 'refresh_token=[REDACTED]')
-  .slice(0, 1200);
+const email=c=>`${c.toLowerCase()}@bao-hang-1291.local`;
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const safe=v=>String(v||'').replace(/Bearer\s+[A-Za-z0-9._-]+/gi,'Bearer [REDACTED]').replace(/[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/g,'[JWT_REDACTED]').replace(/refresh_token=[^&\s]+/gi,'refresh_token=[REDACTED]').slice(0,1200);
 
-async function stage(name, timeoutMs, fn) {
-  console.log(`TS_STAGE=${name}:BEGIN timeout_ms=${timeoutMs}`);
-  let timer;
-  try {
-    const result = await Promise.race([
-      fn(),
-      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`TIMEOUT_${name}`)), timeoutMs); }),
-    ]);
-    console.log(`TS_STAGE=${name}:PASS`);
-    return result;
-  } catch (error) {
-    console.error(`TS_STAGE=${name}:FAIL ${safe(error?.message || error)}`);
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
-}
+async function stage(name,ms,fn){console.log(`TS_STAGE=${name}:BEGIN timeout_ms=${ms}`);let timer;try{const value=await Promise.race([fn(),new Promise((_,rej)=>{timer=setTimeout(()=>rej(new Error(`TIMEOUT_${name}`)),ms)})]);console.log(`TS_STAGE=${name}:PASS`);return value}catch(e){console.error(`TS_STAGE=${name}:FAIL ${safe(e?.message||e)}`);throw e}finally{clearTimeout(timer)}}
+async function ft(url,init={},ms=15000){return fetch(url,{...init,signal:AbortSignal.timeout(ms)})}
+async function passwordToken(user,pw){const r=await ft(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${APIKEY}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:email(user.code),password:pw,returnSecureToken:true})});const p=await r.json();if(!r.ok||!p.idToken||!p.refreshToken||p.localId!==user.uid)throw new Error(`PASSWORD_TOKEN_${user.code}_${r.status}:${safe(p?.error?.message||p.localId)}`);return p}
+async function rpc(token,name,body={}){const r=await ft(`${NEON}/rpc/${name}`,{method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${token}`},body:JSON.stringify(body)});const txt=await r.text();let p={};try{p=txt?JSON.parse(txt):{}}catch{p={raw:safe(txt)}}if(!r.ok)throw new Error(`NEON_${name}_${r.status}:${safe(txt)}`);return p}
+async function authSession(user,pw){const token=await passwordToken(user,pw);const payload=await rpc(token.idToken,'api_session_profile_rpc',{p_test_role:null});const profile=payload?.profile;if(profile?.id!==user.uid||profile?.employee_code!==user.code||profile?.role!==user.role||profile?.active!==true)throw new Error(`PROFILE_MISMATCH_${user.code}:${safe(JSON.stringify(profile))}`);return {access_token:token.idToken,refresh_token:token.refreshToken,expires_at:Math.floor(Date.now()/1000)+Number(token.expiresIn||3600),profile}}
 
-async function fetchTimed(url, init = {}, timeoutMs = 15000) {
-  return fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
-}
+async function deleteExactFirebaseUsers(auth){for(const u of USERS){try{const x=await auth.getUser(u.uid);if(x.email!==email(u.code)||!String(x.displayName||'').startsWith('__E2E_'))throw new Error(`FIREBASE_DELETE_MARKER_MISMATCH uid=${u.uid}`);await auth.deleteUser(u.uid)}catch(e){if(e?.code!=='auth/user-not-found')throw e}}}
+async function createExactFirebaseUsers(auth,pw){for(const u of USERS)await auth.createUser({uid:u.uid,email:email(u.code),password:pw,emailVerified:true,disabled:false,displayName:`__E2E_TWO_SESSION_${u.label}__`})}
+async function firebaseReadback(auth){let n=0;for(const u of USERS){try{if(await auth.getUser(u.uid))n++}catch(e){if(e?.code!=='auth/user-not-found')throw e}}if(n)throw new Error(`TEST_FIREBASE_USERS_REMAINING=${n}`);console.log('TEST_FIREBASE_USERS_REMAINING=0')}
 
-async function passwordToken(code, password) {
-  const response = await fetchTimed(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${APIKEY}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email: email(code), password, returnSecureToken: true }),
-  });
-  const payload = await response.json();
-  if (!response.ok || !payload.idToken || !payload.localId) throw new Error(`PASSWORD_LOGIN_${code}_HTTP_${response.status}:${safe(payload?.error?.message)}`);
-  return payload;
-}
+function guard(page,tag){const s={forbidden:[],fatal:[],dialogs:[]};page.on('pageerror',e=>s.fatal.push(`pageerror:${safe(e?.message||e)}`));page.on('response',r=>{if(r.url().includes('.neon.tech/')&&[401,403].includes(r.status()))s.forbidden.push(`${r.status()} ${r.url().replace(/\?.*/,'')}`)});page.on('console',m=>{if(m.type()==='error'&&/AUTH_REQUIRED|not owner|not_owner/i.test(m.text()))s.fatal.push(`console:${safe(m.text())}`)});page.on('dialog',async d=>{const msg=d.message();s.dialogs.push(msg);if(/AUTH_REQUIRED|not owner|not_owner|không có quyền|forbidden/i.test(msg))s.fatal.push(`dialog:${safe(msg)}`);await d.accept().catch(()=>{})});page.setDefaultTimeout(15000);page.setDefaultNavigationTimeout(20000);page.__ts={tag,s}}
+function clean(page){const {tag,s}=page.__ts;if(s.forbidden.length)throw new Error(`FORBIDDEN_${tag}:${safe(s.forbidden.join('|'))}`);if(s.fatal.length)throw new Error(`PAGE_FATAL_${tag}:${safe(s.fatal.join('|'))}`)}
+async function make(browser,tag,viewport){const context=await browser.newContext({viewport});const page=await context.newPage();guard(page,tag);return{context,page}}
+async function waitApp(page,role){try{await page.waitForFunction(r=>{if(!document.querySelector('.app-shell'))return false;try{return JSON.parse(sessionStorage.getItem('bao-hang-1291-web-session')||'null')?.profile?.role===r}catch{return false}},role,{timeout:18000})}catch(e){const d=await page.evaluate(()=>({shell:!!document.querySelector('.app-shell'),login:!!document.querySelector('#loginForm'),loginMsg:document.querySelector('#loginMessage')?.textContent||'',body:(document.body?.innerText||'').slice(0,600)})).catch(()=>({}));throw new Error(`APP_READY_${role}:${safe(JSON.stringify(d))}`)}}
+async function browserSession(page,user,session,marker){await page.goto(SITE,{waitUntil:'domcontentloaded'});await page.evaluate(({k,s})=>sessionStorage.setItem(k,JSON.stringify(s)),{k:SESSION_KEY,s:session});await page.reload({waitUntil:'domcontentloaded'});await waitApp(page,user.role);const x=await page.evaluate(()=>{try{const s=JSON.parse(sessionStorage.getItem('bao-hang-1291-web-session')||'null');return{id:s?.profile?.id||'',role:s?.profile?.role||''}}catch{return{id:'',role:''}}});if(x.id!==user.uid||x.role!==user.role)throw new Error(`${marker}_SESSION_MISMATCH`);clean(page);console.log(`${marker}=PASS uid=${x.id} role=${x.role}`)}
 
-async function neonRpc(token, name, body = {}) {
-  const response = await fetchTimed(`${NEON}/rpc/${name}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-    body: JSON.stringify(body),
-  });
-  const text = await response.text();
-  let payload = {};
-  try { payload = text ? JSON.parse(text) : {}; } catch { payload = { raw: safe(text) }; }
-  if (!response.ok) throw new Error(`NEON_${name}_HTTP_${response.status}:${safe(text)}`);
-  return payload;
-}
+async function report(page,sku){await page.locator('[data-tab="picker"]').click().catch(()=>{});const i=page.locator('#skuSearch');await i.fill(sku);await page.waitForFunction(s=>[...document.querySelectorAll('#skuResults [data-result]')].some(n=>(n.textContent||'').includes(s)),sku,{timeout:15000});await page.locator('#skuResults [data-result]').filter({hasText:sku}).first().click();await page.locator('#reportShortage').click();await page.waitForFunction(s=>(document.querySelector('#pickerMsg')?.textContent||'').includes(s),sku,{timeout:15000});await page.waitForFunction(s=>[...document.querySelectorAll('#myIssues [data-picker-issue]')].some(n=>(n.textContent||'').includes(s)),sku,{timeout:15000})}
+async function pickerIssue(page,sku){return page.evaluate(s=>{const n=[...document.querySelectorAll('#myIssues [data-picker-issue]')].find(x=>(x.textContent||'').includes(s));return n?{id:n.dataset.pickerIssue||'',version:Number(n.dataset.pickerVersion||0)}:null},sku)}
+async function refreshInvent(page){await page.locator('[data-tab="events"]').click().catch(()=>{});await page.waitForSelector('#fastEvents');const b=page.locator('#fastRefresh');if(await b.count())await b.click()}
+async function selectInvent(page,sku){await refreshInvent(page);await page.waitForFunction(s=>[...document.querySelectorAll('#fastList [data-fast-select]')].some(n=>(n.textContent||'').includes(s)),sku,{timeout:15000});const row=page.locator('#fastList [data-fast-select]').filter({hasText:sku}).first();const id=await row.getAttribute('data-fast-select');await row.click();return id}
+async function metrics(page){return page.evaluate(()=>({...window.__BH_PICKER_REALTIME_METRICS__||{}}))}
+async function metric(page,key,prev){await page.waitForFunction(({key,prev})=>Number(window.__BH_PICKER_REALTIME_METRICS__?.[key]||0)>prev,{key,prev},{timeout:15000})}
+async function action(page,name){const b=page.locator(`#fastDetail [data-fast-action="${name}"]`);await b.waitFor({state:'visible',timeout:12000});await b.click();await sleep(250);clean(page)}
+async function waitAlert(page,sku){await page.waitForFunction(s=>(document.querySelector('#pendingAlert')?.textContent||'').includes(s),sku,{timeout:15000});if(await page.locator('#pendingAlert').count()!==1)throw new Error(`ALERT_CONTAINER_DUPLICATE_${sku}`)}
+async function dismiss(page){const b=page.locator('#pendingAlert button').first();if(await b.count())await b.click()}
+async function uiSnap(page){await page.locator('#skuSearch').fill('123');await page.locator('#skuSearch').focus();return page.evaluate(()=>{const shell=document.querySelector('.app-shell');if(shell&&!shell.__tsid)shell.__tsid=`s-${Math.random()}`;const cards=[...document.querySelectorAll('#myIssues [data-picker-issue]')];cards.forEach(n=>{if(!n.__tsid)n.__tsid=`c-${Math.random()}`});return{shell:shell?.__tsid||'',hash:location.hash,scrollY,nav:performance.getEntriesByType('navigation').length,input:document.querySelector('#skuSearch')?.value||'',focus:document.activeElement?.id||'',cards:cards.map(n=>({id:n.dataset.pickerIssue||'',dom:n.__tsid||''}))}})}
+async function uiSame(page,before,other=''){const a=await page.evaluate(()=>({shell:document.querySelector('.app-shell')?.__tsid||'',hash:location.hash,scrollY,nav:performance.getEntriesByType('navigation').length,input:document.querySelector('#skuSearch')?.value||'',focus:document.activeElement?.id||'',cards:[...document.querySelectorAll('#myIssues [data-picker-issue]')].map(n=>({id:n.dataset.pickerIssue||'',dom:n.__tsid||''}))}));if(a.shell!==before.shell)throw new Error('FULL_SHELL_RERENDER');if(a.hash!==before.hash||a.nav!==before.nav)throw new Error('NAV_OR_HASH_CHANGED');if(Math.abs(a.scrollY-before.scrollY)>2)throw new Error('SCROLL_CHANGED');if(a.input!==before.input||a.focus!==before.focus)throw new Error('INPUT_FOCUS_CHANGED');if(other){const b=before.cards.find(x=>x.id===other)?.dom,c=a.cards.find(x=>x.id===other)?.dom;if(b&&b!==c)throw new Error('UNRELATED_CARD_RERENDER')}}
+async function pickerIsolation(token,ids){const p=await rpc(token,'api_picker_my_issues_rpc',{p_test_role:null});const t=JSON.stringify(p);for(const id of ids)if(t.includes(id))throw new Error(`PICKER_SCOPE_LEAK_${id}`);console.log('PICKER_SCOPE_ISOLATION=PASS')}
 
-async function deleteExactFirebaseUsers(auth) {
-  for (const user of USERS) {
-    try {
-      const existing = await auth.getUser(user.uid);
-      const expectedEmail = email(user.code);
-      const markerOk = existing.email === expectedEmail && String(existing.displayName || '').startsWith('__E2E_');
-      if (!markerOk) throw new Error(`FIREBASE_DELETE_MARKER_MISMATCH uid=${user.uid} email=${safe(existing.email)} display=${safe(existing.displayName)}`);
-      await auth.deleteUser(user.uid);
-    } catch (error) {
-      if (error?.code !== 'auth/user-not-found') throw error;
-    }
-  }
-}
-
-async function createExactFirebaseUsers(auth, password) {
-  for (const user of USERS) {
-    await auth.createUser({
-      uid: user.uid,
-      email: email(user.code),
-      password,
-      emailVerified: true,
-      disabled: false,
-      displayName: `__E2E_TWO_SESSION_${user.label}__`,
-    });
-  }
-}
-
-async function assertFirebaseUsersGone(auth) {
-  let remaining = 0;
-  for (const user of USERS) {
-    try {
-      const existing = await auth.getUser(user.uid);
-      if (existing) remaining += 1;
-    } catch (error) {
-      if (error?.code !== 'auth/user-not-found') throw error;
-    }
-  }
-  if (remaining !== 0) throw new Error(`TEST_FIREBASE_USERS_REMAINING=${remaining}`);
-  console.log('TEST_FIREBASE_USERS_REMAINING=0');
-}
-
-function attachGuards(page, tag) {
-  const state = { forbidden: [], fatal: [], dialogs: [] };
-  page.on('pageerror', (error) => state.fatal.push(`pageerror:${safe(error?.message || error)}`));
-  page.on('response', (response) => {
-    if (response.url().includes('.neon.tech/') && [401, 403].includes(response.status())) {
-      state.forbidden.push(`${response.status()} ${response.url().replace(/\?.*/, '')}`);
-    }
-  });
-  page.on('console', (message) => {
-    if (message.type() !== 'error') return;
-    const text = message.text();
-    if (/AUTH_REQUIRED|not owner|not_owner/i.test(text)) state.fatal.push(`console:${safe(text)}`);
-  });
-  page.on('dialog', async (dialog) => {
-    const message = dialog.message();
-    state.dialogs.push(message);
-    if (/AUTH_REQUIRED|not owner|not_owner|không có quyền|forbidden/i.test(message)) state.fatal.push(`dialog:${safe(message)}`);
-    await dialog.accept().catch(() => {});
-  });
-  page.setDefaultTimeout(15000);
-  page.setDefaultNavigationTimeout(20000);
-  page.__ts = { tag, state };
-}
-
-function assertPageClean(page) {
-  const { tag, state } = page.__ts;
-  if (state.forbidden.length) throw new Error(`FORBIDDEN_${tag}:${safe(state.forbidden.join('|'))}`);
-  if (state.fatal.length) throw new Error(`PAGE_FATAL_${tag}:${safe(state.fatal.join('|'))}`);
-}
-
-async function makeContext(browser, tag, viewport) {
-  const context = await browser.newContext({ viewport });
-  const page = await context.newPage();
-  attachGuards(page, tag);
-  return { context, page };
-}
-
-async function waitApp(page, role) {
-  await page.waitForFunction((expectedRole) => {
-    const shell = document.querySelector('.app-shell');
-    if (!shell) return false;
-    try {
-      return JSON.parse(sessionStorage.getItem('bao-hang-1291-web-session') || 'null')?.profile?.role === expectedRole;
-    } catch { return false; }
-  }, role, { timeout: 20000 });
-}
-
-async function loginBrowser(page, user, password, markerName) {
-  await page.goto(SITE, { waitUntil: 'domcontentloaded' });
-  await page.locator('#employeeCode').fill(user.code);
-  await page.locator('#password').fill(password);
-  await page.locator('#loginForm button').first().click();
-  await waitApp(page, user.role);
-  const uid = await page.evaluate(() => {
-    try { return JSON.parse(sessionStorage.getItem('bao-hang-1291-web-session') || 'null')?.profile?.id || ''; } catch { return ''; }
-  });
-  if (uid !== user.uid) throw new Error(`${markerName}_UID_MISMATCH got=${safe(uid)}`);
-  assertPageClean(page);
-  console.log(`${markerName}=PASS uid=${uid} role=${user.role}`);
-}
-
-async function reportSku(page, sku) {
-  await page.locator('[data-tab="picker"]').click().catch(() => {});
-  const search = page.locator('#skuSearch');
-  await search.fill(sku);
-  await page.waitForFunction((value) => [...document.querySelectorAll('#skuResults [data-result]')].some((n) => (n.textContent || '').includes(value)), sku, { timeout: 15000 });
-  await page.locator('#skuResults [data-result]').filter({ hasText: sku }).first().click();
-  await page.locator('#reportShortage').click();
-  await page.waitForFunction((value) => (document.querySelector('#pickerMsg')?.textContent || '').includes(value), sku, { timeout: 15000 });
-  await page.waitForFunction((value) => [...document.querySelectorAll('#myIssues [data-picker-issue]')].some((n) => (n.textContent || '').includes(value)), sku, { timeout: 15000 });
-}
-
-async function refreshInvent(page) {
-  await page.locator('[data-tab="events"]').click().catch(() => {});
-  await page.waitForSelector('#fastEvents');
-  const refresh = page.locator('#fastRefresh');
-  if (await refresh.count()) await refresh.click();
-}
-
-async function selectInventIssue(page, sku) {
-  await refreshInvent(page);
-  await page.waitForFunction((value) => [...document.querySelectorAll('#fastList [data-fast-select]')].some((n) => (n.textContent || '').includes(value)), sku, { timeout: 15000 });
-  const row = page.locator('#fastList [data-fast-select]').filter({ hasText: sku }).first();
-  await row.click();
-  return row.getAttribute('data-fast-select');
-}
-
-async function pickerIssue(page, sku) {
-  return page.evaluate((value) => {
-    const node = [...document.querySelectorAll('#myIssues [data-picker-issue]')].find((n) => (n.textContent || '').includes(value));
-    return node ? { id: node.dataset.pickerIssue || '', version: Number(node.dataset.pickerVersion || 0) } : null;
-  }, sku);
-}
-
-async function metrics(page) {
-  return page.evaluate(() => ({ ...(window.__BH_PICKER_REALTIME_METRICS__ || {}) }));
-}
-
-async function waitMetric(page, key, previous) {
-  await page.waitForFunction(({ key, previous }) => Number(window.__BH_PICKER_REALTIME_METRICS__?.[key] || 0) > previous, { key, previous }, { timeout: 15000 });
-}
-
-async function clickInventAction(page, action) {
-  const button = page.locator(`#fastDetail [data-fast-action="${action}"]`);
-  await button.waitFor({ state: 'visible', timeout: 12000 });
-  await button.click();
-  await sleep(300);
-  assertPageClean(page);
-}
-
-async function waitAlert(page, sku) {
-  await page.waitForFunction((value) => (document.querySelector('#pendingAlert')?.textContent || '').includes(value), sku, { timeout: 15000 });
-  const count = await page.locator('#pendingAlert').count();
-  if (count !== 1) throw new Error(`ALERT_CONTAINER_COUNT_${sku}_${count}`);
-}
-
-async function dismissAlert(page) {
-  const button = page.locator('#pendingAlert button').first();
-  if (await button.count()) await button.click();
-}
-
-async function prepareUiPreservation(page) {
-  await page.locator('#skuSearch').fill('123');
-  await page.locator('#skuSearch').focus();
-  return page.evaluate(() => {
-    const shell = document.querySelector('.app-shell');
-    if (shell && !shell.__twoSessionIdentity) shell.__twoSessionIdentity = `shell-${Math.random()}`;
-    const cards = [...document.querySelectorAll('#myIssues [data-picker-issue]')];
-    for (const card of cards) if (!card.__twoSessionIdentity) card.__twoSessionIdentity = `card-${Math.random()}`;
-    return {
-      shell: shell?.__twoSessionIdentity || '',
-      hash: location.hash,
-      scrollY: window.scrollY,
-      navCount: performance.getEntriesByType('navigation').length,
-      input: document.querySelector('#skuSearch')?.value || '',
-      focus: document.activeElement?.id || '',
-      cards: cards.map((n) => ({ id: n.dataset.pickerIssue || '', dom: n.__twoSessionIdentity || '' })),
-    };
-  });
-}
-
-async function assertUiPreserved(page, before, unrelatedIssueId) {
-  const after = await page.evaluate(() => ({
-    shell: document.querySelector('.app-shell')?.__twoSessionIdentity || '',
-    hash: location.hash,
-    scrollY: window.scrollY,
-    navCount: performance.getEntriesByType('navigation').length,
-    input: document.querySelector('#skuSearch')?.value || '',
-    focus: document.activeElement?.id || '',
-    cards: [...document.querySelectorAll('#myIssues [data-picker-issue]')].map((n) => ({ id: n.dataset.pickerIssue || '', dom: n.__twoSessionIdentity || '' })),
-  }));
-  if (after.shell !== before.shell) throw new Error('FULL_SHELL_RERENDERED');
-  if (after.hash !== before.hash || after.navCount !== before.navCount) throw new Error('HASH_OR_NAV_CHANGED');
-  if (Math.abs(after.scrollY - before.scrollY) > 2) throw new Error('SCROLL_CHANGED');
-  if (after.input !== before.input || after.focus !== before.focus) throw new Error('INPUT_OR_FOCUS_CHANGED');
-  const beforeOther = before.cards.find((x) => x.id === unrelatedIssueId)?.dom;
-  const afterOther = after.cards.find((x) => x.id === unrelatedIssueId)?.dom;
-  if (beforeOther && beforeOther !== afterOther) throw new Error('UNRELATED_CARD_RERENDERED');
-}
-
-async function assertPickerIsolation(token, forbiddenIssueIds) {
-  const payload = await neonRpc(token, 'api_picker_my_issues_rpc', { p_test_role: null });
-  const text = JSON.stringify(payload);
-  for (const id of forbiddenIssueIds) if (id && text.includes(id)) throw new Error(`PICKER_SCOPE_LEAK issue=${id}`);
-  console.log('PICKER_SCOPE_ISOLATION=PASS');
-}
-
-async function main() {
-  if (!NEON || !CHROME) throw new Error('TARGET_ENV_MISSING');
-  const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
-  if (serviceAccount.project_id !== 'bao-hang-1291') throw new Error('FIREBASE_PROJECT_SCOPE_MISMATCH');
-
-  const app = initializeApp({ credential: cert(serviceAccount) }, `two-session-${Date.now()}`);
-  const auth = getAuth(app);
-  const db = getFirestore(app);
-  const signalRef = db.doc('realtime/issues');
-  const signalBefore = await signalRef.get();
-  const signalSnapshot = { exists: signalBefore.exists, data: signalBefore.exists ? signalBefore.data() : null };
-  const password = `Ts!${crypto.randomBytes(18).toString('base64url')}Aa1`;
-  let browser;
-  let A;
-  let B;
-  let firebaseCleanupOk = false;
-  let signalRestoreOk = false;
-
-  try {
-    await stage('FIREBASE_FIXTURE_RESET', 20000, async () => {
-      await deleteExactFirebaseUsers(auth);
-      await createExactFirebaseUsers(auth, password);
-    });
-
-    const tokenPicker2 = await stage('PICKER2_TOKEN', 15000, async () => {
-      const result = await passwordToken('e2epicker2', password);
-      if (result.localId !== USERS[1].uid) throw new Error('PICKER2_UID_MISMATCH');
-      return result.idToken;
-    });
-
-    browser = await stage('BROWSER_LAUNCH', 22000, () => chromium.launch({
-      executablePath: CHROME,
-      headless: true,
-      timeout: 20000,
-      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
-    }));
-    A = await stage('SESSION_A_CONTEXT', 10000, () => makeContext(browser, 'session-A-invent', { width: 1024, height: 800 }));
-    B = await stage('SESSION_B_CONTEXT', 10000, () => makeContext(browser, 'session-B-picker', { width: 420, height: 860 }));
-
-    await stage('LOGIN_A', 25000, () => loginBrowser(A.page, USERS[2], password, 'TWO_SESSION_LOGIN_A'));
-    await stage('LOGIN_B', 25000, () => loginBrowser(B.page, USERS[0], password, 'TWO_SESSION_LOGIN_B'));
-
-    await stage('REPORT_FIXTURES', 30000, async () => {
-      await reportSku(B.page, SKU_AVAILABLE);
-      await reportSku(B.page, SKU_SKIP);
-    });
-
-    const availablePicker = await pickerIssue(B.page, SKU_AVAILABLE);
-    const skipPicker = await pickerIssue(B.page, SKU_SKIP);
-    if (!availablePicker?.id || !skipPicker?.id || availablePicker.id === skipPicker.id) throw new Error('PICKER_FIXTURE_ENTITY_MISSING');
-
-    const availableInventId = await stage('ENTITY_BIND', 20000, () => selectInventIssue(A.page, SKU_AVAILABLE));
-    if (availableInventId !== availablePicker.id) throw new Error(`ENTITY_MISMATCH picker=${availablePicker.id} invent=${availableInventId}`);
-    console.log(`REALTIME_ENTITY_MATCH=PASS entity_id=${availablePicker.id}`);
-
-    const uiBefore = await prepareUiPreservation(B.page);
-    const metricsBeforeClaim = await metrics(B.page);
-    await stage('AVAILABLE_CLAIM', 20000, async () => {
-      await clickInventAction(A.page, 'claim');
-      await waitMetric(B.page, 'patchedCards', Number(metricsBeforeClaim.patchedCards || 0));
-    });
-    await assertUiPreserved(B.page, uiBefore, skipPicker.id);
-
-    const metricsBeforeAvailable = await metrics(B.page);
-    await stage('AVAILABLE_ACTION', 20000, async () => {
-      await clickInventAction(A.page, 'available');
-      await waitMetric(B.page, 'patchedCards', Number(metricsBeforeAvailable.patchedCards || 0));
-      await waitAlert(B.page, SKU_AVAILABLE);
-    });
-    await assertUiPreserved(B.page, uiBefore, skipPicker.id);
-    console.log('REALTIME_WITHOUT_FULL_RELOAD=PASS');
-    console.log('CARD_ONLY_PATCH=PASS');
-    console.log('INPUT_FOCUS_SCROLL_HASH_PRESERVED=PASS');
-    await dismissAlert(B.page);
-
-    const currentAvailable = await pickerIssue(B.page, SKU_AVAILABLE);
-    if (!currentAvailable?.id) throw new Error('AVAILABLE_ENTITY_DISAPPEARED');
-    const acceptedVersion = 1000000 + Math.max(1, currentAvailable.version || 1);
-    const eventId = `${RUN_MARKER}-duplicate`;
-    const beforeSynthetic = await metrics(B.page);
-    await stage('SYNTHETIC_ACCEPT', 18000, async () => {
-      await signalRef.set({ event_id: eventId, event_type: 'issue_changed', topic: 'issues', entity_id: currentAvailable.id, entity_version: acceptedVersion, source: RUN_MARKER, client_at: new Date() });
-      await waitMetric(B.page, 'events', Number(beforeSynthetic.events || 0));
-    });
-    const afterAccept = await metrics(B.page);
-    await stage('DUPLICATE_EVENT', 18000, async () => {
-      await signalRef.set({ event_id: eventId, event_type: 'issue_changed', topic: 'issues', entity_id: currentAvailable.id, entity_version: acceptedVersion, source: RUN_MARKER, client_at: new Date() });
-      await waitMetric(B.page, 'duplicateIgnored', Number(beforeSynthetic.duplicateIgnored || 0));
-    });
-    const availableCount = await B.page.locator('#myIssues [data-picker-issue]').filter({ hasText: SKU_AVAILABLE }).count();
-    if (availableCount !== 1) throw new Error(`DUPLICATE_CARD_COUNT=${availableCount}`);
-    const afterDuplicate = await metrics(B.page);
-    if (Number(afterDuplicate.alerts || 0) - Number(afterAccept.alerts || 0) > 0) throw new Error('DUPLICATE_NOTIFICATION_CREATED');
-    console.log('DUPLICATE_EVENT_IGNORED=PASS duplicate_card=1 duplicate_notification=0');
-
-    const versionBeforeStale = Number((await pickerIssue(B.page, SKU_AVAILABLE))?.version || 0);
-    await stage('STALE_EVENT', 18000, async () => {
-      await signalRef.set({ event_id: `${RUN_MARKER}-stale`, event_type: 'issue_changed', topic: 'issues', entity_id: currentAvailable.id, entity_version: acceptedVersion - 1, source: RUN_MARKER, client_at: new Date() });
-      await waitMetric(B.page, 'staleIgnored', Number(beforeSynthetic.staleIgnored || 0));
-    });
-    const versionAfterStale = Number((await pickerIssue(B.page, SKU_AVAILABLE))?.version || 0);
-    if (versionAfterStale !== versionBeforeStale) throw new Error(`STALE_OVERWROTE_VERSION before=${versionBeforeStale} after=${versionAfterStale}`);
-    console.log('STALE_EVENT_IGNORED=PASS');
-
-    const skipInventId = await stage('SKIP_ENTITY_SELECT', 20000, () => selectInventIssue(A.page, SKU_SKIP));
-    if (skipInventId !== skipPicker.id) throw new Error(`SKIP_ENTITY_MISMATCH picker=${skipPicker.id} invent=${skipInventId}`);
-    const metricsBeforeSkipClaim = await metrics(B.page);
-    await stage('SKIP_CLAIM', 20000, async () => {
-      await clickInventAction(A.page, 'claim');
-      await waitMetric(B.page, 'patchedCards', Number(metricsBeforeSkipClaim.patchedCards || 0));
-    });
-    const metricsBeforeSkip = await metrics(B.page);
-    await stage('SKIP_ACTION', 20000, async () => {
-      await clickInventAction(A.page, 'skip');
-      await waitMetric(B.page, 'patchedCards', Number(metricsBeforeSkip.patchedCards || 0));
-      await waitAlert(B.page, SKU_SKIP);
-    });
-    await assertUiPreserved(B.page, uiBefore, '');
-    await dismissAlert(B.page);
-    assertPageClean(A.page);
-    assertPageClean(B.page);
-    console.log('AVAILABLE_SKIP_AUTHZ=PASS actor_role=INVENT auth_required=false not_owner=false');
-
-    await stage('PICKER_SCOPE', 15000, () => assertPickerIsolation(tokenPicker2, [availablePicker.id, skipPicker.id]));
-    const finalMetrics = await metrics(B.page);
-    if (Number(finalMetrics.fullScreenRenders || 0) !== 0) throw new Error(`FULL_SCREEN_RENDER_COUNT=${finalMetrics.fullScreenRenders}`);
-    if (Number(finalMetrics.duplicateIgnored || 0) < 1 || Number(finalMetrics.staleIgnored || 0) < 1) throw new Error(`REALTIME_METRICS_INCOMPLETE:${safe(JSON.stringify(finalMetrics))}`);
-    console.log(`TWO_SESSION_REALTIME=PASS marker=${RUN_MARKER} events=${Number(finalMetrics.events || 0)} patchedCards=${Number(finalMetrics.patchedCards || 0)} duplicateIgnored=${Number(finalMetrics.duplicateIgnored || 0)} staleIgnored=${Number(finalMetrics.staleIgnored || 0)} fullScreenRenders=${Number(finalMetrics.fullScreenRenders || 0)}`);
-  } finally {
-    if (A?.context) await A.context.close().catch(() => {});
-    if (B?.context) await B.context.close().catch(() => {});
-    if (browser) await browser.close().catch(() => {});
-
-    try {
-      await db.runTransaction(async (transaction) => {
-        const current = await transaction.get(signalRef);
-        const data = current.exists ? current.data() : null;
-        if (data?.source === RUN_MARKER || String(data?.event_id || '').startsWith(RUN_MARKER)) {
-          if (signalSnapshot.exists) transaction.set(signalRef, signalSnapshot.data);
-          else transaction.delete(signalRef);
-        }
-      });
-      signalRestoreOk = true;
-      console.log('FIRESTORE_SIGNAL_RESTORE=PASS');
-    } catch (error) {
-      console.error(`FIRESTORE_SIGNAL_RESTORE=FAIL ${safe(error?.message || error)}`);
-    }
-
-    try {
-      await deleteExactFirebaseUsers(auth);
-      await assertFirebaseUsersGone(auth);
-      firebaseCleanupOk = true;
-    } catch (error) {
-      console.error(`FIREBASE_FIXTURE_CLEANUP=FAIL ${safe(error?.message || error)}`);
-    }
-
-    await deleteApp(app).catch(() => {});
-    if (!signalRestoreOk || !firebaseCleanupOk) process.exitCode = 2;
-  }
-}
-
-main().catch((error) => {
-  console.error(`TARGETED_TWO_SESSION_FAILURE ${safe(error?.stack || error)}`);
-  process.exitCode = process.exitCode || 1;
-});
+async function main(){if(!NEON||!CHROME)throw new Error('TARGET_ENV_MISSING');const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');if(sa.project_id!=='bao-hang-1291')throw new Error('FIREBASE_SCOPE');const app=initializeApp({credential:cert(sa)},`two-${Date.now()}`),auth=getAuth(app),db=getFirestore(app),signal=db.doc('realtime/issues');const old=await signal.get(),snapshot={exists:old.exists,data:old.exists?old.data():null};const pw=`Ts!${crypto.randomBytes(18).toString('base64url')}Aa1`;let browser,A,B,signalOk=false,fbOk=false;try{
+ await stage('FIREBASE_FIXTURE_RESET',20000,async()=>{await deleteExactFirebaseUsers(auth);await createExactFirebaseUsers(auth,pw)});
+ const sessions=await stage('PASSWORD_AUTH_PROFILES',25000,async()=>({A:await authSession(USERS[2],pw),B:await authSession(USERS[0],pw),P2:await authSession(USERS[1],pw)}));
+ browser=await stage('BROWSER_LAUNCH',22000,()=>chromium.launch({executablePath:CHROME,headless:true,timeout:20000,args:['--no-sandbox','--disable-dev-shm-usage','--disable-gpu']}));
+ A=await stage('SESSION_A_CONTEXT',10000,()=>make(browser,'A-INVENT',{width:1024,height:800}));B=await stage('SESSION_B_CONTEXT',10000,()=>make(browser,'B-PICKER',{width:420,height:860}));
+ await stage('LOGIN_A',25000,()=>browserSession(A.page,USERS[2],sessions.A,'TWO_SESSION_LOGIN_A'));await stage('LOGIN_B',25000,()=>browserSession(B.page,USERS[0],sessions.B,'TWO_SESSION_LOGIN_B'));
+ await stage('REPORT_FIXTURES',30000,async()=>{await report(B.page,SKU_AVAILABLE);await report(B.page,SKU_SKIP)});
+ const ok=await pickerIssue(B.page,SKU_AVAILABLE),sk=await pickerIssue(B.page,SKU_SKIP);if(!ok?.id||!sk?.id||ok.id===sk.id)throw new Error('FIXTURE_ENTITY_MISSING');
+ const aid=await stage('ENTITY_BIND',20000,()=>selectInvent(A.page,SKU_AVAILABLE));if(aid!==ok.id)throw new Error(`ENTITY_MISMATCH_${aid}_${ok.id}`);console.log(`REALTIME_ENTITY_MATCH=PASS entity_id=${ok.id}`);
+ const ui=await uiSnap(B.page),m0=await metrics(B.page);await stage('AVAILABLE_CLAIM',20000,async()=>{await action(A.page,'claim');await metric(B.page,'patchedCards',Number(m0.patchedCards||0))});await uiSame(B.page,ui,sk.id);
+ const m1=await metrics(B.page);await stage('AVAILABLE_ACTION',20000,async()=>{await action(A.page,'available');await metric(B.page,'patchedCards',Number(m1.patchedCards||0));await waitAlert(B.page,SKU_AVAILABLE)});await uiSame(B.page,ui,sk.id);console.log('REALTIME_WITHOUT_FULL_RELOAD=PASS');console.log('CARD_ONLY_PATCH=PASS');console.log('INPUT_FOCUS_SCROLL_HASH_PRESERVED=PASS');await dismiss(B.page);
+ const cur=await pickerIssue(B.page,SKU_AVAILABLE),v=1000000+Math.max(1,cur?.version||1),eid=`${RUN_MARKER}-dup`,ms=await metrics(B.page);await stage('SYNTHETIC_ACCEPT',18000,async()=>{await signal.set({event_id:eid,event_type:'issue_changed',topic:'issues',entity_id:ok.id,entity_version:v,source:RUN_MARKER,client_at:new Date()});await metric(B.page,'events',Number(ms.events||0))});const ma=await metrics(B.page);await stage('DUPLICATE_EVENT',18000,async()=>{await signal.set({event_id:eid,event_type:'issue_changed',topic:'issues',entity_id:ok.id,entity_version:v,source:RUN_MARKER,client_at:new Date()});await metric(B.page,'duplicateIgnored',Number(ms.duplicateIgnored||0))});if(await B.page.locator('#myIssues [data-picker-issue]').filter({hasText:SKU_AVAILABLE}).count()!==1)throw new Error('DUPLICATE_CARD_CREATED');const md=await metrics(B.page);if(Number(md.alerts||0)>Number(ma.alerts||0))throw new Error('DUPLICATE_NOTIFICATION_CREATED');console.log('DUPLICATE_EVENT_IGNORED=PASS duplicate_card=1 duplicate_notification=0');
+ const vb=Number((await pickerIssue(B.page,SKU_AVAILABLE))?.version||0);await stage('STALE_EVENT',18000,async()=>{await signal.set({event_id:`${RUN_MARKER}-stale`,event_type:'issue_changed',topic:'issues',entity_id:ok.id,entity_version:v-1,source:RUN_MARKER,client_at:new Date()});await metric(B.page,'staleIgnored',Number(ms.staleIgnored||0))});const va=Number((await pickerIssue(B.page,SKU_AVAILABLE))?.version||0);if(vb!==va)throw new Error(`STALE_VERSION_CHANGED_${vb}_${va}`);console.log('STALE_EVENT_IGNORED=PASS');
+ const sid=await stage('SKIP_SELECT',20000,()=>selectInvent(A.page,SKU_SKIP));if(sid!==sk.id)throw new Error('SKIP_ENTITY_MISMATCH');const ui2=await uiSnap(B.page),m2=await metrics(B.page);await stage('SKIP_CLAIM',20000,async()=>{await action(A.page,'claim');await metric(B.page,'patchedCards',Number(m2.patchedCards||0))});const m3=await metrics(B.page);await stage('SKIP_ACTION',20000,async()=>{await action(A.page,'skip');await metric(B.page,'patchedCards',Number(m3.patchedCards||0));await waitAlert(B.page,SKU_SKIP)});await uiSame(B.page,ui2);await dismiss(B.page);clean(A.page);clean(B.page);console.log('AVAILABLE_SKIP_AUTHZ=PASS actor_role=INVENT auth_required=false not_owner=false');
+ await stage('PICKER_SCOPE',15000,()=>pickerIsolation(sessions.P2.access_token,[ok.id,sk.id]));const fin=await metrics(B.page);if(Number(fin.fullScreenRenders||0)!==0||Number(fin.duplicateIgnored||0)<1||Number(fin.staleIgnored||0)<1)throw new Error(`FINAL_METRICS_${safe(JSON.stringify(fin))}`);console.log(`TWO_SESSION_REALTIME=PASS marker=${RUN_MARKER} events=${Number(fin.events||0)} patchedCards=${Number(fin.patchedCards||0)} duplicateIgnored=${Number(fin.duplicateIgnored||0)} staleIgnored=${Number(fin.staleIgnored||0)} fullScreenRenders=${Number(fin.fullScreenRenders||0)}`)
+ }finally{if(A?.context)await A.context.close().catch(()=>{});if(B?.context)await B.context.close().catch(()=>{});if(browser)await browser.close().catch(()=>{});try{await db.runTransaction(async t=>{const x=await t.get(signal),d=x.exists?x.data():null;if(d?.source===RUN_MARKER||String(d?.event_id||'').startsWith(RUN_MARKER)){if(snapshot.exists)t.set(signal,snapshot.data);else t.delete(signal)}});signalOk=true;console.log('FIRESTORE_SIGNAL_RESTORE=PASS')}catch(e){console.error(`FIRESTORE_SIGNAL_RESTORE=FAIL ${safe(e?.message||e)}`)}try{await deleteExactFirebaseUsers(auth);await firebaseReadback(auth);fbOk=true}catch(e){console.error(`FIREBASE_FIXTURE_CLEANUP=FAIL ${safe(e?.message||e)}`)}await deleteApp(app).catch(()=>{});if(!signalOk||!fbOk)process.exitCode=2}}
+main().catch(e=>{console.error(`TARGETED_TWO_SESSION_FAILURE ${safe(e?.stack||e)}`);process.exitCode=process.exitCode||1});
