@@ -9,7 +9,6 @@ on:
       - 'firestore.rules'
       - 'docs/templates/MAU_NHAN_SU_BAO_HANG_1291.xlsx'
       - 'scripts/live-web-login-e2e.cjs'
-      - '.github/workflows/deploy-web-admin.yml'
   workflow_dispatch:
 
 concurrency:
@@ -21,6 +20,7 @@ permissions:
 
 jobs:
   deploy:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
@@ -55,29 +55,12 @@ jobs:
         run: |
           set -euo pipefail
           node <<'NODE'
-          const crypto = require('crypto');
-          const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
-          if (!sa.client_email || !sa.private_key || sa.project_id !== 'bao-hang-1291') throw new Error('Firebase service account secret is incomplete or out of scope');
-          const enc = (v) => Buffer.from(typeof v === 'string' ? v : JSON.stringify(v)).toString('base64url');
-          async function token() {
-            const now = Math.floor(Date.now() / 1000);
-            const header = enc({ alg: 'RS256', typ: 'JWT' });
-            const claim = enc({ iss: sa.client_email, scope: 'https://www.googleapis.com/auth/cloud-platform', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 900 });
-            const unsigned = `${header}.${claim}`;
-            const signature = crypto.sign('RSA-SHA256', Buffer.from(unsigned), sa.private_key).toString('base64url');
-            const res = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth2:grant-type:jwt-bearer', assertion: `${unsigned}.${signature}` }) });
-            if (!res.ok) throw new Error(`OAuth token HTTP ${res.status}`);
-            return (await res.json()).access_token;
-          }
-          async function main() {
-            const access = await token();
-            const res = await fetch('https://cloudbilling.googleapis.com/v1/projects/bao-hang-1291/billingInfo', { headers: { Authorization: `Bearer ${access}` } });
-            if (!res.ok) throw new Error(`Cloud Billing read HTTP ${res.status}`);
-            const billing = await res.json();
-            if (billing.billingEnabled === true) throw new Error('COST_GUARD_STOP: Firebase project is linked to Cloud Billing');
-            console.log('COST_GUARD=PASS billingEnabled=false');
-          }
-          main().catch((error) => { console.error(error.message); process.exitCode = 3; });
+          const crypto=require('crypto');
+          const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');
+          if(!sa.client_email||!sa.private_key||sa.project_id!=='bao-hang-1291')throw new Error('Firebase service account secret is incomplete or out of scope');
+          const enc=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');
+          const now=Math.floor(Date.now()/1000),header=enc({alg:'RS256',typ:'JWT'}),claim=enc({iss:sa.client_email,scope:'https://www.googleapis.com/auth/cloud-platform',aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+900}),unsigned=`${header}.${claim}`,signature=crypto.sign('RSA-SHA256',Buffer.from(unsigned),sa.private_key).toString('base64url');
+          (async()=>{const tr=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:`${unsigned}.${signature}`}),signal:AbortSignal.timeout(15000)});if(!tr.ok)throw new Error(`OAuth token HTTP ${tr.status}`);const access=(await tr.json()).access_token;const br=await fetch('https://cloudbilling.googleapis.com/v1/projects/bao-hang-1291/billingInfo',{headers:{Authorization:`Bearer ${access}`},signal:AbortSignal.timeout(15000)});if(!br.ok)throw new Error(`Cloud Billing read HTTP ${br.status}`);const billing=await br.json();if(billing.billingEnabled===true)throw new Error('COST_GUARD_STOP: Firebase project is linked to Cloud Billing');console.log('COST_GUARD=PASS billingEnabled=false')})().catch(e=>{console.error(e.message);process.exitCode=3});
           NODE
 
       - uses: actions/setup-node@v7
@@ -100,6 +83,13 @@ jobs:
         shell: bash
         run: npm --prefix web-admin run build
 
+      - name: Embed exact deployed SHA marker
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$GITHUB_SHA" > web-admin/dist/__deployed_sha.txt
+          grep -Fx "$GITHUB_SHA" web-admin/dist/__deployed_sha.txt >/dev/null
+
       - name: Reject retired runtime and secret material from static build
         shell: bash
         run: |
@@ -111,6 +101,7 @@ jobs:
           grep -R -F 'api_session_profile_rpc' web-admin/dist >/dev/null
           test -f web-admin/dist/index.html
           test -f web-admin/dist/MAU_NHAN_SU_BAO_HANG_1291.xlsx
+          test -f web-admin/dist/__deployed_sha.txt
 
       - name: Verify Neon production auth boundary before deploy
         shell: bash
@@ -149,12 +140,14 @@ jobs:
           echo "deployed_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
           echo "DEPLOYED_SHA=$GITHUB_SHA"
 
-      - name: Verify live Web Admin
+      - name: Verify live Web Admin and deployed SHA marker
         shell: bash
         run: |
           set -euo pipefail
           curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 https://bao-hang-1291.web.app/ -o "$RUNNER_TEMP/web-index.html"
           grep -q 'Báo hàng 1291' "$RUNNER_TEMP/web-index.html"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 https://bao-hang-1291.web.app/__deployed_sha.txt -o "$RUNNER_TEMP/deployed-sha.txt"
+          grep -Fx "$GITHUB_SHA" "$RUNNER_TEMP/deployed-sha.txt" >/dev/null
           curl -fsSI --retry 5 --retry-all-errors --retry-delay 2 https://bao-hang-1291.web.app/ -o "$RUNNER_TEMP/web-headers.txt"
           grep -qi '^content-security-policy:' "$RUNNER_TEMP/web-headers.txt"
           grep -qi '^x-content-type-options: nosniff' "$RUNNER_TEMP/web-headers.txt"
@@ -164,7 +157,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          rm -f "$RUNNER_TEMP/firebase-sa.json" "$RUNNER_TEMP/web-index.html" "$RUNNER_TEMP/web-headers.txt" "$RUNNER_TEMP/neon-unauth.json"
+          rm -f "$RUNNER_TEMP/firebase-sa.json" "$RUNNER_TEMP/web-index.html" "$RUNNER_TEMP/web-headers.txt" "$RUNNER_TEMP/neon-unauth.json" "$RUNNER_TEMP/deployed-sha.txt"
 
   acceptance:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')

@@ -1,0 +1,346 @@
+name: Final Production Acceptance
+
+on:
+  workflow_call:
+    inputs:
+      expected_deployed_sha:
+        required: true
+        type: string
+      production_url:
+        required: true
+        type: string
+      acceptance_mode:
+        required: false
+        type: string
+        default: targeted
+    secrets:
+      FIREBASE_SERVICE_ACCOUNT:
+        required: true
+  workflow_dispatch:
+    inputs:
+      expected_deployed_sha:
+        description: Exact production source SHA to accept
+        required: true
+        type: string
+      production_url:
+        description: Production URL
+        required: true
+        type: string
+        default: https://bao-hang-1291.web.app
+      acceptance_mode:
+        description: Acceptance mode
+        required: true
+        type: choice
+        default: targeted
+        options:
+          - targeted
+  push:
+    branches: [main]
+    paths:
+      - 'ops/final-production-acceptance.trigger'
+
+concurrency:
+  group: bao-hang-1291-production-acceptance
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify_production:
+    name: verify-production
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    outputs:
+      expected_deployed_sha: ${{ steps.config.outputs.expected_deployed_sha }}
+      production_url: ${{ steps.config.outputs.production_url }}
+      acceptance_mode: ${{ steps.config.outputs.acceptance_mode }}
+      verify_pass: ${{ steps.result.outputs.verify_pass }}
+    steps:
+      - name: Resolve acceptance configuration
+        id: config
+        shell: bash
+        env:
+          INPUT_SHA: ${{ inputs.expected_deployed_sha }}
+          INPUT_URL: ${{ inputs.production_url }}
+          INPUT_MODE: ${{ inputs.acceptance_mode }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          sha="${INPUT_SHA:-}"
+          url="${INPUT_URL:-}"
+          mode="${INPUT_MODE:-}"
+          if [ -z "$sha" ]; then
+            if [[ "${COMMIT_MESSAGE:-}" =~ expected_deployed_sha=([0-9a-f]{40}) ]]; then
+              sha="${BASH_REMATCH[1]}"
+            else
+              echo 'EXPECTED_DEPLOYED_SHA_MISSING' >&2
+              exit 1
+            fi
+          fi
+          [ -n "$url" ] || url='https://bao-hang-1291.web.app'
+          [ -n "$mode" ] || mode='targeted'
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          [ "$url" = 'https://bao-hang-1291.web.app' ]
+          [ "$mode" = 'targeted' ]
+          echo "expected_deployed_sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "production_url=$url" >> "$GITHUB_OUTPUT"
+          echo "acceptance_mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "ACCEPTANCE_CONFIG=PASS mode=$mode production=$url expected_sha=$sha"
+
+      - name: Verify exact production SHA and runtime fix
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.config.outputs.expected_deployed_sha }}
+          PRODUCTION_URL: ${{ steps.config.outputs.production_url }}
+        run: |
+          set -euo pipefail
+          echo 'FINAL_STAGE=PRODUCTION_SHA_GUARD:BEGIN'
+          node <<'NODE'
+          const expected=process.env.EXPECTED_SHA;
+          const site=process.env.PRODUCTION_URL.replace(/\/$/,'');
+          const get=async(url)=>fetch(url,{headers:{'cache-control':'no-cache'},signal:AbortSignal.timeout(15000)});
+          (async()=>{
+            let exact=false,method='';
+            const marker=await get(`${site}/__deployed_sha.txt?gate=${Date.now()}`);
+            if(marker.ok){
+              const live=(await marker.text()).trim();
+              if(/^[0-9a-f]{40}$/.test(live)){
+                if(live!==expected)throw new Error(`DEPLOYED_SHA_MISMATCH live=${live} expected=${expected}`);
+                exact=true;method='hosting-marker';
+              }
+            }
+            if(!exact){
+              const api='https://api.github.com/repos/tam95supra-source/bao-hang-1291/actions/workflows/deploy-web-admin.yml/runs?branch=main&status=success&per_page=20';
+              const r=await get(api);if(!r.ok)throw new Error(`GITHUB_DEPLOY_HISTORY_HTTP_${r.status}`);
+              const data=await r.json();const latest=(data.workflow_runs||[])[0];
+              if(!latest||latest.head_sha!==expected)throw new Error(`LATEST_SUCCESSFUL_DEPLOY_SHA_MISMATCH latest=${latest?.head_sha||'none'} expected=${expected}`);
+              exact=true;method=`latest-successful-deploy-run:${latest.id}`;
+            }
+            const root=await get(`${site}/?gate=${Date.now()}`);if(!root.ok)throw new Error(`PRODUCTION_ROOT_HTTP_${root.status}`);
+            const html=await root.text();
+            const m=html.match(/(?:src|href)=["'](\/assets\/[^"']+\.js)["']/);
+            if(!m)throw new Error('PRODUCTION_BUNDLE_NOT_FOUND');
+            const jsr=await get(`${site}${m[1]}?gate=${Date.now()}`);if(!jsr.ok)throw new Error(`PRODUCTION_BUNDLE_HTTP_${jsr.status}`);
+            const js=await jsr.text();
+            if(!js.includes('authStateReady'))throw new Error('LIVE_AUTH_STATE_READY_FIX_MISSING');
+            if(!js.includes('picker realtime channel failed'))throw new Error('LIVE_REALTIME_REATTACH_FIX_MISSING');
+            console.log(`PRODUCTION_SHA_GUARD=PASS deployed_sha=${expected} verification=${method} bundle=${m[1]}`);
+          })().catch(e=>{console.error(e.message);process.exitCode=1});
+          NODE
+          echo 'FINAL_STAGE=PRODUCTION_SHA_GUARD:PASS'
+
+      - name: Verify zero-cost billing guard
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          echo 'FINAL_STAGE=ZERO_COST_GUARD:BEGIN'
+          node <<'NODE'
+          const crypto=require('crypto');
+          const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');
+          if(!sa.client_email||!sa.private_key||sa.project_id!=='bao-hang-1291')throw new Error('FIREBASE_SERVICE_ACCOUNT_SCOPE');
+          const enc=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');
+          const now=Math.floor(Date.now()/1000),h=enc({alg:'RS256',typ:'JWT'}),p=enc({iss:sa.client_email,scope:'https://www.googleapis.com/auth/cloud-platform',aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+900}),unsigned=`${h}.${p}`,sig=crypto.sign('RSA-SHA256',Buffer.from(unsigned),sa.private_key).toString('base64url');
+          (async()=>{
+            const tr=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:`${unsigned}.${sig}`}),signal:AbortSignal.timeout(15000)});if(!tr.ok)throw new Error(`OAUTH_HTTP_${tr.status}`);
+            const token=(await tr.json()).access_token;
+            const br=await fetch('https://cloudbilling.googleapis.com/v1/projects/bao-hang-1291/billingInfo',{headers:{authorization:`Bearer ${token}`},signal:AbortSignal.timeout(15000)});if(!br.ok)throw new Error(`BILLING_HTTP_${br.status}`);
+            const b=await br.json();if(b.billingEnabled===true)throw new Error('COST_GUARD_STOP');
+            console.log('COST_GUARD=PASS billingEnabled=false');
+          })().catch(e=>{console.error(e.message);process.exitCode=1});
+          NODE
+          echo 'FINAL_STAGE=ZERO_COST_GUARD:PASS'
+
+      - name: Mark production verification PASS
+        id: result
+        shell: bash
+        run: |
+          echo 'verify_pass=true' >> "$GITHUB_OUTPUT"
+          echo 'VERIFY_PRODUCTION=PASS'
+
+  targeted_two_session:
+    name: targeted-two-session
+    needs: verify_production
+    if: needs.verify_production.result == 'success' && needs.verify_production.outputs.acceptance_mode == 'targeted'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      markers_pass: ${{ steps.markers.outputs.markers_pass }}
+    env:
+      NEON_DATA_API: https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install targeted runtime only
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'FINAL_STAGE=TARGETED_RUNTIME:BEGIN'
+          E2E_DIR="$RUNNER_TEMP/two-session-e2e"
+          mkdir -p "$E2E_DIR"
+          printf '{"private":true}' > "$E2E_DIR/package.json"
+          npm --prefix "$E2E_DIR" install firebase-admin@13.4.0 playwright-core@1.55.0 --ignore-scripts --no-audit --no-fund --no-package-lock
+          echo "E2E_DIR=$E2E_DIR" >> "$GITHUB_ENV"
+          echo 'FINAL_STAGE=TARGETED_RUNTIME:PASS'
+
+      - name: Run production two-session A to B realtime
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          echo 'FINAL_STAGE=TWO_SESSION_REALTIME:BEGIN'
+          CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          test -n "$CHROME_BIN"
+          FINAL_HARNESS="$RUNNER_TEMP/final-two-session.cjs"
+          node scripts/prepare-final-harness.cjs scripts/targeted-two-session-realtime-v4.cjs "$FINAL_HARNESS"
+          node --check "$FINAL_HARNESS"
+          NODE_PATH="$E2E_DIR/node_modules" CHROME_BIN="$CHROME_BIN" node "$FINAL_HARNESS" 2>&1 | tee "$RUNNER_TEMP/two-session.log"
+          echo 'FINAL_STAGE=TWO_SESSION_REALTIME:PASS'
+
+      - name: Assert all targeted markers
+        id: markers
+        shell: bash
+        run: |
+          set -euo pipefail
+          markers=(
+            TWO_SESSION_LOGIN_A
+            TWO_SESSION_LOGIN_B
+            FIREBASE_AUTH_READY_BEFORE_SUBSCRIBE
+            FIRESTORE_LISTENER_ATTACH
+            A_TO_B_REALTIME
+            REALTIME_ENTITY_MATCH
+            REALTIME_WITHOUT_FULL_RELOAD
+            DUPLICATE_EVENT_IGNORED
+            STALE_EVENT_IGNORED
+            CARD_ONLY_PATCH
+            INPUT_FOCUS_SCROLL_HASH_PRESERVED
+            AVAILABLE_SKIP_AUTHZ
+            TWO_SESSION_REALTIME
+          )
+          for marker in "${markers[@]}"; do
+            grep -F "${marker}=PASS" "$RUNNER_TEMP/two-session.log" >/dev/null || { echo "MISSING_REALTIME_MARKER=$marker" >&2; exit 1; }
+          done
+          if grep -Ei 'AUTH_REQUIRED|not owner|not_owner' "$RUNNER_TEMP/two-session.log" | grep -vE 'auth_required=false|not_owner=false' >/dev/null; then
+            echo 'FORBIDDEN_AUTH_ERROR_PRESENT' >&2
+            exit 1
+          fi
+          echo 'markers_pass=true' >> "$GITHUB_OUTPUT"
+          echo 'TARGETED_TWO_SESSION_MARKERS=PASS'
+
+      - name: Cleanup targeted runtime
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/two-session-e2e" "$RUNNER_TEMP/final-two-session.cjs"
+
+  cleanup_readback:
+    name: cleanup-readback
+    needs: [verify_production, targeted_two_session]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      cleanup_pass: ${{ steps.markers.outputs.cleanup_pass }}
+    env:
+      NEON_DATA_API: https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install cleanup runtime only
+        shell: bash
+        run: |
+          set -euo pipefail
+          E2E_DIR="$RUNNER_TEMP/cleanup-e2e"
+          mkdir -p "$E2E_DIR"
+          printf '{"private":true}' > "$E2E_DIR/package.json"
+          npm --prefix "$E2E_DIR" install firebase-admin@13.4.0 --ignore-scripts --no-audit --no-fund --no-package-lock
+          echo "NODE_PATH=$E2E_DIR/node_modules" >> "$GITHUB_ENV"
+
+      - name: Exact E2E cleanup with schema-cache recovery
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          echo 'FINAL_STAGE=CLEANUP_READBACK:BEGIN'
+          node scripts/final-e2e-cleanup-retry.cjs 2>&1 | tee "$RUNNER_TEMP/cleanup.log"
+          echo 'FINAL_STAGE=CLEANUP_READBACK:PASS'
+
+      - name: Assert cleanup readback markers
+        id: markers
+        shell: bash
+        run: |
+          set -euo pipefail
+          markers=(
+            'TEST_SKU_REMAINING=0'
+            'TEST_PROFILE_REMAINING=0'
+            'TEST_REPORT_REMAINING=0'
+            'TEST_OWNERSHIP_REMAINING=0'
+            'TEST_EVENT_REMAINING=0'
+            'TEST_NOTIFICATION_REMAINING=0'
+            'TEST_REALTIME_SIGNAL_REMAINING=0'
+            'TEST_FIREBASE_USERS_REMAINING=0'
+            'REAL_USER_10060_PRESERVED=PASS'
+            'TEST_CLEANUP_READBACK=PASS'
+          )
+          for marker in "${markers[@]}"; do
+            grep -F "$marker" "$RUNNER_TEMP/cleanup.log" >/dev/null || { echo "MISSING_CLEANUP_MARKER=$marker" >&2; exit 1; }
+          done
+          echo 'cleanup_pass=true' >> "$GITHUB_OUTPUT"
+          echo 'CLEANUP_READBACK_MARKERS=PASS'
+
+      - name: Cleanup temp runtime
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/cleanup-e2e"
+
+  final_gate:
+    name: final-gate
+    needs: [verify_production, targeted_two_session, cleanup_readback]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Enforce final production acceptance
+        shell: bash
+        env:
+          VERIFY_RESULT: ${{ needs.verify_production.result }}
+          VERIFY_PASS: ${{ needs.verify_production.outputs.verify_pass }}
+          TARGET_RESULT: ${{ needs.targeted_two_session.result }}
+          TARGET_MARKERS: ${{ needs.targeted_two_session.outputs.markers_pass }}
+          CLEANUP_RESULT: ${{ needs.cleanup_readback.result }}
+          CLEANUP_PASS: ${{ needs.cleanup_readback.outputs.cleanup_pass }}
+          DEPLOYED_SHA: ${{ needs.verify_production.outputs.expected_deployed_sha }}
+          PRODUCTION_URL: ${{ needs.verify_production.outputs.production_url }}
+        run: |
+          set -euo pipefail
+          echo 'FINAL_STAGE=FINAL_ACCEPTANCE:BEGIN'
+          [ "$VERIFY_RESULT" = 'success' ] && [ "$VERIFY_PASS" = 'true' ]
+          [ "$TARGET_RESULT" = 'success' ] && [ "$TARGET_MARKERS" = 'true' ]
+          [ "$CLEANUP_RESULT" = 'success' ] && [ "$CLEANUP_PASS" = 'true' ]
+          echo 'ANDROID_BUILD_RELEASE=NOT_RUN'
+          echo 'SECURITY_GUARD=PASS exact_e2e_only=true'
+          echo 'FINAL_PRODUCTION_ACCEPTANCE=PASS'
+          {
+            echo '## BÁO HÀNG 1291 — Final Production Acceptance'
+            echo "- Production: $PRODUCTION_URL"
+            echo "- Deployed SHA: \`$DEPLOYED_SHA\`"
+            echo '- verify-production: PASS'
+            echo '- targeted-two-session: PASS'
+            echo '- cleanup/readback: PASS (all zero)'
+            echo '- REAL_USER_10060_PRESERVED=PASS'
+            echo '- billingEnabled=false'
+            echo '- Android build/release: NOT RUN'
+            echo '- FINAL_PRODUCTION_ACCEPTANCE=PASS'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo 'FINAL_STAGE=FINAL_ACCEPTANCE:PASS'
