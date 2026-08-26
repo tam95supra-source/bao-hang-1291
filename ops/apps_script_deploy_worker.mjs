@@ -82,6 +82,27 @@ async function readRetry(label, fn, attempts = 3) {
   throw last;
 }
 
+async function readUntil(label, fn, accept, attempts = 8) {
+  let lastValue = null;
+  let lastError = null;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      const value = await fn();
+      lastValue = value;
+      if (accept(value)) return value;
+      lastError = new Error(`${label}_NOT_PROPAGATED`);
+    } catch (error) {
+      lastError = error;
+    }
+    if (i < attempts) {
+      console.log(`${label}_WAIT=${i}`);
+      await sleep(Math.min(10000, 1500 * i));
+    }
+  }
+  if (lastError) throw lastError;
+  throw new Error(`${label}_FAILED:${JSON.stringify(lastValue).slice(0,200)}`);
+}
+
 async function accessToken() {
   const body = new URLSearchParams({
     client_id:req('GOOGLE_OAUTH_CLIENT_ID'),
@@ -176,13 +197,24 @@ async function main() {
     console.log('WORKER_DEPLOYMENT_UPDATE=ALREADY');
   }
 
-  const finalContent = await readRetry('WORKER_FINAL_SOURCE_READBACK', () => jsonFetch(`${apiBase}/projects/${encodeURIComponent(scriptId)}/content?versionNumber=${versionNumber}`, {headers:authHeaders(token)}, 45000));
+  const finalContent = await readUntil(
+    'WORKER_FINAL_SOURCE_READBACK',
+    () => jsonFetch(`${apiBase}/projects/${encodeURIComponent(scriptId)}/content?versionNumber=${versionNumber}`, {headers:authHeaders(token)}, 45000),
+    value => {
+      try { return sha256(pickWorker(value.files || []).source || '') === canonicalHash; }
+      catch { return false; }
+    }
+  );
   const deployedSource = pickWorker(finalContent.files || []).source || '';
   const deployedAfterHash = sha256(deployedSource);
   if (deployedAfterHash !== canonicalHash) throw new Error('DEPLOYED_SOURCE_HASH_MISMATCH');
   assertWorker(deployedSource);
 
-  const deploymentAfter = await readRetry('WORKER_FINAL_DEPLOYMENT_READBACK', () => jsonFetch(`${apiBase}/projects/${encodeURIComponent(scriptId)}/deployments/${encodeURIComponent(deploymentId)}`, {headers:authHeaders(token)}));
+  const deploymentAfter = await readUntil(
+    'WORKER_FINAL_DEPLOYMENT_READBACK',
+    () => jsonFetch(`${apiBase}/projects/${encodeURIComponent(scriptId)}/deployments/${encodeURIComponent(deploymentId)}`, {headers:authHeaders(token)}),
+    value => value.deploymentId === deploymentId && Number(value.deploymentConfig?.versionNumber || 0) === versionNumber
+  );
   if (Number(deploymentAfter.deploymentConfig?.versionNumber || 0) !== versionNumber) throw new Error('FINAL_DEPLOYMENT_VERSION_MISMATCH');
 
   const webhook = req('GOOGLE_SHEET_WEBHOOK_URL');
