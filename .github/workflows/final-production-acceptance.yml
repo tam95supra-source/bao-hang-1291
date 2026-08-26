@@ -215,6 +215,7 @@ jobs:
           CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"; test -n "$CHROME_BIN"
           FINAL_HARNESS="$RUNNER_TEMP/final-two-session.cjs"
           node scripts/prepare-final-harness.cjs scripts/targeted-two-session-realtime-v4.cjs "$FINAL_HARNESS"
+          node scripts/patch-final-fast-events-harness.cjs "$FINAL_HARNESS"
           node --check "$FINAL_HARNESS"
           CHROME_BIN="$CHROME_BIN" node "$FINAL_HARNESS" 2>&1 | tee .acceptance-evidence/targeted/two-session.log
       - name: Snapshot final exact cleanup manifest
@@ -410,3 +411,4 @@ jobs:
           path: .acceptance-evidence
           retention-days: 1
           if-no-files-found: error
+          include-hidden-files: true
