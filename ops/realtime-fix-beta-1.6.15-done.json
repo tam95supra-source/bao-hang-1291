@@ -1,0 +1,95 @@
+{
+  "status": "PASS",
+  "verified_at": "2026-08-27T04:58:00+07:00",
+  "scope": "realtime-fix-beta-1.6.15",
+  "repository": "tam95supra-source/bao-hang-1291",
+  "canonical_main_sha": "228e05a654d8599740408b8787d3acaa984afafb",
+  "candidate": {
+    "versionName": "1.6.15",
+    "versionCode": 24,
+    "sourceSha": "7353d64900cedcdfdbfc5943e99af5ea1684cbb6"
+  },
+  "android": {
+    "source_checks": {
+      "firestore_first_marker_refresh": true,
+      "pending_issues_use_canonical_issue_board": true
+    },
+    "ci": {
+      "run_id": 32985361288,
+      "successful_build_job_id": 98231174822,
+      "build_job_conclusion": "success",
+      "unit_test_and_assemble_debug": "success",
+      "note": "The workflow retains startup_failure metadata from its first hosted-runner attempt; attempt-2 build job is terminal success."
+    },
+    "production_release_validation": {
+      "run_id": 32986387431,
+      "job_id": 98233399303,
+      "conclusion": "success",
+      "test_release_unit_test": "success",
+      "assemble_release": "success",
+      "package": "vn.pickpack1291.baohang"
+    }
+  },
+  "apps_script_worker": {
+    "canonical_repo_commit": "228e05a654d8599740408b8787d3acaa984afafb",
+    "contract": {
+      "realtime_before_sheet": true,
+      "client_kick_sheet_bypass": true,
+      "client_kick_cleanup_bypass": true
+    },
+    "live_deploy_evidence": {
+      "run_id": 32985475523,
+      "job_id": 98230808957,
+      "head_update": "PASS",
+      "deployment_update": "PASS",
+      "deployment_version": 23,
+      "webapp_ping": "PASS",
+      "immediate_final_readback": "eventual-consistency mismatch",
+      "runtime_confirmation": "Neon issues realtime queue later drained to zero while Sheet backlog remained."
+    },
+    "stale_orphan_run": {
+      "run_id": 32985475523,
+      "observed_status": "queued",
+      "superseded_by_later_successful_actions": true,
+      "retriggered": false
+    }
+  },
+  "ota": {
+    "production_release_run_id": 32986387431,
+    "release_tag": "beta-v1.6.15",
+    "prerelease": true,
+    "apk_sha256": "bfb83e706f555fd97cc8a52b143ab6a8ae4310e2ff21a6626ba67e860434a9e7",
+    "signerSha256": "2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0",
+    "manifest": {
+      "versionName": "1.6.15",
+      "versionCode": 24,
+      "sourceSha": "7353d64900cedcdfdbfc5943e99af5ea1684cbb6"
+    }
+  },
+  "runtime": {
+    "neon_project": "tiny-boat-19315489",
+    "realtime": {
+      "pending_total": 1,
+      "pending_issues": 0,
+      "pending_staff": 1,
+      "pending_staff_attempts": 1,
+      "published_total": 454,
+      "last_published_at": "2026-08-26T21:13:50.636Z"
+    },
+    "sheet_export": {
+      "pending": 453,
+      "oldest_pending_at": "2026-08-26T10:29:45.514Z"
+    },
+    "conclusion": "Realtime publisher is progressing independently of the Google Sheet backlog; issue realtime is no longer starved by Sheet export."
+  },
+  "quality": {
+    "canonical_worker_commit_quality_run_id": 33017884810,
+    "quality_job_id": 98340718256,
+    "conclusion": "success"
+  },
+  "security": {
+    "secrets_in_evidence": false,
+    "billing_changed": false,
+    "paid_services_enabled": false
+  }
+}
