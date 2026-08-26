@@ -131,8 +131,15 @@ class RealtimeClient(
                 val previous = lastIssueMarker
                 lastIssueMarker = marker
                 markFirestoreState(true, null)
-                if (previous != null && previous != marker && running && markerWatchEnabled) {
-                    diagnostics.info("realtime_firestore_issue_changed", mapOf("marker" to marker.take(120)))
+
+                // The first marker observed after foreground start is not just a baseline:
+                // an issue may have changed while the Activity had no listener. Refresh once
+                // immediately so a missed FCM delta cannot require logout/login to recover.
+                if (previous != marker && running && markerWatchEnabled) {
+                    diagnostics.info(
+                        if (previous == null) "realtime_firestore_issue_initial_refresh" else "realtime_firestore_issue_changed",
+                        mapOf("marker" to marker.take(120))
+                    )
                     onIssueChanged()
                 }
             }
