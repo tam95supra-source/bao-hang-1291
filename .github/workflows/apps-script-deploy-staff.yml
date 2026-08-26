@@ -1,4 +1,4 @@
-name: Apps Script staff bridge deploy
+name: Apps Script canonical deploy
 
 on:
   push:
@@ -30,22 +30,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Verify authority and deploy exact receiver
+      - name: Verify authority and deploy canonical Apps Script sources
         shell: bash
         run: |
           set -euo pipefail
           node ops/apps_script_deploy_staff.mjs
+          node ops/apps_script_deploy_worker.mjs
           git diff --check
 
-      - name: Commit canonical receiver normalization
+      - name: Commit canonical source normalization
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add google-apps-script/STAFF_SOURCE_BRIDGE_RECEIVER.gs
+          git add google-apps-script/STAFF_SOURCE_BRIDGE_RECEIVER.gs google-apps-script/DEPLOY_NEON.gs
           if ! git diff --cached --quiet; then
-            git commit -m 'fix(staff): keep Apps Script Sheet personnel as Picker'
+            git commit -m 'fix(realtime): deploy canonical Apps Script worker fast path'
             git pull --rebase origin main
             git push origin HEAD:main
           fi
@@ -56,7 +57,8 @@ jobs:
         run: |
           set -euo pipefail
           test -s acceptance-evidence/apps-script-deploy.json
-          if grep -RniE 'client_secret|refresh_token|access_token|private_key' acceptance-evidence; then
+          test -s acceptance-evidence/apps-script-worker-deploy.json
+          if grep -RniE 'client_secret|refresh_token|access_token|private_key' acceptance-evidence/apps-script-deploy.json acceptance-evidence/apps-script-worker-deploy.json; then
             echo SECRET_MATERIAL_DETECTED >&2
             exit 1
           fi
@@ -65,8 +67,10 @@ jobs:
         id: evidence
         uses: actions/upload-artifact@v4
         with:
-          name: apps-script-deploy-${{ github.run_id }}
-          path: acceptance-evidence/apps-script-deploy.json
+          name: apps-script-canonical-deploy-${{ github.run_id }}
+          path: |
+            acceptance-evidence/apps-script-deploy.json
+            acceptance-evidence/apps-script-worker-deploy.json
           retention-days: 1
           if-no-files-found: error
 
@@ -78,4 +82,5 @@ jobs:
           set -euo pipefail
           test -n "$ARTIFACT_ID"
           echo "APPS_SCRIPT_DEPLOY_ARTIFACT_ID=$ARTIFACT_ID"
-          echo "APPS_SCRIPT_DEPLOY_ACCEPTANCE=PASS"
+          echo "APPS_SCRIPT_STAFF_DEPLOY_ACCEPTANCE=PASS"
+          echo "APPS_SCRIPT_WORKER_DEPLOY_ACCEPTANCE=PASS"
