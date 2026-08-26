@@ -1,0 +1,65 @@
+name: Final targeted production acceptance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/final-targeted-acceptance.request'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  accept:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+      GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+      GAS_SCRIPT_ID: ${{ secrets.GAS_SCRIPT_ID }}
+      GAS_DEPLOYMENT_ID: ${{ secrets.GAS_DEPLOYMENT_ID }}
+      GOOGLE_SHEET_WEBHOOK_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Run independent targeted readback
+        shell: bash
+        run: |
+          set -euo pipefail
+          node ops/final_targeted_acceptance.mjs
+
+      - name: Reject secret material from evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -RniE 'client_secret|refresh_token|access_token|private_key|BEGIN PRIVATE KEY' acceptance-evidence; then
+            echo SECRET_MATERIAL_DETECTED >&2
+            exit 1
+          fi
+
+      - name: Upload final acceptance evidence
+        id: evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-production-acceptance-${{ github.run_id }}
+          path: acceptance-evidence/final-production-acceptance.json
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Emit final receipt
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.evidence.outputs.artifact-id }}
+        run: |
+          set -euo pipefail
+          test -n "$ARTIFACT_ID"
+          echo "FINAL_ACCEPTANCE_ARTIFACT_ID=$ARTIFACT_ID"
+          echo "FINAL_STAFF_SYNC_ACCEPTANCE=PASS"
+          echo "FINAL_EVENTS_PERFORMANCE_ACCEPTANCE=PASS"
+          echo "FINAL_PRODUCTION_ACCEPTANCE=PASS"
