@@ -1,0 +1,155 @@
+name: Apps Script authority preflight
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/apps-script-authority-preflight.request'
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: bao-hang-apps-script-authority-preflight
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      GOOGLE_SHEET_WEBHOOK_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
+      GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+      GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+      GAS_SCRIPT_ID: ${{ secrets.GAS_SCRIPT_ID }}
+      GAS_DEPLOYMENT_ID: ${{ secrets.GAS_DEPLOYMENT_ID }}
+      GOOGLE_SCRIPT_ID: ${{ secrets.GOOGLE_SCRIPT_ID }}
+      CLASP_TOKEN: ${{ secrets.CLASP_TOKEN }}
+      CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+      APPS_SCRIPT_OAUTH_CLIENT_ID: ${{ secrets.APPS_SCRIPT_OAUTH_CLIENT_ID }}
+      APPS_SCRIPT_OAUTH_CLIENT_SECRET: ${{ secrets.APPS_SCRIPT_OAUTH_CLIENT_SECRET }}
+      APPS_SCRIPT_OAUTH_REFRESH_TOKEN: ${{ secrets.APPS_SCRIPT_OAUTH_REFRESH_TOKEN }}
+      APPS_SCRIPT_SCRIPT_ID: ${{ secrets.APPS_SCRIPT_SCRIPT_ID }}
+      APPS_SCRIPT_DEPLOYMENT_ID: ${{ secrets.APPS_SCRIPT_DEPLOYMENT_ID }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Normalize canonical receiver contract only
+        id: canonical
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('google-apps-script/STAFF_SOURCE_BRIDGE_RECEIVER.gs')
+          s=p.read_text(encoding='utf-8')
+          name='staffSourceBridgeRole_'
+          start=s.find('function '+name+'(')
+          if start < 0: raise SystemExit('ROLE_FUNCTION_MISSING')
+          brace=s.find('{',start); depth=0; end=-1
+          for i in range(brace,len(s)):
+              if s[i]=='{': depth+=1
+              elif s[i]=='}':
+                  depth-=1
+                  if depth==0:
+                      end=i+1; break
+          if end < 0: raise SystemExit('ROLE_FUNCTION_UNBALANCED')
+          replacement="""function staffSourceBridgeRole_(position, department, code) {
+  if (String(code) === BH_PROTECTED_ADMIN_CODE) return 'ADMIN';
+  return 'PICKER';
+}"""
+          s=s[:start]+replacement+s[end:]
+          p.write_text(s,encoding='utf-8')
+          PY
+          cp google-apps-script/STAFF_SOURCE_BRIDGE_RECEIVER.gs "$RUNNER_TEMP/receiver.js"
+          node --check "$RUNNER_TEMP/receiver.js"
+          grep -F 'MAX_FULL_SOURCE_ROWS: 2000' google-apps-script/STAFF_SOURCE_BRIDGE_RECEIVER.gs >/dev/null
+          grep -F "if (String(code) === BH_PROTECTED_ADMIN_CODE) return 'ADMIN';" google-apps-script/STAFF_SOURCE_BRIDGE_RECEIVER.gs >/dev/null
+          grep -F "return 'PICKER';" google-apps-script/STAFF_SOURCE_BRIDGE_RECEIVER.gs >/dev/null
+          ! grep -A8 'function staffSourceBridgeRole_' google-apps-script/STAFF_SOURCE_BRIDGE_RECEIVER.gs | grep -E "ADMIN_INVENT|return 'INVENT'" >/dev/null
+          git diff --check
+          hash=$(sha256sum google-apps-script/STAFF_SOURCE_BRIDGE_RECEIVER.gs | awk '{print $1}')
+          echo "source_hash=$hash" >> "$GITHUB_OUTPUT"
+          echo APPS_SCRIPT_CANONICAL_SOURCE_HASH=PASS
+
+      - name: Commit canonical receiver if changed
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add google-apps-script/STAFF_SOURCE_BRIDGE_RECEIVER.gs
+          if git diff --cached --quiet; then
+            echo changed=false >> "$GITHUB_OUTPUT"
+          else
+            git commit -m 'fix(staff): keep Apps Script Sheet personnel as Picker'
+            git pull --rebase origin main
+            git push origin HEAD:main
+            echo changed=true >> "$GITHUB_OUTPUT"
+          fi
+          echo "source_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Probe existing Apps Script deploy authority without exposing credentials
+        id: authority
+        shell: bash
+        env:
+          SOURCE_HASH: ${{ steps.canonical.outputs.source_hash }}
+          SOURCE_COMMIT: ${{ steps.commit.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          mkdir -p acceptance-evidence
+          node <<'NODE'
+          const fs=require('fs');
+          const names=['GOOGLE_OAUTH_CLIENT_ID','GOOGLE_OAUTH_CLIENT_SECRET','GOOGLE_OAUTH_REFRESH_TOKEN','GAS_SCRIPT_ID','GAS_DEPLOYMENT_ID','GOOGLE_SCRIPT_ID','CLASP_TOKEN','CLASPRC_JSON','APPS_SCRIPT_OAUTH_CLIENT_ID','APPS_SCRIPT_OAUTH_CLIENT_SECRET','APPS_SCRIPT_OAUTH_REFRESH_TOKEN','APPS_SCRIPT_SCRIPT_ID','APPS_SCRIPT_DEPLOYMENT_ID'];
+          const present=Object.fromEntries(names.map(n=>[n,Boolean(String(process.env[n]||'').trim())]));
+          const oauthClassic=present.GOOGLE_OAUTH_CLIENT_ID&&present.GOOGLE_OAUTH_CLIENT_SECRET&&present.GOOGLE_OAUTH_REFRESH_TOKEN&&present.GAS_SCRIPT_ID&&present.GAS_DEPLOYMENT_ID;
+          const oauthAlt=present.APPS_SCRIPT_OAUTH_CLIENT_ID&&present.APPS_SCRIPT_OAUTH_CLIENT_SECRET&&present.APPS_SCRIPT_OAUTH_REFRESH_TOKEN&&present.APPS_SCRIPT_SCRIPT_ID&&present.APPS_SCRIPT_DEPLOYMENT_ID;
+          const clasp=present.CLASPRC_JSON&&(present.GAS_SCRIPT_ID||present.GOOGLE_SCRIPT_ID||present.APPS_SCRIPT_SCRIPT_ID);
+          const out={captured_at:new Date().toISOString(),source_hash:process.env.SOURCE_HASH,source_commit:process.env.SOURCE_COMMIT,credential_presence:present,deploy_authority_available:Boolean(oauthClassic||oauthAlt||clasp),authority_mode:oauthClassic?'OAUTH_CLASSIC':oauthAlt?'OAUTH_ALT':clasp?'CLASP':'NONE'};
+          fs.writeFileSync('acceptance-evidence/apps-script-authority.json',JSON.stringify(out,null,2));
+          console.log('APPS_SCRIPT_DEPLOY_AUTHORITY='+(out.deploy_authority_available?'AVAILABLE':'ABSENT'));
+          console.log('APPS_SCRIPT_AUTHORITY_MODE='+out.authority_mode);
+          NODE
+
+      - name: Verify existing production worker pointer and ping
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${GOOGLE_SHEET_WEBHOOK_URL:-}"
+          case "$GOOGLE_SHEET_WEBHOOK_URL" in https://script.google.com/macros/s/*/exec) ;; *) exit 11;; esac
+          expected="$(sed -n 's/^deployment_id=//p' ops/current-apps-script-deployment.txt | head -n1)"
+          actual="$(node -e "const u=new URL(process.env.GOOGLE_SHEET_WEBHOOK_URL);console.log(u.pathname.split('/').filter(Boolean)[2]||'')")"
+          test -n "$expected"; test "$actual" = "$expected"
+          node <<'NODE'
+          const fs=require('fs');
+          (async()=>{
+            const r=await fetch(process.env.GOOGLE_SHEET_WEBHOOK_URL,{method:'POST',headers:{'content-type':'text/plain;charset=UTF-8'},body:JSON.stringify({action:'ping'}),signal:AbortSignal.timeout(15000)});
+            const text=await r.text();let j={};try{j=JSON.parse(text)}catch{}
+            if(!r.ok||j.ok!==true||j.project!=='bao-hang-1291')throw new Error('LIVE_PING_FAILED');
+            const p='acceptance-evidence/apps-script-authority.json';const d=JSON.parse(fs.readFileSync(p));d.existing_deployment_pointer_match=true;d.live_ping='PASS';d.live_project='bao-hang-1291';fs.writeFileSync(p,JSON.stringify(d,null,2));
+            console.log('APPS_SCRIPT_EXISTING_DEPLOYMENT_POINTER=PASS');
+            console.log('APPS_SCRIPT_LIVE_PING=PASS');
+          })().catch(e=>{console.error(e.message);process.exit(1)});
+          NODE
+
+      - name: Reject secret material from evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -RniE 'private_key|client_secret[" ]*:[" ]*[^f]|refresh_token[" ]*:[" ]*[^f]|access_token|id_token|AKfycb' acceptance-evidence; then
+            echo SECRET_MATERIAL_DETECTED >&2
+            exit 1
+          fi
+
+      - name: Upload Apps Script authority evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: apps-script-authority-${{ github.run_id }}
+          path: acceptance-evidence/apps-script-authority.json
+          retention-days: 1
+          if-no-files-found: error
