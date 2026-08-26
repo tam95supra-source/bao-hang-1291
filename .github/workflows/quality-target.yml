@@ -22,22 +22,51 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
           package-manager-cache: false
+
+      - name: Detect Android-impacting changes
+        id: scope
+        shell: bash
+        env:
+          EVENT_BEFORE: ${{ github.event.before }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          base="${PR_BASE_SHA:-${EVENT_BEFORE:-}}"
+          if [ -z "$base" ] || [ "$base" = '0000000000000000000000000000000000000000' ]; then
+            base="$(git rev-parse HEAD^)"
+          fi
+          git diff --name-only "$base" "$GITHUB_SHA" > "$RUNNER_TEMP/changed-files.txt"
+          cat "$RUNNER_TEMP/changed-files.txt"
+          if grep -Eq '^(app/|build\.gradle\.kts$|settings\.gradle\.kts$|gradle\.properties$)' "$RUNNER_TEMP/changed-files.txt"; then
+            echo 'android=true' >> "$GITHUB_OUTPUT"
+            echo 'ANDROID_SCOPE=CHANGED'
+          else
+            echo 'android=false' >> "$GITHUB_OUTPUT"
+            echo 'ANDROID_SCOPE=SKIP_WEB_ONLY'
+          fi
+
       - uses: actions/setup-java@v5
+        if: steps.scope.outputs.android == 'true'
         with:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v6
+        if: steps.scope.outputs.android == 'true'
         with:
           gradle-version: '8.9'
           cache-disabled: true
+
       - name: Build Web Admin
         run: |
           npm --prefix web-admin install --ignore-scripts --no-audit --no-fund --no-package-lock
           npm --prefix web-admin run build
+
       - name: Enforce Neon-only runtime and public-source security
         shell: bash
         run: |
@@ -53,7 +82,9 @@ jobs:
           grep -R -F 'ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech' web-admin/dist >/dev/null
           grep -F 'NEON_DATA_API' app/build.gradle.kts >/dev/null
           echo 'NEON_ONLY_SOURCE_GUARD=PASS'
+
       - name: Verify Android dependency graph and tests
+        if: steps.scope.outputs.android == 'true'
         shell: bash
         run: |
           set -euo pipefail
