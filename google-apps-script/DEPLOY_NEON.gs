@@ -149,14 +149,18 @@ function workerTick_(source) {
     props.setProperty('LAST_WORKER_AT_MS', String(Date.now()));
     const token = workerAdminIdToken_();
     const tick = neonRpc_('worker_tick_rpc', {}, token);
+
+    // Latency-sensitive transport must never sit behind Google Sheet export.
+    // A CLIENT_KICK is the foreground fast path: publish realtime/FCM first and
+    // leave bulk Sheet export + cleanup to adaptive/safety workers.
+    const realtime = drainRealtime_(token);
     const notifications = drainNotifications_(token);
     const pushes = drainPushes_(token);
-    const sheet = drainSheet_(token);
-    const realtime = drainRealtime_(token);
-    maybeCleanup_(token);
+    const sheet = source === 'CLIENT_KICK' ? {count:0,skipped:'CLIENT_KICK'} : drainSheet_(token);
+    if (source !== 'CLIENT_KICK') maybeCleanup_(token);
     const schedule = neonRpc_('worker_schedule_rpc', {p_realtime_enabled:true}, token);
     scheduleAdaptiveTrigger_(schedule && schedule.next_at ? String(schedule.next_at) : '');
-    return {ok:true,source:source,tick:tick,notifications:notifications,pushes:pushes,sheet:sheet,realtime:realtime,schedule:schedule};
+    return {ok:true,source:source,tick:tick,realtime:realtime,notifications:notifications,pushes:pushes,sheet:sheet,schedule:schedule};
   } finally {
     lock.releaseLock();
   }
