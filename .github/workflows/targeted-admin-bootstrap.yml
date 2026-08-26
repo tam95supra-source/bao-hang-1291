@@ -1,0 +1,95 @@
+name: Targeted Admin Bootstrap
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/targeted-admin-bootstrap-e2e.cjs'
+      - '.github/workflows/targeted-admin-bootstrap.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: targeted-admin-bootstrap-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  admin-bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      NEON_DATA_API: https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Scope guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
+          test "$GITHUB_REF_NAME" = 'main'
+          test "$NEON_DATA_API" = 'https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1'
+          echo "TARGET_SCOPE_GUARD=PASS sha=$(git rev-parse HEAD) production=https://bao-hang-1291.web.app"
+
+      - name: Zero-cost guard
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const crypto = require('crypto');
+          const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
+          if (!sa.client_email || !sa.private_key || sa.project_id !== 'bao-hang-1291') throw new Error('Firebase service account secret is incomplete or out of scope');
+          const enc = (v) => Buffer.from(typeof v === 'string' ? v : JSON.stringify(v)).toString('base64url');
+          async function accessToken() {
+            const now = Math.floor(Date.now() / 1000);
+            const header = enc({ alg: 'RS256', typ: 'JWT' });
+            const claim = enc({ iss: sa.client_email, scope: 'https://www.googleapis.com/auth/cloud-platform', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 900 });
+            const unsigned = `${header}.${claim}`;
+            const signature = crypto.sign('RSA-SHA256', Buffer.from(unsigned), sa.private_key).toString('base64url');
+            const res = await fetch('https://oauth2.googleapis.com/token', { method:'POST', headers:{'content-type':'application/x-www-form-urlencoded'}, body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion:`${unsigned}.${signature}`}), signal:AbortSignal.timeout(15000) });
+            if (!res.ok) throw new Error(`OAuth token HTTP ${res.status}`);
+            return (await res.json()).access_token;
+          }
+          (async () => {
+            const token = await accessToken();
+            const res = await fetch('https://cloudbilling.googleapis.com/v1/projects/bao-hang-1291/billingInfo', { headers:{Authorization:`Bearer ${token}`}, signal:AbortSignal.timeout(15000) });
+            if (!res.ok) throw new Error(`Cloud Billing read HTTP ${res.status}`);
+            const billing = await res.json();
+            if (billing.billingEnabled === true) throw new Error('COST_GUARD_STOP');
+            console.log('COST_GUARD=PASS billingEnabled=false');
+          })().catch((error) => { console.error(error.message); process.exitCode = 3; });
+          NODE
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install targeted E2E runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          E2E_DIR="$RUNNER_TEMP/target-admin-e2e"
+          mkdir -p "$E2E_DIR"
+          printf '{"private":true}' > "$E2E_DIR/package.json"
+          npm --prefix "$E2E_DIR" install firebase-admin@13.4.0 playwright-core@1.55.0 --ignore-scripts --no-audit --no-fund --no-package-lock
+          echo "E2E_DIR=$E2E_DIR" >> "$GITHUB_ENV"
+
+      - name: Targeted Admin bootstrap after reload
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          test -n "$CHROME_BIN"
+          NODE_PATH="$E2E_DIR/node_modules" CHROME_BIN="$CHROME_BIN" node scripts/targeted-admin-bootstrap-e2e.cjs
+
+      - name: Cleanup targeted runtime
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/target-admin-e2e"
