@@ -60,7 +60,10 @@ class BaoHangApplication : Application() {
                         runCatching {
                             when (topic) {
                                 "catalog" -> repository.syncCatalog()
-                                "issues" -> if (session.effectiveRole.canProcessIssues) repository.loadActiveIssues() else repository.loadMyIssues()
+                                // INVENT/ADMIN screens render api_issue_board_rpc, not active-issues.
+                                // Use the exact canonical board so resume recovery cannot report
+                                // success from stale local cache after a missed FCM delta.
+                                "issues" -> if (session.effectiveRole.canProcessIssues) repository.loadIssueBoard() else repository.loadMyIssues()
                                 "staff" -> repository.refreshProfile()
                                 "config" -> Unit
                             }
