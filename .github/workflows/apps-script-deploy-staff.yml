@@ -1,0 +1,81 @@
+name: Apps Script staff bridge deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/apps-script-deploy-staff.request'
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: bao-hang-apps-script-staff-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+      GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+      GAS_SCRIPT_ID: ${{ secrets.GAS_SCRIPT_ID }}
+      GAS_DEPLOYMENT_ID: ${{ secrets.GAS_DEPLOYMENT_ID }}
+      GOOGLE_SHEET_WEBHOOK_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Verify authority and deploy exact receiver
+        shell: bash
+        run: |
+          set -euo pipefail
+          node ops/apps_script_deploy_staff.mjs
+          git diff --check
+
+      - name: Commit canonical receiver normalization
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add google-apps-script/STAFF_SOURCE_BRIDGE_RECEIVER.gs
+          if ! git diff --cached --quiet; then
+            git commit -m 'fix(staff): keep Apps Script Sheet personnel as Picker'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+          echo "SOURCE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Verify no secret material in evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s acceptance-evidence/apps-script-deploy.json
+          if grep -RniE 'client_secret|refresh_token|access_token|private_key' acceptance-evidence; then
+            echo SECRET_MATERIAL_DETECTED >&2
+            exit 1
+          fi
+
+      - name: Upload Apps Script deployment evidence
+        id: evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: apps-script-deploy-${{ github.run_id }}
+          path: acceptance-evidence/apps-script-deploy.json
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Final marker
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.evidence.outputs.artifact-id }}
+        run: |
+          set -euo pipefail
+          test -n "$ARTIFACT_ID"
+          echo "APPS_SCRIPT_DEPLOY_ARTIFACT_ID=$ARTIFACT_ID"
+          echo "APPS_SCRIPT_DEPLOY_ACCEPTANCE=PASS"
