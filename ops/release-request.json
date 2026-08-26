@@ -1,8 +1,8 @@
 {
   "action": "publish",
   "channel": "beta",
-  "versionName": "1.6.14",
-  "versionCode": 23,
+  "versionName": "1.6.15",
+  "versionCode": 24,
   "mandatory": true,
-  "releaseNotes": "Beta 1.6.14: nút Báo lại đã có hàng hiển thị trên một dòng; tăng chiều cao và khoảng đệm phía dưới của 4 tab Người báo hàng để đường viền bo không che chữ; chuyển thao tác Báo thiếu của Người lấy hàng sang phản hồi UI tức thì, xóa SKU đã chọn và đưa ngay vào lịch sử với trạng thái đang đồng bộ trong khi request chạy nền; chuyển Có hàng/Cho SKIP của Người báo hàng sang optimistic UI, đổi tab và số lượng ngay khi xác nhận; nếu backend từ chối hoặc mất kết nối thì tự rollback UI và báo lỗi, không hiển thị thành công giả."
+  "releaseNotes": "Beta 1.6.15: sửa realtime Người báo hàng. Firestore first-marker/resume bắt buộc refresh canonical issue-board; pending FCM recovery dùng đúng issue-board; worker ưu tiên realtime/FCM trước Google Sheet và client kick không còn bị backlog Sheet/cleanup chặn."
 }
