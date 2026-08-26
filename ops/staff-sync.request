@@ -1,2 +1,2 @@
-requested_at=2026-08-26T10:20:00Z
-reason=reconcile_live_staff_source_502_rows_and_deactivate_missing_gsheet_profiles
+requested_at=2026-08-26T10:22:00Z
+reason=rerun_after_fixing_all_500_row_guards_and_fail_closed_proof
