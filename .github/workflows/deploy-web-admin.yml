@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: web-admin-deploy-${{ github.ref }}
+  group: bao-hang-1291-production-deploy
   cancel-in-progress: true
 
 permissions:
@@ -23,6 +23,8 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      deployed_sha: ${{ steps.deployed.outputs.deployed_sha }}
     env:
       NEON_DATA_API: https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1
       APPS_SCRIPT_WORKER_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
@@ -63,7 +65,7 @@ jobs:
             const claim = enc({ iss: sa.client_email, scope: 'https://www.googleapis.com/auth/cloud-platform', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 900 });
             const unsigned = `${header}.${claim}`;
             const signature = crypto.sign('RSA-SHA256', Buffer.from(unsigned), sa.private_key).toString('base64url');
-            const res = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: `${unsigned}.${signature}` }) });
+            const res = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth2:grant-type:jwt-bearer', assertion: `${unsigned}.${signature}` }) });
             if (!res.ok) throw new Error(`OAuth token HTTP ${res.status}`);
             return (await res.json()).access_token;
           }
@@ -139,6 +141,14 @@ jobs:
         shell: bash
         run: npx --yes firebase-tools@14.17.0 deploy --only hosting,firestore:rules --project bao-hang-1291 --non-interactive
 
+      - name: Record deployed SHA
+        id: deployed
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "deployed_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          echo "DEPLOYED_SHA=$GITHUB_SHA"
+
       - name: Verify live Web Admin
         shell: bash
         run: |
@@ -150,24 +160,19 @@ jobs:
           grep -qi '^x-content-type-options: nosniff' "$RUNNER_TEMP/web-headers.txt"
           echo 'WEB_ADMIN_LIVE_SMOKE=PASS'
 
-      - name: Verify full live login and realtime acceptance
-        if: github.event_name == 'workflow_dispatch'
-        shell: bash
-        env:
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-        run: |
-          set -euo pipefail
-          E2E_DIR="$RUNNER_TEMP/web-login-e2e"
-          mkdir -p "$E2E_DIR"
-          printf '{"private":true}' > "$E2E_DIR/package.json"
-          npm --prefix "$E2E_DIR" install firebase-admin@13.4.0 playwright-core@1.55.0 --ignore-scripts --no-audit --no-fund --no-package-lock
-          CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
-          test -n "$CHROME_BIN"
-          NODE_PATH="$E2E_DIR/node_modules" CHROME_BIN="$CHROME_BIN" node scripts/live-web-login-e2e.cjs
-
       - name: Cleanup credential files
         if: always()
         shell: bash
         run: |
           rm -f "$RUNNER_TEMP/firebase-sa.json" "$RUNNER_TEMP/web-index.html" "$RUNNER_TEMP/web-headers.txt" "$RUNNER_TEMP/neon-unauth.json"
-          rm -rf "$RUNNER_TEMP/web-login-e2e"
+
+  acceptance:
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: deploy
+    uses: ./.github/workflows/final-production-acceptance.yml
+    with:
+      expected_deployed_sha: ${{ needs.deploy.outputs.deployed_sha }}
+      production_url: https://bao-hang-1291.web.app
+      acceptance_mode: targeted
+    secrets:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
