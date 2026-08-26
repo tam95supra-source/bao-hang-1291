@@ -72,7 +72,6 @@ async function exchangeCustomToken(customToken) {
   if (!response.ok || !payload.idToken || !payload.refreshToken) {
     throw new Error(`CUSTOM_TOKEN_EXCHANGE_HTTP_${response.status}:${safe(payload?.error?.message)}`);
   }
-  if (payload.localId !== ADMIN_UID) throw new Error(`CUSTOM_TOKEN_UID_MISMATCH:${safe(payload.localId)}`);
   const meta = tokenMeta(payload.idToken);
   if (meta.iss !== `https://securetoken.google.com/${PROJECT}` || meta.aud !== PROJECT || meta.sub !== ADMIN_UID) {
     throw new Error(`CUSTOM_TOKEN_META_INVALID:${safe(JSON.stringify(meta))}`);
