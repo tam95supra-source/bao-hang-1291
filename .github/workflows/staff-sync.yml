@@ -2,6 +2,10 @@ name: Staff sync recovery — DỮ LIỆU THEO NGÀY
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/staff-sync.request'
 
 permissions:
   contents: write
