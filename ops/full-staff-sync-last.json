@@ -1,21 +1,21 @@
 {
-  "status": "PASS",
-  "source_count": 400,
-  "total_profiles": 401,
-  "active_gsheet": 400,
+  "status": "FAIL",
+  "source_count": 502,
+  "total_profiles": 910,
+  "active_gsheet": 501,
   "protected_admins": 1,
-  "created": 365,
-  "updated": 0,
-  "unchanged": 35,
-  "deactivated": 0,
-  "failed": 0,
-  "retries": 4,
-  "mismatch_count": 0,
+  "created": 181,
+  "updated": 85,
+  "unchanged": 235,
+  "deactivated": 405,
+  "failed": 1,
+  "retries": 30,
+  "mismatch_count": 130,
   "role_counts": {
-    "PICKER": 307,
-    "ADMIN_INVENT": 45,
-    "INVENT": 48,
-    "ADMIN": 1
+    "PICKER": 501,
+    "ADMIN": 1,
+    "ADMIN_INVENT": 1,
+    "INVENT": 1
   },
-  "error_summary": ""
+  "error_summary": "30319:WORKER_FIREBASE_ADMIN_400: {\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"EMAIL_EXISTS\",\n    \"errors\": [\n      {\n        \"message\": \"EMAIL_"
 }
