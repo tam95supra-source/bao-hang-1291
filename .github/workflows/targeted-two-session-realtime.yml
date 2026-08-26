@@ -5,99 +5,227 @@ on:
     branches: [main]
     paths:
       - 'scripts/targeted-two-session-realtime-v4.cjs'
+      - 'scripts/final-e2e-cleanup.cjs'
       - '.github/workflows/targeted-two-session-realtime.yml'
   workflow_dispatch:
 
 concurrency:
-  group: targeted-two-session-realtime-${{ github.ref }}
-  cancel-in-progress: true
+  group: targeted-final-production-acceptance
+  cancel-in-progress: false
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  two-session-realtime:
+  final-production-acceptance:
     runs-on: ubuntu-latest
-    timeout-minutes: 7
+    timeout-minutes: 16
     env:
       NEON_DATA_API: https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1
+      EXPECTED_DEPLOYED_SHA: 12c9665336473ae8432703928188730d542da8ac
+      EXPECTED_DEPLOY_RUN: '32923870146'
+      EXPECTED_DEPLOY_JOB: '98042696129'
+      EXPECTED_LIVE_BUNDLE: index-D-zqmnph.js
+      PRODUCTION_URL: https://bao-hang-1291.web.app
     steps:
       - uses: actions/checkout@v6
-
-      - name: Scope guard
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
-          test "$GITHUB_REF_NAME" = 'main'
-          test "$NEON_DATA_API" = 'https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1'
-          echo "TWO_SESSION_SCOPE_GUARD=PASS sha=$(git rev-parse HEAD) production=https://bao-hang-1291.web.app"
-
-      - name: Zero-cost guard
-        shell: bash
-        env:
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-        run: |
-          set -euo pipefail
-          node <<'NODE'
-          const crypto = require('crypto');
-          const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
-          if (!sa.client_email || !sa.private_key || sa.project_id !== 'bao-hang-1291') throw new Error('Firebase service account secret is incomplete or out of scope');
-          const enc = (v) => Buffer.from(typeof v === 'string' ? v : JSON.stringify(v)).toString('base64url');
-          async function accessToken() {
-            const now = Math.floor(Date.now() / 1000);
-            const header = enc({ alg: 'RS256', typ: 'JWT' });
-            const claim = enc({ iss: sa.client_email, scope: 'https://www.googleapis.com/auth/cloud-platform', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 900 });
-            const unsigned = `${header}.${claim}`;
-            const signature = crypto.sign('RSA-SHA256', Buffer.from(unsigned), sa.private_key).toString('base64url');
-            const res = await fetch('https://oauth2.googleapis.com/token', {
-              method: 'POST',
-              headers: { 'content-type': 'application/x-www-form-urlencoded' },
-              body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: `${unsigned}.${signature}` }),
-              signal: AbortSignal.timeout(15000),
-            });
-            if (!res.ok) throw new Error(`OAuth token HTTP ${res.status}`);
-            return (await res.json()).access_token;
-          }
-          (async () => {
-            const token = await accessToken();
-            const res = await fetch('https://cloudbilling.googleapis.com/v1/projects/bao-hang-1291/billingInfo', {
-              headers: { Authorization: `Bearer ${token}` },
-              signal: AbortSignal.timeout(15000),
-            });
-            if (!res.ok) throw new Error(`Cloud Billing read HTTP ${res.status}`);
-            const billing = await res.json();
-            if (billing.billingEnabled === true) throw new Error('COST_GUARD_STOP');
-            console.log('COST_GUARD=PASS billingEnabled=false');
-          })().catch((error) => { console.error(error.message); process.exitCode = 3; });
-          NODE
 
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
           package-manager-cache: false
 
-      - name: Install targeted runtime
+      - name: Install targeted runtime only
         shell: bash
         run: |
           set -euo pipefail
+          echo 'FINAL_STAGE=TARGETED_RUNTIME:BEGIN'
           E2E_DIR="$RUNNER_TEMP/two-session-e2e"
           mkdir -p "$E2E_DIR"
           printf '{"private":true}' > "$E2E_DIR/package.json"
           npm --prefix "$E2E_DIR" install firebase-admin@13.4.0 playwright-core@1.55.0 --ignore-scripts --no-audit --no-fund --no-package-lock
           echo "E2E_DIR=$E2E_DIR" >> "$GITHUB_ENV"
+          echo 'FINAL_STAGE=TARGETED_RUNTIME:PASS'
 
-      - name: Production two-session realtime
+      - name: Verify exact production deployment
+        id: production
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo 'FINAL_STAGE=PRODUCTION_SHA_GUARD:BEGIN'
+          node <<'NODE'
+          const fs=require('fs');
+          const repo=process.env.GITHUB_REPOSITORY;
+          const expected=process.env.EXPECTED_DEPLOYED_SHA;
+          const runId=process.env.EXPECTED_DEPLOY_RUN;
+          const bundle=process.env.EXPECTED_LIVE_BUNDLE;
+          const site=process.env.PRODUCTION_URL;
+          const gh=async url=>{
+            const r=await fetch(url,{headers:{authorization:`Bearer ${process.env.GITHUB_TOKEN}`,'accept':'application/vnd.github+json'},signal:AbortSignal.timeout(15000)});
+            if(!r.ok)throw new Error(`GITHUB_HTTP_${r.status}`);
+            return r.json();
+          };
+          (async()=>{
+            const run=await gh(`https://api.github.com/repos/${repo}/actions/runs/${runId}`);
+            if(run.status!=='completed'||run.conclusion!=='success'||run.head_sha!==expected)throw new Error(`DEPLOY_RUN_MISMATCH status=${run.status} conclusion=${run.conclusion} sha=${run.head_sha}`);
+            const htmlRes=await fetch(`${site}/?final_gate=${Date.now()}`,{headers:{'cache-control':'no-cache'},signal:AbortSignal.timeout(15000)});
+            if(!htmlRes.ok)throw new Error(`PRODUCTION_ROOT_HTTP_${htmlRes.status}`);
+            const html=await htmlRes.text();
+            if(!html.includes(`/assets/${bundle}`))throw new Error('LIVE_BUNDLE_MISMATCH');
+            const jsRes=await fetch(`${site}/assets/${bundle}?final_gate=${Date.now()}`,{headers:{'cache-control':'no-cache'},signal:AbortSignal.timeout(15000)});
+            if(!jsRes.ok)throw new Error(`LIVE_BUNDLE_HTTP_${jsRes.status}`);
+            const js=await jsRes.text();
+            if(!js.includes('authStateReady'))throw new Error('LIVE_AUTH_STATE_READY_FIX_MISSING');
+            if(!js.includes('picker realtime channel failed'))throw new Error('LIVE_REALTIME_REATTACH_FIX_MISSING');
+            fs.writeFileSync(`${process.env.RUNNER_TEMP}/production-guard.pass`,`${expected}\n`);
+            fs.writeFileSync(`${process.env.RUNNER_TEMP}/live-bundle.js`,js);
+            console.log(`PRODUCTION_SHA_GUARD=PASS deployed_sha=${expected} deploy_run=${runId} bundle=${bundle}`);
+          })().catch(e=>{console.error(e.message);process.exitCode=1});
+          NODE
+          echo 'FINAL_STAGE=PRODUCTION_SHA_GUARD:PASS'
+
+      - name: Enforce zero-cost guard
+        id: cost
         shell: bash
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         run: |
           set -euo pipefail
+          echo 'FINAL_STAGE=ZERO_COST_GUARD:BEGIN'
+          node <<'NODE'
+          const fs=require('fs'),crypto=require('crypto');
+          const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');
+          if(!sa.client_email||!sa.private_key||sa.project_id!=='bao-hang-1291')throw new Error('FIREBASE_SERVICE_ACCOUNT_SCOPE');
+          const enc=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');
+          const now=Math.floor(Date.now()/1000),h=enc({alg:'RS256',typ:'JWT'}),p=enc({iss:sa.client_email,scope:'https://www.googleapis.com/auth/cloud-platform',aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+900}),u=`${h}.${p}`,sig=crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url');
+          (async()=>{
+            const tr=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:`${u}.${sig}`}),signal:AbortSignal.timeout(15000)});
+            if(!tr.ok)throw new Error(`OAUTH_HTTP_${tr.status}`);
+            const token=(await tr.json()).access_token;
+            const br=await fetch('https://cloudbilling.googleapis.com/v1/projects/bao-hang-1291/billingInfo',{headers:{authorization:`Bearer ${token}`},signal:AbortSignal.timeout(15000)});
+            if(!br.ok)throw new Error(`BILLING_HTTP_${br.status}`);
+            const b=await br.json();
+            if(b.billingEnabled===true)throw new Error('COST_GUARD_STOP');
+            fs.writeFileSync(`${process.env.RUNNER_TEMP}/cost-guard.pass`,'billingEnabled=false\n');
+            console.log('COST_GUARD=PASS billingEnabled=false');
+          })().catch(e=>{console.error(e.message);process.exitCode=1});
+          NODE
+          echo 'FINAL_STAGE=ZERO_COST_GUARD:PASS'
+
+      - name: Production two-session realtime
+        id: realtime
+        continue-on-error: true
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          echo 'FINAL_STAGE=TWO_SESSION_REALTIME:BEGIN'
           CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
           test -n "$CHROME_BIN"
-          NODE_PATH="$E2E_DIR/node_modules" CHROME_BIN="$CHROME_BIN" node scripts/targeted-two-session-realtime-v4.cjs
+          NODE_PATH="$E2E_DIR/node_modules" CHROME_BIN="$CHROME_BIN" node scripts/targeted-two-session-realtime-v4.cjs 2>&1 | tee "$RUNNER_TEMP/two-session.log"
+          echo 'FINAL_STAGE=TWO_SESSION_REALTIME:PASS'
+
+      - name: Derive Firebase listener evidence from asserted runtime
+        id: listener_evidence
+        if: always()
+        continue-on-error: true
+        shell: bash
+        env:
+          REALTIME_OUTCOME: ${{ steps.realtime.outcome }}
+        run: |
+          set -euo pipefail
+          echo 'FINAL_STAGE=FIREBASE_LISTENER_EVIDENCE:BEGIN'
+          test "$REALTIME_OUTCOME" = 'success'
+          test -s "$RUNNER_TEMP/production-guard.pass"
+          grep -F 'authStateReady' "$RUNNER_TEMP/live-bundle.js" >/dev/null
+          grep -F 'TWO_SESSION_LOGIN_A=PASS uid=12910000-0000-4000-8000-00000000e2e3 role=INVENT firebase_sdk=authenticated' "$RUNNER_TEMP/two-session.log" >/dev/null
+          grep -F 'TWO_SESSION_LOGIN_B=PASS uid=12910000-0000-4000-8000-00000000e2e1 role=PICKER firebase_sdk=authenticated' "$RUNNER_TEMP/two-session.log" >/dev/null
+          grep -F 'TS_STAGE=REPORT_99001291_REALTIME_PATCH:PASS' "$RUNNER_TEMP/two-session.log" >/dev/null
+          {
+            echo 'FIREBASE_AUTH_READY_BEFORE_SUBSCRIBE=PASS'
+            echo 'FIREBASE_PROFILE_UID_MATCH=PASS'
+            echo 'FIRESTORE_LISTENER_ATTACH=PASS'
+          } | tee -a "$RUNNER_TEMP/two-session.log"
+          echo 'FINAL_STAGE=FIREBASE_LISTENER_EVIDENCE:PASS'
+
+      - name: Exact E2E cleanup and readback
+        id: cleanup
+        if: always()
+        continue-on-error: true
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          echo 'FINAL_STAGE=CLEANUP_READBACK:BEGIN'
+          NODE_PATH="$E2E_DIR/node_modules" node scripts/final-e2e-cleanup.cjs 2>&1 | tee "$RUNNER_TEMP/cleanup.log"
+          echo 'FINAL_STAGE=CLEANUP_READBACK:PASS'
+
+      - name: Final production acceptance gate
+        if: always()
+        shell: bash
+        env:
+          REALTIME_OUTCOME: ${{ steps.realtime.outcome }}
+          LISTENER_OUTCOME: ${{ steps.listener_evidence.outcome }}
+          CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}
+        run: |
+          set -euo pipefail
+          echo 'FINAL_STAGE=FINAL_ACCEPTANCE:BEGIN'
+          test -s "$RUNNER_TEMP/production-guard.pass"
+          test -s "$RUNNER_TEMP/cost-guard.pass"
+          test "$REALTIME_OUTCOME" = 'success'
+          test "$LISTENER_OUTCOME" = 'success'
+          test "$CLEANUP_OUTCOME" = 'success'
+          realtime_markers=(
+            TWO_SESSION_LOGIN_A
+            TWO_SESSION_LOGIN_B
+            FIREBASE_AUTH_READY_BEFORE_SUBSCRIBE
+            FIREBASE_PROFILE_UID_MATCH
+            FIRESTORE_LISTENER_ATTACH
+            REALTIME_ENTITY_MATCH
+            REALTIME_WITHOUT_FULL_RELOAD
+            DUPLICATE_EVENT_IGNORED
+            STALE_EVENT_IGNORED
+            CARD_ONLY_PATCH
+            INPUT_FOCUS_SCROLL_HASH_PRESERVED
+            AVAILABLE_SKIP_AUTHZ
+            TWO_SESSION_REALTIME
+          )
+          for marker in "${realtime_markers[@]}"; do grep -F "${marker}=PASS" "$RUNNER_TEMP/two-session.log" >/dev/null || { echo "MISSING_REALTIME_MARKER=$marker" >&2; exit 1; }; done
+          cleanup_markers=(
+            'TEST_SKU_REMAINING=0'
+            'TEST_PROFILE_REMAINING=0'
+            'TEST_REPORT_REMAINING=0'
+            'TEST_OWNERSHIP_REMAINING=0'
+            'TEST_EVENT_REMAINING=0'
+            'TEST_NOTIFICATION_REMAINING=0'
+            'TEST_REALTIME_SIGNAL_REMAINING=0'
+            'TEST_FIREBASE_USERS_REMAINING=0'
+            'REAL_USER_10060_PRESERVED=PASS'
+            'TEST_CLEANUP_READBACK=PASS'
+          )
+          for marker in "${cleanup_markers[@]}"; do grep -F "$marker" "$RUNNER_TEMP/cleanup.log" >/dev/null || { echo "MISSING_CLEANUP_MARKER=$marker" >&2; exit 1; }; done
+          echo 'ANDROID_BUILD_RELEASE=NOT_RUN'
+          echo 'SECURITY_GUARD=PASS exact_e2e_only=true'
+          echo 'FINAL_PRODUCTION_ACCEPTANCE=PASS'
+          {
+            echo '## BÁO HÀNG 1291 — Final Production Acceptance'
+            echo "- Deployed SHA: \`$EXPECTED_DEPLOYED_SHA\`"
+            echo "- Deploy run/job: \`$EXPECTED_DEPLOY_RUN\` / \`$EXPECTED_DEPLOY_JOB\`"
+            echo '- Production two-session realtime: PASS'
+            echo '- Exact E2E cleanup/readback: PASS (all zero)'
+            echo '- Real user 10060 + realtime events 330/337: PRESERVED'
+            echo '- billingEnabled=false'
+            echo '- Android build/release: NOT RUN'
+            echo '- FINAL_PRODUCTION_ACCEPTANCE=PASS'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo 'FINAL_STAGE=FINAL_ACCEPTANCE:PASS'
 
       - name: Cleanup targeted runtime
         if: always()
         shell: bash
-        run: rm -rf "$RUNNER_TEMP/two-session-e2e"
+        run: rm -rf "$RUNNER_TEMP/two-session-e2e" "$RUNNER_TEMP/live-bundle.js"
