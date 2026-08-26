@@ -1,11 +1,11 @@
 {
   "channel": "beta",
-  "versionCode": 23,
-  "versionName": "1.6.14",
-  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.14/bao-hang-1291-beta-1.6.14.apk",
-  "sha256": "4292cb4ddfd22a8ae809b2a32b3d7474b2f6ebb1d696cb6639bd6ec0c5535696",
+  "versionCode": 24,
+  "versionName": "1.6.15",
+  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.15/bao-hang-1291-beta-1.6.15.apk",
+  "sha256": "bfb83e706f555fd97cc8a52b143ab6a8ae4310e2ff21a6626ba67e860434a9e7",
   "mandatory": true,
-  "releaseNotes": "Beta 1.6.14: nút Báo lại đã có hàng hiển thị trên một dòng; tăng chiều cao và khoảng đệm phía dưới của 4 tab Người báo hàng để đường viền bo không che chữ; chuyển thao tác Báo thiếu của Người lấy hàng sang phản hồi UI tức thì, xóa SKU đã chọn và đưa ngay vào lịch sử với trạng thái đang đồng bộ trong khi request chạy nền; chuyển Có hàng/Cho SKIP của Người báo hàng sang optimistic UI, đổi tab và số lượng ngay khi xác nhận; nếu backend từ chối hoặc mất kết nối thì tự rollback UI và báo lỗi, không hiển thị thành công giả.",
+  "releaseNotes": "Beta 1.6.15: sửa realtime Người báo hàng. Firestore first-marker/resume bắt buộc refresh canonical issue-board; pending FCM recovery dùng đúng issue-board; worker ưu tiên realtime/FCM trước Google Sheet và client kick không còn bị backlog Sheet/cleanup chặn.",
   "signerSha256": "2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0",
-  "sourceSha": "f3d0326585762e8a609287c7de1b1eae13d9a600"
+  "sourceSha": "7353d64900cedcdfdbfc5943e99af5ea1684cbb6"
 }
