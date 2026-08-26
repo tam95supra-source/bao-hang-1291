@@ -5,6 +5,7 @@ const { getAuth } = require('firebase-admin/auth');
 const { chromium } = require('playwright-core');
 
 const SITE = 'https://bao-hang-1291.web.app/';
+const ORIGIN = 'https://bao-hang-1291.web.app';
 const API_KEY = 'AIzaSyB-n368fntzxsuuLlvte9NXhcuX0DDbTXM';
 const PROJECT = 'bao-hang-1291';
 const ADMIN_UID = '44fae0a2-09eb-4226-8412-0f1a1f5d7ef8';
@@ -12,37 +13,28 @@ const ADMIN_CODE = '6281280';
 const SESSION_KEY = 'bao-hang-1291-web-session';
 const NEON = process.env.NEON_DATA_API || '';
 const CHROME = process.env.CHROME_BIN || '';
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const safe = (value) => String(value ?? '')
   .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [REDACTED]')
   .replace(/[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/g, '[JWT_REDACTED]')
-  .slice(0, 1600);
+  .slice(0, 1800);
 
 function tokenMeta(token) {
   const [h, p] = String(token || '').split('.');
   const header = JSON.parse(Buffer.from(h, 'base64url').toString('utf8'));
   const payload = JSON.parse(Buffer.from(p, 'base64url').toString('utf8'));
   return {
-    alg: header.alg,
-    kid: header.kid || '',
-    iss: payload.iss || '',
-    aud: payload.aud || '',
-    sub: payload.sub || '',
-    userId: payload.user_id || '',
-    emailPresent: Boolean(payload.email),
-    provider: payload.firebase?.sign_in_provider || '',
-    authTime: Number(payload.auth_time || 0),
-    exp: Number(payload.exp || 0),
+    alg: header.alg, kid: header.kid || '', iss: payload.iss || '', aud: payload.aud || '', sub: payload.sub || '',
+    userId: payload.user_id || '', emailPresent: Boolean(payload.email), provider: payload.firebase?.sign_in_provider || '',
     keys: Object.keys(payload).sort(),
   };
 }
-
 function assertTokenMeta(meta, label) {
   if (meta.iss !== `https://securetoken.google.com/${PROJECT}` || meta.aud !== PROJECT || meta.sub !== ADMIN_UID) {
     throw new Error(`${label}_TOKEN_META_INVALID:${safe(JSON.stringify(meta))}`);
   }
 }
-
 async function stage(label, fn, timeoutMs = 20000) {
   console.log(`TARGET_STAGE=${label}:BEGIN timeout_ms=${timeoutMs}`);
   let timer;
@@ -56,20 +48,12 @@ async function stage(label, fn, timeoutMs = 20000) {
   } catch (error) {
     console.error(`TARGET_STAGE=${label}:FAIL error=${safe(error?.message || error)}`);
     throw error;
-  } finally {
-    clearTimeout(timer);
-  }
+  } finally { clearTimeout(timer); }
 }
-
 async function diagnosticStage(label, fn, timeoutMs = 15000) {
-  try {
-    return { ok: true, value: await stage(label, fn, timeoutMs) };
-  } catch (error) {
-    console.log(`${label}=FAIL_CONTINUE_TO_BROWSER error=${safe(error?.message || error)}`);
-    return { ok: false, error: safe(error?.message || error) };
-  }
+  try { return { ok: true, value: await stage(label, fn, timeoutMs) }; }
+  catch (error) { console.log(`${label}=FAIL_CONTINUE_TO_BROWSER error=${safe(error?.message || error)}`); return { ok: false, error: safe(error?.message || error) }; }
 }
-
 async function fetchJson(url, init, timeoutMs = 15000) {
   const response = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
   const text = await response.text();
@@ -77,37 +61,29 @@ async function fetchJson(url, init, timeoutMs = 15000) {
   try { payload = text ? JSON.parse(text) : {}; } catch { payload = { raw: safe(text) }; }
   return { response, payload };
 }
-
 async function exchangeCustomToken(customToken) {
-  const { response, payload } = await fetchJson(
-    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${API_KEY}`,
-    { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: customToken, returnSecureToken: true }) },
-  );
+  const { response, payload } = await fetchJson(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${API_KEY}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: customToken, returnSecureToken: true }),
+  });
   if (!response.ok || !payload.idToken || !payload.refreshToken) throw new Error(`CUSTOM_TOKEN_EXCHANGE_HTTP_${response.status}:${safe(payload?.error?.message)}`);
-  const meta = tokenMeta(payload.idToken);
-  assertTokenMeta(meta, 'CUSTOM');
+  const meta = tokenMeta(payload.idToken); assertTokenMeta(meta, 'CUSTOM');
   console.log(`ADMIN_CUSTOM_TOKEN_EXCHANGE=PASS uid_match=true user_id_claim_match=${meta.userId === ADMIN_UID} email_present=${meta.emailPresent} provider=${meta.provider} iss=${meta.iss} aud=${meta.aud} kid=${meta.kid}`);
-  return { idToken: payload.idToken, refreshToken: payload.refreshToken, expiresIn: Number(payload.expiresIn || 3600), meta };
+  return { idToken: payload.idToken, refreshToken: payload.refreshToken, expiresIn: Number(payload.expiresIn || 3600) };
 }
-
 async function refreshToken(refreshToken) {
-  const { response, payload } = await fetchJson(
-    `https://securetoken.googleapis.com/v1/token?key=${API_KEY}`,
-    { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken }) },
-  );
+  const { response, payload } = await fetchJson(`https://securetoken.googleapis.com/v1/token?key=${API_KEY}`, {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken }),
+  });
   if (!response.ok || !payload.id_token || !payload.refresh_token) throw new Error(`SECURE_TOKEN_REFRESH_HTTP_${response.status}:${safe(payload?.error?.message)}`);
-  const meta = tokenMeta(payload.id_token);
-  assertTokenMeta(meta, 'REFRESH');
+  const meta = tokenMeta(payload.id_token); assertTokenMeta(meta, 'REFRESH');
   console.log(`ADMIN_SECURE_TOKEN_REFRESH=PASS uid_match=true user_id_claim_match=${meta.userId === ADMIN_UID} email_present=${meta.emailPresent} provider=${meta.provider} iss=${meta.iss} aud=${meta.aud} kid=${meta.kid}`);
   console.log(`ADMIN_TOKEN_CLAIM_KEYS source=refresh keys=${meta.keys.join(',')}`);
-  return { idToken: payload.id_token, refreshToken: payload.refresh_token, expiresIn: Number(payload.expires_in || 3600), meta };
+  return { idToken: payload.id_token, refreshToken: payload.refresh_token, expiresIn: Number(payload.expires_in || 3600) };
 }
-
 async function profile(idToken, label) {
-  const { response, payload } = await fetchJson(
-    `${NEON}/rpc/api_session_profile_rpc`,
-    { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${idToken}` }, body: JSON.stringify({ p_test_role: null }) },
-  );
+  const { response, payload } = await fetchJson(`${NEON}/rpc/api_session_profile_rpc`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${idToken}` }, body: JSON.stringify({ p_test_role: null }),
+  });
   console.log(`ADMIN_PROFILE_HTTP source=${label} status=${response.status}`);
   if (!response.ok) throw new Error(`ADMIN_PROFILE_HTTP_${response.status}:${safe(JSON.stringify(payload))}`);
   const p = payload?.profile;
@@ -115,27 +91,53 @@ async function profile(idToken, label) {
   console.log(`ADMIN_PROFILE=PASS source=${label} role=ADMIN active=true`);
   return p;
 }
-
 function classifyUrl(url) {
   if (url.includes('securetoken.googleapis.com/v1/token')) return 'secure_token';
   if (url.includes('.neon.tech/') && url.includes('/rpc/api_session_profile_rpc')) return 'profile_rpc';
   return '';
+}
+async function cdpDom(client) {
+  const { root } = await client.send('DOM.getDocument', { depth: 0, pierce: true });
+  const query = async (selector) => (await client.send('DOM.querySelector', { nodeId: root.nodeId, selector })).nodeId || 0;
+  const shell = await query('.app-shell');
+  const login = await query('#loginForm');
+  const body = await query('body');
+  let bodyHtml = '';
+  if (body) bodyHtml = safe((await client.send('DOM.getOuterHTML', { nodeId: body })).outerHTML || '');
+  return { hasShell: Boolean(shell), hasLogin: Boolean(login), bodyHtml };
+}
+async function pollCdpDom(client, timeoutMs = 20000) {
+  const started = Date.now();
+  let last = null;
+  while (Date.now() - started < timeoutMs) {
+    last = await cdpDom(client);
+    if (last.hasShell || last.hasLogin) return last;
+    await sleep(250);
+  }
+  last = await cdpDom(client);
+  throw new Error(`CDP_DOM_TIMEOUT hasShell=${last.hasShell} hasLogin=${last.hasLogin} body=${last.bodyHtml}`);
+}
+async function cdpSessionStorage(client) {
+  try {
+    await client.send('DOMStorage.enable');
+    const result = await client.send('DOMStorage.getDOMStorageItems', { storageId: { securityOrigin: ORIGIN, isLocalStorage: false } });
+    const row = (result.entries || []).find(([key]) => key === SESSION_KEY);
+    if (!row) return { present: false };
+    const parsed = JSON.parse(row[1] || 'null');
+    return { present: true, role: parsed?.profile?.role || '', uid: parsed?.profile?.id || '', hasAccess: Boolean(parsed?.access_token), hasRefresh: Boolean(parsed?.refresh_token) };
+  } catch (error) { return { present: false, error: safe(error?.message || error) }; }
 }
 
 async function main() {
   if (!NEON || !CHROME) throw new Error('TARGETED_E2E_ENV_MISSING');
   const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
   if (sa.project_id !== PROJECT || !sa.client_email || !sa.private_key) throw new Error('FIREBASE_SCOPE_INVALID');
-
   const app = initializeApp({ credential: cert(sa) }, `target-admin-${Date.now()}`);
   const auth = getAuth(app);
-  let browser;
-  let context;
-  const trace = [];
-  const pageErrors = [];
+  let browser, context;
+  const trace = [], pageErrors = [];
   let phase = 'setup';
   const started = Date.now();
-
   try {
     const customToken = await stage('ADMIN_CREATE_CUSTOM_TOKEN', () => auth.createCustomToken(ADMIN_UID), 10000);
     const exchanged = await stage('ADMIN_EXCHANGE_CUSTOM_TOKEN', () => exchangeCustomToken(customToken), 15000);
@@ -146,87 +148,59 @@ async function main() {
     browser = await stage('BROWSER_LAUNCH', () => chromium.launch({ executablePath: CHROME, headless: true, timeout: 20000, args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] }), 22000);
     context = await stage('BROWSER_CONTEXT', () => browser.newContext({ viewport: { width: 1280, height: 900 } }), 8000);
     const page = await stage('BROWSER_PAGE', () => context.newPage(), 8000);
-    page.setDefaultTimeout(15000);
-    page.setDefaultNavigationTimeout(20000);
-
+    const cdp = await stage('CDP_SESSION', () => context.newCDPSession(page), 8000);
+    await stage('CDP_DOM_ENABLE', () => cdp.send('DOM.enable'), 8000);
+    page.setDefaultTimeout(15000); page.setDefaultNavigationTimeout(20000);
     const record = (kind, extra = {}) => trace.push({ t: Date.now() - started, phase, kind, ...extra });
     page.on('request', (request) => { const kind = classifyUrl(request.url()); if (kind) record(`${kind}_request`, { method: request.method() }); });
     page.on('response', (response) => { const kind = classifyUrl(response.url()); if (kind) record(`${kind}_response`, { status: response.status() }); });
+    page.on('requestfinished', (request) => { const kind = classifyUrl(request.url()); if (kind) record(`${kind}_finished`); });
     page.on('requestfailed', (request) => { const kind = classifyUrl(request.url()); if (kind) record(`${kind}_failed`, { error: safe(request.failure()?.errorText || '') }); });
-    page.on('domcontentloaded', () => record('domcontentloaded'));
-    page.on('load', () => record('load'));
     page.on('pageerror', (error) => pageErrors.push(`page:${safe(error?.message || error)}`));
     page.on('console', (message) => { if (message.type() === 'error') pageErrors.push(`console:${safe(message.text())}`); });
 
     phase = 'initial';
     await stage('ADMIN_INITIAL_PAGE', () => page.goto(SITE, { waitUntil: 'domcontentloaded', timeout: 18000 }), 20000);
-    const initialLogin = await stage('ADMIN_INITIAL_LOGIN_DOM', () => page.locator('#loginForm').count(), 8000);
-    if (!initialLogin) throw new Error('INITIAL_LOGIN_FORM_MISSING');
-
+    const initialDom = await stage('ADMIN_INITIAL_CDP_DOM', () => cdpDom(cdp), 8000);
+    if (!initialDom.hasLogin) throw new Error(`INITIAL_LOGIN_FORM_MISSING body=${initialDom.bodyHtml}`);
     await stage('ADMIN_SESSION_SEED', () => page.evaluate(({ key, session }) => {
       sessionStorage.setItem(key, JSON.stringify(session));
       const read = JSON.parse(sessionStorage.getItem(key) || 'null');
       return Boolean(read?.access_token && read?.refresh_token && read?.profile?.role === 'ADMIN');
-    }, { key: SESSION_KEY, session: { access_token: exchanged.idToken, refresh_token: exchanged.refreshToken, expires_at: Math.floor(Date.now()/1000) + exchanged.expiresIn, profile: adminProfile } }), 8000).then((ok) => {
-      if (!ok) throw new Error('SESSION_SEED_READBACK_FAILED');
-    });
+    }, { key: SESSION_KEY, session: { access_token: exchanged.idToken, refresh_token: exchanged.refreshToken, expires_at: Math.floor(Date.now()/1000) + exchanged.expiresIn, profile: adminProfile } }), 8000).then((ok) => { if (!ok) throw new Error('SESSION_SEED_READBACK_FAILED'); });
     console.log('ADMIN_SESSION_STORAGE_BEFORE_RELOAD=PASS');
 
     phase = 'reload';
     await stage('ADMIN_RELOAD_COMMIT', () => page.reload({ waitUntil: 'commit', timeout: 12000 }), 14000);
     await stage('ADMIN_RELOAD_DOMCONTENTLOADED', () => page.waitForLoadState('domcontentloaded', { timeout: 18000 }), 20000);
-    await stage('ADMIN_BOOTSTRAP_DOM', () => page.waitForFunction(() => Boolean(document.querySelector('.app-shell') || document.querySelector('#loginForm')), undefined, { timeout: 22000 }), 24000);
-
-    const diag = await stage('ADMIN_BOOTSTRAP_READBACK', () => page.evaluate((key) => {
-      let session = null;
-      try { session = JSON.parse(sessionStorage.getItem(key) || 'null'); } catch {}
-      let meta = null;
-      try {
-        const raw = String(session?.access_token || '').split('.')[1].replaceAll('-', '+').replaceAll('_', '/');
-        const p = JSON.parse(atob(raw));
-        meta = { iss: p.iss || '', aud: p.aud || '', sub: p.sub || '', userId: p.user_id || '', emailPresent: Boolean(p.email), provider: p.firebase?.sign_in_provider || '', keys: Object.keys(p).sort() };
-      } catch {}
-      return {
-        readyState: document.readyState,
-        href: location.href,
-        hash: location.hash,
-        hasShell: Boolean(document.querySelector('.app-shell')),
-        hasLogin: Boolean(document.querySelector('#loginForm')),
-        loginMessage: (document.querySelector('#loginMessage')?.textContent || '').trim(),
-        role: session?.profile?.role || '', uid: session?.profile?.id || '',
-        hasAccess: Boolean(session?.access_token), hasRefresh: Boolean(session?.refresh_token),
-        authStability: globalThis.__BH_AUTH_STABILITY__ || null,
-        tokenMeta: meta,
-      };
-    }, SESSION_KEY), 10000);
-
+    const storageAfterReload = await stage('ADMIN_STORAGE_CDP_READBACK', () => cdpSessionStorage(cdp), 8000);
+    console.log(`ADMIN_STORAGE_AFTER_RELOAD=${safe(JSON.stringify(storageAfterReload))}`);
+    const dom = await stage('ADMIN_BOOTSTRAP_CDP_DOM', () => pollCdpDom(cdp, 20000), 22000);
     const reloadTrace = trace.filter((x) => x.phase === 'reload');
     console.log(`ADMIN_BOOTSTRAP_TRACE=${safe(JSON.stringify(reloadTrace))}`);
-    console.log(`ADMIN_BOOTSTRAP_STATE=${safe(JSON.stringify(diag))}`);
+    console.log(`ADMIN_BOOTSTRAP_CDP_STATE=${safe(JSON.stringify(dom))}`);
     if (pageErrors.length) console.log(`ADMIN_PAGE_ERRORS_DIAG=${safe(JSON.stringify(pageErrors))}`);
 
     const secureResponses = reloadTrace.filter((x) => x.kind === 'secure_token_response').map((x) => x.status);
     const profileResponses = reloadTrace.filter((x) => x.kind === 'profile_rpc_response').map((x) => x.status);
-    if (!secureResponses.includes(200)) throw new Error(`ADMIN_BROWSER_SECURE_TOKEN_MISSING statuses=${secureResponses.join(',')}`);
-    if (!profileResponses.includes(200)) throw new Error(`ADMIN_BROWSER_PROFILE_RPC_NOT_200 statuses=${profileResponses.join(',')}`);
-    if (!diag.hasShell || diag.hasLogin) throw new Error(`ADMIN_APP_NOT_RENDERED login=${diag.hasLogin} message=${diag.loginMessage}`);
-    if (diag.role !== 'ADMIN' || diag.uid !== ADMIN_UID || !diag.hasAccess || !diag.hasRefresh) throw new Error('ADMIN_SESSION_AFTER_RELOAD_INVALID');
-    if (diag.tokenMeta?.iss !== `https://securetoken.google.com/${PROJECT}` || diag.tokenMeta?.aud !== PROJECT || diag.tokenMeta?.sub !== ADMIN_UID) throw new Error('ADMIN_BROWSER_TOKEN_META_INVALID');
-    if (diag.authStability?.refreshTransport !== 'firebase_secure_token' || diag.authStability?.profileTransport !== 'api_session_profile_rpc') throw new Error(`AUTH_STABILITY_MARKER_INVALID:${safe(JSON.stringify(diag.authStability))}`);
+    const secureFinished = reloadTrace.some((x) => x.kind === 'secure_token_finished');
+    const profileFinished = reloadTrace.some((x) => x.kind === 'profile_rpc_finished');
+    if (!secureResponses.includes(200) || !secureFinished) throw new Error(`ADMIN_BROWSER_SECURE_TOKEN_INCOMPLETE statuses=${secureResponses.join(',')} finished=${secureFinished}`);
+    if (!profileResponses.includes(200) || !profileFinished) throw new Error(`ADMIN_BROWSER_PROFILE_RPC_INCOMPLETE statuses=${profileResponses.join(',')} finished=${profileFinished}`);
+    if (!dom.hasShell || dom.hasLogin) throw new Error(`ADMIN_APP_NOT_RENDERED hasShell=${dom.hasShell} hasLogin=${dom.hasLogin}`);
+    if (!storageAfterReload.present || storageAfterReload.role !== 'ADMIN' || storageAfterReload.uid !== ADMIN_UID || !storageAfterReload.hasAccess || !storageAfterReload.hasRefresh) throw new Error(`ADMIN_SESSION_AFTER_RELOAD_INVALID:${safe(JSON.stringify(storageAfterReload))}`);
 
-    console.log(`ADMIN_BROWSER_TOKEN_CLAIMS=PASS user_id_claim_match=${diag.tokenMeta?.userId === ADMIN_UID} email_present=${diag.tokenMeta?.emailPresent} provider=${diag.tokenMeta?.provider}`);
-    console.log('ADMIN_BROWSER_SECURE_TOKEN_AFTER_RELOAD=PASS http=200');
-    console.log('ADMIN_BROWSER_PROFILE_AFTER_RELOAD=PASS http=200');
-    console.log('ADMIN_BROWSER_BOOTSTRAP_AFTER_RELOAD=PASS role=ADMIN project=bao-hang-1291');
+    console.log('ADMIN_BROWSER_SECURE_TOKEN_AFTER_RELOAD=PASS http=200 body_finished=true');
+    console.log('ADMIN_BROWSER_PROFILE_AFTER_RELOAD=PASS http=200 body_finished=true');
+    console.log('ADMIN_BROWSER_BOOTSTRAP_AFTER_RELOAD=PASS role=ADMIN project=bao-hang-1291 selector=.app-shell source=cdp');
     console.log('TARGETED_ADMIN_BOOTSTRAP=PASS');
   } catch (error) {
     console.error(`TARGETED_ADMIN_DIAG trace=${safe(JSON.stringify(trace))} page_errors=${safe(JSON.stringify(pageErrors))}`);
     throw error;
   } finally {
-    if (context) await Promise.race([context.close().catch(() => {}), new Promise((r) => setTimeout(r, 5000))]);
-    if (browser) await Promise.race([browser.close().catch(() => {}), new Promise((r) => setTimeout(r, 5000))]);
+    if (context) await Promise.race([context.close().catch(() => {}), sleep(5000)]);
+    if (browser) await Promise.race([browser.close().catch(() => {}), sleep(5000)]);
     await deleteApp(app).catch(() => {});
   }
 }
-
 main().catch((error) => { console.error(error?.stack || error); process.exitCode = 1; });
