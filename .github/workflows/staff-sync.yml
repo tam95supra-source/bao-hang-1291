@@ -57,7 +57,7 @@ jobs:
               role='ADMIN_INVENT' if 'DIEU PHOI' in p else ('INVENT' if 'INVENT' in d or 'INVENT' in p else 'PICKER')
               by[key]={'employee_code':code,'full_name':name,'contractor':contractor,'source_position':position,'department':department,'role':role}
           staff=[by[k] for k in sorted(by)]
-          if not (350 <= len(staff) <= 500): raise SystemExit('FULL_SOURCE_COUNT_SUSPICIOUS:'+str(len(staff)))
+          if not (350 <= len(staff) <= 2000): raise SystemExit('FULL_SOURCE_COUNT_SUSPICIOUS:'+str(len(staff)))
           json.dump({'staff':staff},open(os.environ['RUNNER_TEMP']+'/staff/source.json','w'),ensure_ascii=False)
           print('SOURCE_COUNT='+str(len(staff)))
           PY

@@ -12,8 +12,9 @@ const BH_STAFF_BRIDGE = Object.freeze({
   HMAC_MAX_SKEW_MS: 300000,
   MAX_DELTA_ROWS: 50,
   MIN_FULL_SOURCE_ROWS: 300,
-  MAX_FULL_SOURCE_ROWS: 500,
-  MAX_DEACTIVATE_PER_EVENT: 20,
+  MAX_FULL_SOURCE_ROWS: 2000,
+  MAX_DEACTIVATE_PER_EVENT: 100,
+  MAX_DEACTIVATE_RATIO: 0.25,
   REPLAY_TTL_SECONDS: 21600
 });
 
@@ -179,12 +180,17 @@ function staffSourceBridgeReconcileStructure_(reason) {
     else unchanged++;
   });
 
-  const missing = profiles.filter(function(p) {
-    const code = String(p.employee_code || '').trim();
-    return p && p.active === true && String(p.source_kind || '') === 'GSHEET' && !p.protected_account && String(p.role || '') !== 'ADMIN' && code && !seen[code.toLowerCase()];
+  const activeSourceProfiles = profiles.filter(function(p) {
+    return p && p.active === true && String(p.source_kind || '') === 'GSHEET' && !p.protected_account && String(p.role || '') !== 'ADMIN';
   });
-  if (missing.length > BH_STAFF_BRIDGE.MAX_DEACTIVATE_PER_EVENT) {
-    throw new Error('STAFF_BRIDGE_MASS_DEACTIVATE_GUARD:' + missing.length);
+  const missing = activeSourceProfiles.filter(function(p) {
+    const code = String(p.employee_code || '').trim();
+    return code && !seen[code.toLowerCase()];
+  });
+  const ratioLimit = Math.max(20, Math.ceil(activeSourceProfiles.length * BH_STAFF_BRIDGE.MAX_DEACTIVATE_RATIO));
+  const deactivateLimit = Math.min(BH_STAFF_BRIDGE.MAX_DEACTIVATE_PER_EVENT, ratioLimit);
+  if (missing.length > deactivateLimit) {
+    throw new Error('STAFF_BRIDGE_MASS_DEACTIVATE_GUARD:' + missing.length + ':limit=' + deactivateLimit);
   }
   missing.forEach(function(p) {
     if (staffSourceBridgeDeactivateProfile_(p, token, 'STAFF_SOURCE_MISSING_' + String(reason || 'STRUCTURE').slice(0,40))) deactivated++;

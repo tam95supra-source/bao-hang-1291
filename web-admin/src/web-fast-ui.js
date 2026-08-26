@@ -16,6 +16,8 @@ const state = {
   board: null,
   loading: false,
   queued: false,
+  withdrawnLoaded: false,
+  withdrawnLoading: false,
   role: '',
 };
 
@@ -133,7 +135,7 @@ function ensureShell() {
       <button data-fast-bucket="claimed" class="active">Đang xử lý <b data-fast-count="claimed">0</b></button>
       <button data-fast-bucket="open">Chờ nhận <b data-fast-count="open">0</b></button>
       <button data-fast-bucket="recent">Gần đây <b data-fast-count="recent">0</b></button>
-      <button data-fast-bucket="withdrawn">Đã thu hồi <b data-fast-count="withdrawn">0</b></button>
+      <button data-fast-bucket="withdrawn">Đã thu hồi <b data-fast-count="withdrawn">—</b></button>
     </div>
     <div class="fast-workspace">
       <div class="fast-list" id="fastList" aria-live="polite"></div>
@@ -145,6 +147,7 @@ function ensureShell() {
     state.bucket = button.dataset.fastBucket;
     $$('#fastEvents [data-fast-bucket]').forEach((b) => b.classList.toggle('active', b === button));
     reconcile();
+    if (state.bucket === 'withdrawn') void loadWithdrawn();
   }));
   $('#fastList').addEventListener('click', (event) => {
     const row = event.target.closest('[data-fast-select]');
@@ -284,7 +287,9 @@ async function handleDetailAction(event) {
 function updateCounts() {
   for (const key of ['claimed','open','recent','withdrawn']) {
     const el = $(`[data-fast-count="${key}"]`);
-    if (el) el.textContent = String(state.board?.[key]?.length || 0);
+    if (!el) continue;
+    if (key === 'withdrawn' && !state.withdrawnLoaded) el.textContent = '—';
+    else el.textContent = String(state.board?.[key]?.length || 0);
   }
 }
 
@@ -299,25 +304,45 @@ function reconcile() {
   renderDetail();
 }
 
+async function loadWithdrawn() {
+  if (state.withdrawnLoading) return;
+  state.withdrawnLoading = true;
+  try {
+    const data = await api('withdrawn-board');
+    state.board = { ...(state.board || {}), withdrawn: data.withdrawn || [] };
+    state.withdrawnLoaded = true;
+    if (state.bucket === 'withdrawn') reconcile();
+    else updateCounts();
+  } catch (error) {
+    if (state.bucket === 'withdrawn') {
+      const list = $('#fastList');
+      if (list) list.innerHTML = `<div class="message" data-type="error">${esc(error?.message || String(error))}</div>`;
+    }
+  } finally {
+    state.withdrawnLoading = false;
+  }
+}
+
 async function loadBoard(force = false) {
   if (state.loading) { state.queued = true; return; }
   state.loading = true;
   ensureShell();
   try {
-    const [main, withdrawn] = await Promise.all([
-      api('issue-board'),
-      api('withdrawn-board').catch(() => ({ withdrawn: [] })),
-    ]);
-    state.board = { ...main, withdrawn: withdrawn.withdrawn || [] };
+    const main = await api('issue-board');
+    state.board = { ...main, withdrawn: state.board?.withdrawn || [] };
     if (!force && state.bucket === 'claimed' && !(state.board.claimed || []).length && (state.board.open || []).length) state.bucket = 'open';
     $$('#fastEvents [data-fast-bucket]').forEach((b) => b.classList.toggle('active', b.dataset.fastBucket === state.bucket));
     reconcile();
+    if (state.bucket === 'withdrawn') void loadWithdrawn();
   } catch (error) {
     const list = $('#fastList');
     if (list && !state.board) list.innerHTML = `<div class="message" data-type="error">${esc(error?.message || String(error))}</div>`;
   } finally {
     state.loading = false;
-    if (state.queued) { state.queued = false; queueMicrotask(() => loadBoard(true)); }
+    if (state.queued) {
+      state.queued = false;
+      setTimeout(() => loadBoard(true), 120);
+    }
   }
 }
 
@@ -343,8 +368,13 @@ function enhanceStaticUi() {
   if (roleNode && roleLabel && roleNode.textContent !== roleLabel) roleNode.textContent = roleLabel;
 }
 
+let enhanceFrame = 0;
 const observer = new MutationObserver(() => {
-  enhanceStaticUi();
+  if (enhanceFrame) return;
+  enhanceFrame = requestAnimationFrame(() => {
+    enhanceFrame = 0;
+    enhanceStaticUi();
+  });
 });
 observer.observe(document.documentElement, { childList: true, subtree: true });
 
