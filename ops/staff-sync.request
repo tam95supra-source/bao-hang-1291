@@ -1,2 +1,2 @@
-requested_at=2026-08-26T10:22:00Z
-reason=rerun_after_fixing_all_500_row_guards_and_fail_closed_proof
+requested_at=2026-08-26T10:36:30Z
+reason=correct_exact_set_reconcile_gsheet_picker_contract_and_adopt_orphan_auth
