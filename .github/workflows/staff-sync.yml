@@ -67,6 +67,7 @@ jobs:
           PY
 
       - name: Reconcile Firebase Auth and Neon only when manually requested
+        id: reconcile
         shell: bash
         env:
           STAFF_SOURCE_JSON: ${{ runner.temp }}/staff/source.json
@@ -78,8 +79,15 @@ jobs:
       - name: Record sanitized recovery proof
         if: always()
         shell: bash
+        env:
+          RECONCILE_OUTCOME: ${{ steps.reconcile.outcome }}
         run: |
           set -euo pipefail
+          if [ "${RECONCILE_OUTCOME:-}" != 'success' ]; then
+            if ! test -s ops/full-staff-sync-last.json || ! jq -e '.status == "FAIL"' ops/full-staff-sync-last.json >/dev/null 2>&1; then
+              printf '{"status":"FAIL","error_summary":"reconcile_step_failed"}\n' > ops/full-staff-sync-last.json
+            fi
+          fi
           test -s ops/full-staff-sync-last.json || printf '{"status":"FAIL","error_summary":"workflow_failed_before_proof"}\n' > ops/full-staff-sync-last.json
           cat ops/full-staff-sync-last.json
           git config user.name 'github-actions[bot]'
