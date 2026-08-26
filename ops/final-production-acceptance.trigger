@@ -1,4 +1,4 @@
 expected_deployed_sha=12c9665336473ae8432703928188730d542da8ac
 production_url=https://bao-hang-1291.web.app
 acceptance_mode=targeted
-triggered_for=current-production-acceptance
+triggered_for=current-production-acceptance-v2
