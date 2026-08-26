@@ -9,7 +9,7 @@ const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');
 const workerUrl=String(process.env.GOOGLE_SHEET_WEBHOOK_URL||'');
 if(sa.project_id!==PROJECT)throw new Error('PROJECT_SCOPE_MISMATCH');
 if(!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(workerUrl))throw new Error('WORKER_SCOPE_MISMATCH');
-if(!Array.isArray(source.staff)||source.staff.length<1||source.staff.length>500)throw new Error('SOURCE_COUNT_INVALID');
+if(!Array.isArray(source.staff)||source.staff.length<1||source.staff.length>2000)throw new Error('SOURCE_COUNT_INVALID');
 
 const gcfg=JSON.parse(fs.readFileSync('app/google-services.json','utf8'));
 const apiKey=gcfg.client?.[0]?.api_key?.[0]?.current_key;
