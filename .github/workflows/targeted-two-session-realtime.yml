@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'scripts/targeted-two-session-realtime.cjs'
+      - 'scripts/targeted-two-session-realtime-v4.cjs'
       - '.github/workflows/targeted-two-session-realtime.yml'
   workflow_dispatch:
 
@@ -95,7 +95,7 @@ jobs:
           set -euo pipefail
           CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
           test -n "$CHROME_BIN"
-          NODE_PATH="$E2E_DIR/node_modules" CHROME_BIN="$CHROME_BIN" node scripts/targeted-two-session-realtime.cjs
+          NODE_PATH="$E2E_DIR/node_modules" CHROME_BIN="$CHROME_BIN" node scripts/targeted-two-session-realtime-v4.cjs
 
       - name: Cleanup targeted runtime
         if: always()
