@@ -44,6 +44,10 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  NEON_DATA_API: https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1
+  E2E_RUN_MARKER: e2e-final-${{ github.run_id }}-${{ github.run_attempt }}
+
 jobs:
   verify_production:
     name: verify-production
@@ -91,13 +95,7 @@ jobs:
           node <<'NODE'
           const expected=process.env.EXPECTED_SHA,site=process.env.PRODUCTION_URL.replace(/\/$/,'');
           const get=u=>fetch(u,{headers:{'cache-control':'no-cache'},signal:AbortSignal.timeout(15000)});
-          (async()=>{
-            let verified=false,method='';
-            const mr=await get(`${site}/__deployed_sha.txt?gate=${Date.now()}`);
-            if(mr.ok){const live=(await mr.text()).trim();if(/^[0-9a-f]{40}$/.test(live)){if(live!==expected)throw new Error(`DEPLOYED_SHA_MISMATCH live=${live} expected=${expected}`);verified=true;method='hosting-marker';}}
-            if(!verified){const r=await get('https://api.github.com/repos/tam95supra-source/bao-hang-1291/actions/workflows/deploy-web-admin.yml/runs?branch=main&status=success&per_page=20');if(!r.ok)throw new Error(`DEPLOY_HISTORY_HTTP_${r.status}`);const latest=(await r.json()).workflow_runs?.[0];if(!latest||latest.head_sha!==expected)throw new Error(`LATEST_SUCCESSFUL_DEPLOY_SHA_MISMATCH latest=${latest?.head_sha||'none'} expected=${expected}`);method=`deploy-run:${latest.id}`;}
-            const root=await get(`${site}/?gate=${Date.now()}`);if(!root.ok)throw new Error(`PRODUCTION_ROOT_HTTP_${root.status}`);const html=await root.text();const m=html.match(/(?:src|href)=["'](\/assets\/[^"']+\.js)["']/);if(!m)throw new Error('PRODUCTION_BUNDLE_NOT_FOUND');const jr=await get(`${site}${m[1]}?gate=${Date.now()}`);if(!jr.ok)throw new Error(`PRODUCTION_BUNDLE_HTTP_${jr.status}`);const js=await jr.text();if(!js.includes('authStateReady'))throw new Error('LIVE_AUTH_STATE_READY_FIX_MISSING');if(!js.includes('picker realtime channel failed'))throw new Error('LIVE_REALTIME_REATTACH_FIX_MISSING');console.log(`PRODUCTION_SHA_GUARD=PASS deployed_sha=${expected} verification=${method}`);
-          })().catch(e=>{console.error(e.message);process.exitCode=1});
+          (async()=>{const mr=await get(`${site}/__deployed_sha.txt?gate=${Date.now()}`);if(!mr.ok)throw new Error(`DEPLOYED_SHA_MARKER_HTTP_${mr.status}`);const live=(await mr.text()).trim();if(live!==expected)throw new Error(`DEPLOYED_SHA_MISMATCH live=${live} expected=${expected}`);const root=await get(`${site}/?gate=${Date.now()}`);if(!root.ok)throw new Error(`PRODUCTION_ROOT_HTTP_${root.status}`);console.log(`PRODUCTION_SHA_GUARD=PASS deployed_sha=${expected}`)})().catch(e=>{console.error(e.message);process.exitCode=1});
           NODE
           echo FINAL_STAGE=PRODUCTION_SHA_GUARD:PASS
 
@@ -107,11 +105,9 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         run: |
           set -euo pipefail
-          echo FINAL_STAGE=ZERO_COST_GUARD:BEGIN
           node <<'NODE'
-          const crypto=require('crypto'),sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');if(!sa.client_email||!sa.private_key||sa.project_id!=='bao-hang-1291')throw new Error('FIREBASE_SERVICE_ACCOUNT_SCOPE');const enc=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');const now=Math.floor(Date.now()/1000),h=enc({alg:'RS256',typ:'JWT'}),p=enc({iss:sa.client_email,scope:'https://www.googleapis.com/auth/cloud-platform',aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+900}),u=`${h}.${p}`,s=crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url');(async()=>{const tr=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:`${u}.${s}`}),signal:AbortSignal.timeout(15000)});if(!tr.ok)throw new Error(`OAUTH_HTTP_${tr.status}`);const token=(await tr.json()).access_token;const br=await fetch('https://cloudbilling.googleapis.com/v1/projects/bao-hang-1291/billingInfo',{headers:{authorization:`Bearer ${token}`},signal:AbortSignal.timeout(15000)});if(!br.ok)throw new Error(`BILLING_HTTP_${br.status}`);const b=await br.json();if(b.billingEnabled===true)throw new Error('COST_GUARD_STOP');console.log('COST_GUARD=PASS billingEnabled=false')})().catch(e=>{console.error(e.message);process.exitCode=1});
+          const crypto=require('crypto'),sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');if(!sa.client_email||!sa.private_key||sa.project_id!=='bao-hang-1291')throw new Error('FIREBASE_SERVICE_ACCOUNT_SCOPE');const enc=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');const now=Math.floor(Date.now()/1000),h=enc({alg:'RS256',typ:'JWT'}),p=enc({iss:sa.client_email,scope:'https://www.googleapis.com/auth/cloud-platform',aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+900}),u=`${h}.${p}`,sig=crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url');(async()=>{const tr=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth-grant-type:jwt-bearer',assertion:`${u}.${sig}`}),signal:AbortSignal.timeout(15000)});if(!tr.ok){const body=await tr.text();if(!body.includes('unsupported_grant_type'))throw new Error(`OAUTH_HTTP_${tr.status}`);const retry=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:`${u}.${sig}`}),signal:AbortSignal.timeout(15000)});if(!retry.ok)throw new Error(`OAUTH_HTTP_${retry.status}`);const access=(await retry.json()).access_token;return check(access)}const access=(await tr.json()).access_token;return check(access);async function check(access){const br=await fetch('https://cloudbilling.googleapis.com/v1/projects/bao-hang-1291/billingInfo',{headers:{authorization:`Bearer ${access}`},signal:AbortSignal.timeout(15000)});if(!br.ok)throw new Error(`BILLING_HTTP_${br.status}`);const b=await br.json();if(b.billingEnabled===true)throw new Error('COST_GUARD_STOP');console.log('COST_GUARD=PASS billingEnabled=false')}})().catch(e=>{console.error(e.message);process.exitCode=1});
           NODE
-          echo FINAL_STAGE=ZERO_COST_GUARD:PASS
 
       - name: Mark verify PASS
         id: done
@@ -119,16 +115,55 @@ jobs:
           echo verify_pass=true >> "$GITHUB_OUTPUT"
           echo VERIFY_PRODUCTION=PASS
 
+  preflight_cleanup:
+    name: preflight-cleanup
+    needs: verify_production
+    if: needs.verify_production.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      preflight_pass: ${{ steps.done.outputs.preflight_pass }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install cleanup runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          D="$RUNNER_TEMP/preflight-runtime"; mkdir -p "$D"; printf '{"private":true}' > "$D/package.json"
+          npm --prefix "$D" install firebase-admin@13.4.0 --ignore-scripts --no-audit --no-fund --no-package-lock
+          echo "NODE_PATH=$D/node_modules" >> "$GITHUB_ENV"
+      - name: Inventory and cleanup previous exact E2E fixtures
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          echo FINAL_STAGE=PREFLIGHT_CLEANUP:BEGIN
+          node scripts/final-e2e-manifest.cjs "$RUNNER_TEMP/preflight-manifest.json"
+          node scripts/final-e2e-cleanup.cjs "$RUNNER_TEMP/preflight-manifest.json" 2>&1 | tee "$RUNNER_TEMP/preflight-cleanup.log"
+          grep -F 'TEST_CLEANUP_READBACK=PASS' "$RUNNER_TEMP/preflight-cleanup.log" >/dev/null
+          echo FINAL_STAGE=PREFLIGHT_CLEANUP:PASS
+      - name: Mark preflight PASS
+        id: done
+        run: |
+          echo preflight_pass=true >> "$GITHUB_OUTPUT"
+          echo PREFLIGHT_CLEANUP=PASS
+      - name: Cleanup temp runtime
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/preflight-runtime" "$RUNNER_TEMP/preflight-manifest.json"
+
   targeted_two_session:
     name: targeted-two-session
-    needs: verify_production
-    if: needs.verify_production.result == 'success' && needs.verify_production.outputs.acceptance_mode == 'targeted'
+    needs: [verify_production, preflight_cleanup]
+    if: needs.verify_production.result == 'success' && needs.preflight_cleanup.result == 'success' && needs.verify_production.outputs.acceptance_mode == 'targeted'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
       markers_pass: ${{ steps.markers.outputs.markers_pass }}
-    env:
-      NEON_DATA_API: https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v7
@@ -139,17 +174,30 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          E2E_DIR="$RUNNER_TEMP/two-session-e2e"; mkdir -p "$E2E_DIR"; printf '{"private":true}' > "$E2E_DIR/package.json"
-          npm --prefix "$E2E_DIR" install firebase-admin@13.4.0 playwright-core@1.55.0 --ignore-scripts --no-audit --no-fund --no-package-lock
-          echo "E2E_DIR=$E2E_DIR" >> "$GITHUB_ENV"
-          echo FINAL_STAGE=TARGETED_RUNTIME:PASS
+          D="$RUNNER_TEMP/two-session-e2e"; mkdir -p "$D"; printf '{"private":true}' > "$D/package.json"
+          npm --prefix "$D" install firebase-admin@13.4.0 playwright-core@1.55.0 --ignore-scripts --no-audit --no-fund --no-package-lock
+          echo "E2E_DIR=$D" >> "$GITHUB_ENV"
+          echo "NODE_PATH=$D/node_modules" >> "$GITHUB_ENV"
       - name: Seed exact Neon E2E fixtures
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: node scripts/final-e2e-seed.cjs
+      - name: Create base cleanup manifest
         shell: bash
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         run: |
           set -euo pipefail
-          NODE_PATH="$E2E_DIR/node_modules" node scripts/final-e2e-seed.cjs
+          mkdir -p .e2e-manifest/base
+          node scripts/final-e2e-manifest.cjs .e2e-manifest/base/cleanup-manifest.json
+      - name: Upload base cleanup manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-manifest-base-${{ github.run_id }}
+          path: .e2e-manifest/base/cleanup-manifest.json
+          retention-days: 1
+          if-no-files-found: error
       - name: Run production two-session A to B realtime
         shell: bash
         env:
@@ -161,53 +209,91 @@ jobs:
           FINAL_HARNESS="$RUNNER_TEMP/final-two-session.cjs"
           node scripts/prepare-final-harness.cjs scripts/targeted-two-session-realtime-v4.cjs "$FINAL_HARNESS"
           node --check "$FINAL_HARNESS"
-          NODE_PATH="$E2E_DIR/node_modules" CHROME_BIN="$CHROME_BIN" node "$FINAL_HARNESS" 2>&1 | tee "$RUNNER_TEMP/two-session.log"
+          CHROME_BIN="$CHROME_BIN" node "$FINAL_HARNESS" 2>&1 | tee "$RUNNER_TEMP/two-session.log"
           echo FINAL_STAGE=TWO_SESSION_REALTIME:PASS
+      - name: Snapshot final exact cleanup manifest
+        if: always()
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          mkdir -p .e2e-manifest/final
+          node scripts/final-e2e-manifest.cjs .e2e-manifest/final/cleanup-manifest.json
+      - name: Upload final cleanup manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-manifest-final-${{ github.run_id }}
+          path: .e2e-manifest/final/cleanup-manifest.json
+          retention-days: 1
+          if-no-files-found: error
       - name: Assert targeted markers
         id: markers
         shell: bash
         run: |
           set -euo pipefail
-          markers=(TWO_SESSION_LOGIN_A TWO_SESSION_LOGIN_B FIREBASE_AUTH_READY_BEFORE_SUBSCRIBE FIREBASE_PROFILE_UID_MATCH FIRESTORE_LISTENER_ATTACH A_TO_B_REALTIME REALTIME_ENTITY_MATCH REALTIME_WITHOUT_FULL_RELOAD DUPLICATE_EVENT_IGNORED STALE_EVENT_IGNORED CARD_ONLY_PATCH INPUT_FOCUS_SCROLL_HASH_PRESERVED AVAILABLE_SKIP_AUTHZ TWO_SESSION_REALTIME)
+          markers=(TWO_SESSION_LOGIN_A TWO_SESSION_LOGIN_B FIREBASE_AUTH_READY_BEFORE_SUBSCRIBE FIREBASE_PROFILE_UID_MATCH FIRESTORE_LISTENER_ATTACH BACKEND_ENTITY_READBACK INVENT_EXACT_ENTITY_RENDER A_TO_B_REALTIME REALTIME_ENTITY_MATCH REALTIME_WITHOUT_FULL_RELOAD DUPLICATE_EVENT_IGNORED STALE_EVENT_IGNORED CARD_ONLY_PATCH INPUT_FOCUS_SCROLL_HASH_PRESERVED AVAILABLE_SKIP_AUTHZ TWO_SESSION_REALTIME)
           for m in "${markers[@]}"; do grep -F "${m}=PASS" "$RUNNER_TEMP/two-session.log" >/dev/null || { echo "MISSING_REALTIME_MARKER=$m" >&2; exit 1; }; done
           if grep -Ei 'AUTH_REQUIRED|not owner|not_owner' "$RUNNER_TEMP/two-session.log" | grep -vE 'auth_required=false|not_owner=false' >/dev/null; then echo FORBIDDEN_AUTH_ERROR_PRESENT >&2; exit 1; fi
           echo markers_pass=true >> "$GITHUB_OUTPUT"
           echo TARGETED_TWO_SESSION_MARKERS=PASS
       - name: Cleanup targeted runtime
         if: always()
-        run: rm -rf "$RUNNER_TEMP/two-session-e2e" "$RUNNER_TEMP/final-two-session.cjs"
+        run: rm -rf "$RUNNER_TEMP/two-session-e2e" "$RUNNER_TEMP/final-two-session.cjs" .e2e-manifest
 
   cleanup_readback:
     name: cleanup-readback
-    needs: [verify_production, targeted_two_session]
+    needs: [verify_production, preflight_cleanup, targeted_two_session]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       cleanup_pass: ${{ steps.markers.outputs.cleanup_pass }}
-    env:
-      NEON_DATA_API: https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
           package-manager-cache: false
+      - name: Download final cleanup manifest
+        id: final_manifest
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-manifest-final-${{ github.run_id }}
+          path: ${{ runner.temp }}/manifest-final
+      - name: Download base cleanup manifest fallback
+        id: base_manifest
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-manifest-base-${{ github.run_id }}
+          path: ${{ runner.temp }}/manifest-base
+      - name: Select cleanup manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "$RUNNER_TEMP/manifest-final/cleanup-manifest.json" ]; then p="$RUNNER_TEMP/manifest-final/cleanup-manifest.json";
+          elif [ -f "$RUNNER_TEMP/manifest-base/cleanup-manifest.json" ]; then p="$RUNNER_TEMP/manifest-base/cleanup-manifest.json";
+          else echo CLEANUP_MANIFEST_ARTIFACT_MISSING >&2; exit 1; fi
+          echo "E2E_CLEANUP_MANIFEST=$p" >> "$GITHUB_ENV"
+          echo CLEANUP_MANIFEST_SELECTED=PASS
       - name: Install cleanup runtime
         shell: bash
         run: |
           set -euo pipefail
-          E2E_DIR="$RUNNER_TEMP/cleanup-e2e"; mkdir -p "$E2E_DIR"; printf '{"private":true}' > "$E2E_DIR/package.json"
-          npm --prefix "$E2E_DIR" install firebase-admin@13.4.0 --ignore-scripts --no-audit --no-fund --no-package-lock
-          echo "NODE_PATH=$E2E_DIR/node_modules" >> "$GITHUB_ENV"
-      - name: Exact cleanup and readback
+          D="$RUNNER_TEMP/cleanup-e2e"; mkdir -p "$D"; printf '{"private":true}' > "$D/package.json"
+          npm --prefix "$D" install firebase-admin@13.4.0 --ignore-scripts --no-audit --no-fund --no-package-lock
+          echo "NODE_PATH=$D/node_modules" >> "$GITHUB_ENV"
+      - name: Exact manifest cleanup and readback
         shell: bash
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         run: |
           set -euo pipefail
           echo FINAL_STAGE=CLEANUP_READBACK:BEGIN
-          node scripts/final-e2e-cleanup-retry.cjs 2>&1 | tee "$RUNNER_TEMP/cleanup.log"
+          node scripts/final-e2e-cleanup.cjs "$E2E_CLEANUP_MANIFEST" 2>&1 | tee "$RUNNER_TEMP/cleanup.log"
           echo FINAL_STAGE=CLEANUP_READBACK:PASS
       - name: Assert cleanup markers
         id: markers
@@ -220,11 +306,11 @@ jobs:
           echo CLEANUP_READBACK_MARKERS=PASS
       - name: Cleanup temp runtime
         if: always()
-        run: rm -rf "$RUNNER_TEMP/cleanup-e2e"
+        run: rm -rf "$RUNNER_TEMP/cleanup-e2e" "$RUNNER_TEMP/manifest-final" "$RUNNER_TEMP/manifest-base"
 
   final_gate:
     name: final-gate
-    needs: [verify_production, targeted_two_session, cleanup_readback]
+    needs: [verify_production, preflight_cleanup, targeted_two_session, cleanup_readback]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -234,6 +320,8 @@ jobs:
         env:
           VERIFY_RESULT: ${{ needs.verify_production.result }}
           VERIFY_PASS: ${{ needs.verify_production.outputs.verify_pass }}
+          PREFLIGHT_RESULT: ${{ needs.preflight_cleanup.result }}
+          PREFLIGHT_PASS: ${{ needs.preflight_cleanup.outputs.preflight_pass }}
           TARGET_RESULT: ${{ needs.targeted_two_session.result }}
           TARGET_MARKERS: ${{ needs.targeted_two_session.outputs.markers_pass }}
           CLEANUP_RESULT: ${{ needs.cleanup_readback.result }}
@@ -244,16 +332,18 @@ jobs:
           set -euo pipefail
           echo FINAL_STAGE=FINAL_ACCEPTANCE:BEGIN
           if [ "$VERIFY_RESULT" != success ] || [ "$VERIFY_PASS" != true ]; then echo "FINAL_GATE_VERIFY_FAIL result=$VERIFY_RESULT marker=$VERIFY_PASS" >&2; exit 1; fi
+          if [ "$PREFLIGHT_RESULT" != success ] || [ "$PREFLIGHT_PASS" != true ]; then echo "FINAL_GATE_PREFLIGHT_FAIL result=$PREFLIGHT_RESULT marker=$PREFLIGHT_PASS" >&2; exit 1; fi
           if [ "$TARGET_RESULT" != success ] || [ "$TARGET_MARKERS" != true ]; then echo "FINAL_GATE_TARGET_FAIL result=$TARGET_RESULT marker=$TARGET_MARKERS" >&2; exit 1; fi
           if [ "$CLEANUP_RESULT" != success ] || [ "$CLEANUP_PASS" != true ]; then echo "FINAL_GATE_CLEANUP_FAIL result=$CLEANUP_RESULT marker=$CLEANUP_PASS" >&2; exit 1; fi
           echo ANDROID_BUILD_RELEASE=NOT_RUN
-          echo SECURITY_GUARD=PASS exact_e2e_only=true
+          echo SECURITY_GUARD=PASS exact_e2e_manifest=true
           echo FINAL_PRODUCTION_ACCEPTANCE=PASS
           {
             echo '## BÁO HÀNG 1291 — Final Production Acceptance'
             echo "- Production: $PRODUCTION_URL"
             echo "- Deployed SHA: \`$DEPLOYED_SHA\`"
             echo '- verify-production: PASS'
+            echo '- preflight-cleanup: PASS'
             echo '- targeted-two-session: PASS'
             echo '- cleanup/readback: PASS (all zero)'
             echo '- REAL_USER_10060_PRESERVED=PASS'
