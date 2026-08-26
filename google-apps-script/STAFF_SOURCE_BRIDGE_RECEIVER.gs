@@ -275,12 +275,6 @@ function staffSourceBridgeParseRow_(row) {
 
 function staffSourceBridgeRole_(position, department, code) {
   if (String(code) === BH_PROTECTED_ADMIN_CODE) return 'ADMIN';
-  function fold(v) {
-    return String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/Đ/g,'D').replace(/đ/g,'d').toUpperCase().trim();
-  }
-  const p = fold(position), d = fold(department);
-  if (p.indexOf('DIEU PHOI') >= 0) return 'ADMIN_INVENT';
-  if (p.indexOf('INVENT') >= 0 || d.indexOf('INVENT') >= 0) return 'INVENT';
   return 'PICKER';
 }
 
