@@ -309,9 +309,9 @@ function scheduleLiveRefresh(kind) {
   if (document.hidden) return;
   clearTimeout(state.refreshTimer);
   state.refreshTimer = setTimeout(() => {
-    if (kind === 'catalog' && ['sku','overview','picker'].includes(state.activeTab)) renderTab();
-    if (kind === 'staff' && ['users','overview'].includes(state.activeTab)) renderTab();
-    if (kind === 'issue' && ['events','overview','picker'].includes(state.activeTab)) renderTab();
+    if (kind === 'catalog' && ['sku','overview','picker'].includes(state.activeTab)) void renderTab();
+    if (kind === 'staff' && ['users','overview'].includes(state.activeTab)) void renderTab();
+    if (kind === 'issue' && ['events','overview','picker'].includes(state.activeTab)) void renderTab();
   }, 220);
 }
 function setRealtimeHealth(value, kind = '') {
@@ -367,7 +367,7 @@ function ensureFallbackPolling() {
   if (state.fallbackTimer || document.hidden || !state.session) return;
   state.fallbackTimer = setInterval(() => {
     if (document.hidden) return;
-    if (['events','picker','sku','overview','users'].includes(state.activeTab)) renderTab();
+    if (['events','picker','sku','overview','users'].includes(state.activeTab)) void renderTab();
   }, 30_000);
 }
 document.addEventListener('visibilitychange', () => {
