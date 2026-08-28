@@ -72,6 +72,7 @@ class MainActivity : AppCompatActivity() {
     private var inventRefresh: (() -> Unit)? = null
     private var inventDeltaRefresh: ((RealtimeSignalBus.Signal) -> Unit)? = null
     private var pickerRefresh: (() -> Unit)? = null
+    private var pickerDeltaRefresh: ((RealtimeSignalBus.Signal) -> Unit)? = null
 
     private data class PendingPickerReport(val item: SkuItem, val reportedAt: String)
     private data class PendingInventAction(val issue: StockIssue, val targetStatus: IssueStatus, val changedAt: String)
@@ -88,7 +89,7 @@ class MainActivity : AppCompatActivity() {
                     when (currentScreen) {
                         SCREEN_INVENT -> inventDeltaRefresh?.invoke(signal) ?: inventRefresh?.invoke() ?: showInventBoard()
                         SCREEN_PICKER -> {
-                            pickerRefresh?.invoke()
+                            pickerDeltaRefresh?.invoke(signal) ?: pickerRefresh?.invoke()
                             lifecycleScope.launch { checkPendingAlerts() }
                         }
                     }
@@ -249,7 +250,10 @@ class MainActivity : AppCompatActivity() {
             inventRefresh = null
             inventDeltaRefresh = null
         }
-        if (screen != SCREEN_PICKER) pickerRefresh = null
+        if (screen != SCREEN_PICKER) {
+            pickerRefresh = null
+            pickerDeltaRefresh = null
+        }
         container.removeAllViews()
         updateBackButton()
         val scroll = ScrollView(this).apply { isFillViewport = true }
@@ -273,7 +277,10 @@ class MainActivity : AppCompatActivity() {
     private fun fixedPage(screen: String, title: String = ""): LinearLayout {
         currentScreen = screen
         if (screen != SCREEN_INVENT) inventRefresh = null
-        if (screen != SCREEN_PICKER) pickerRefresh = null
+        if (screen != SCREEN_PICKER) {
+            pickerRefresh = null
+            pickerDeltaRefresh = null
+        }
         container.removeAllViews()
         updateBackButton()
         val root = LinearLayout(this).apply {
@@ -933,6 +940,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
         pickerRefresh = { loadMyIssues(recent) }
+        pickerDeltaRefresh = { signal ->
+            if (signal.entityId.isNotBlank()) loadMyIssues(recent, signal.entityId)
+            else loadMyIssues(recent)
+        }
         pickerRefresh?.invoke()
         input.requestFocus()
     }
@@ -966,7 +977,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun loadMyIssues(target: LinearLayout) {
+    private fun loadMyIssues(target: LinearLayout, patchIssueId: String? = null) {
     lifecycleScope.launch {
         runCatching { app.repository.loadMyIssues() }
             .onSuccess { issues ->
@@ -975,6 +986,61 @@ class MainActivity : AppCompatActivity() {
                 val visibleIssues = issues.filter { issue ->
                     isTodayReport(issue.reportedAt) || issue.status.isOpenBucket
                 }
+
+                // Foreground Invent confirmation: mutate only the matching Picker
+                // card. Input text, focus, scroll position and all other cards stay
+                // untouched. Full reconcile remains a recovery path only.
+                if (!patchIssueId.isNullOrBlank()) {
+                    val issue = visibleIssues.firstOrNull { it.id == patchIssueId }
+                    val row = target.findViewWithTag<LinearLayout>("picker_issue:${patchIssueId}")
+                    if (issue != null && row != null) {
+                        val (fillColor, strokeColor) = when {
+                            issue.status == IssueStatus.AVAILABLE -> getColor(R.color.green_50) to getColor(R.color.green_600)
+                            issue.status == IssueStatus.SKIP_ALLOWED -> getColor(R.color.red_50) to getColor(R.color.red_600)
+                            issue.status.isOpenBucket -> getColor(R.color.amber_50) to getColor(R.color.amber_500)
+                            else -> getColor(R.color.surface_subtle) to getColor(R.color.border)
+                        }
+                        row.background = GradientDrawable().apply {
+                            shape = GradientDrawable.RECTANGLE
+                            cornerRadius = dp(7).toFloat()
+                            setColor(fillColor)
+                            setStroke(dp(1), strokeColor)
+                        }
+                        val statusText = when {
+                            issue.status == IssueStatus.AVAILABLE && issue.restoredAvailable -> "INVENT CẬP NHẬT LẠI CÓ HÀNG"
+                            issue.status == IssueStatus.AVAILABLE -> "ĐÃ CÓ HÀNG"
+                            issue.status.isOpenBucket -> "ĐANG XỬ LÝ"
+                            issue.status == IssueStatus.SKIP_ALLOWED -> "ĐÃ BỎ QUA"
+                            issue.status == IssueStatus.WITHDRAWN -> "ĐÃ THU HỒI"
+                            else -> issue.status.label
+                        }
+                        (row.getChildAt(0) as? TextView)?.text = "SKU ${issue.sku} - $statusText"
+                        val rawResponseIso = issue.inventRespondedAt.trim()
+                        val responseIso = when {
+                            issue.status.isOpenBucket -> ""
+                            rawResponseIso.isNotBlank() && !rawResponseIso.equals("null", ignoreCase = true) && rawResponseIso != "—" -> rawResponseIso
+                            issue.status in setOf(IssueStatus.AVAILABLE, IssueStatus.SKIP_ALLOWED) &&
+                                issue.updatedAt.isNotBlank() && !issue.updatedAt.equals("null", ignoreCase = true) -> issue.updatedAt
+                            else -> ""
+                        }
+                        val timingText = if (responseIso.isBlank()) "Báo hết ${clockTime(issue.reportedAt)}"
+                            else "Báo hết ${clockTime(issue.reportedAt)}, Invent phản hồi ${clockTime(responseIso)}"
+                        (row.getChildAt(2) as? TextView)?.text = timingText
+                        if (!issue.status.isOpenBucket) {
+                            while (row.childCount > 3) row.removeViewAt(row.childCount - 1)
+                        }
+                        app.diagnostics.info(
+                            "picker_card_realtime_patched",
+                            mapOf("issue_id" to issue.id, "status" to issue.status.wire, "issue_version" to issue.issueVersion)
+                        )
+                        return@onSuccess
+                    }
+                    app.diagnostics.warn(
+                        "picker_card_realtime_fallback",
+                        mapOf("issue_id" to patchIssueId, "issue_found" to (issue != null), "card_found" to (row != null))
+                    )
+                }
+
                 val representedSkus = visibleIssues.map { it.sku }.toSet()
                 val pendingVisible = pickerPendingReports.values.filterNot { it.item.sku in representedSkus }
                 pendingVisible.forEach { pending ->
@@ -994,6 +1060,7 @@ class MainActivity : AppCompatActivity() {
                         else -> getColor(R.color.surface_subtle) to getColor(R.color.border)
                     }
                     val row = LinearLayout(this@MainActivity).apply {
+                        tag = "picker_issue:${issue.id}"
                         orientation = LinearLayout.VERTICAL
                         setPadding(dp(7), dp(4), dp(7), dp(4))
                         background = GradientDrawable().apply {
