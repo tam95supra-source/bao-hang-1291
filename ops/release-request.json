@@ -1,8 +1,8 @@
 {
   "action": "publish",
   "channel": "beta",
-  "versionName": "1.6.15",
-  "versionCode": 24,
+  "versionName": "1.6.17",
+  "versionCode": 26,
   "mandatory": true,
-  "releaseNotes": "Beta 1.6.15: sửa realtime Người báo hàng. Firestore first-marker/resume bắt buộc refresh canonical issue-board; pending FCM recovery dùng đúng issue-board; worker ưu tiên realtime/FCM trước Google Sheet và client kick không còn bị backlog Sheet/cleanup chặn."
+  "releaseNotes": "Beta 1.6.17: sửa gửi log chẩn đoán bị báo Worker Google lỗi dù server đã nhận; Picker nhận xác nhận từ Invent bằng realtime card update (đổi trạng thái/màu/thời gian trên đúng SKU), không reload toàn màn hình."
 }
