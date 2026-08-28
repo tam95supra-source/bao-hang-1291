@@ -417,8 +417,6 @@ async function renderFastEvents() {
 function installRenderer() {
   const renderers = globalThis.__BH_WV2_RENDER__ || (globalThis.__BH_WV2_RENDER__ = {});
   renderers.events = renderFastEvents;
-  const active = document.querySelector('button[data-tab="events"].active');
-  if (active && ['ADMIN','ADMIN_INVENT','INVENT'].includes(state.role)) active.click();
 }
 
 function enhanceStaticUi() {
