@@ -269,7 +269,7 @@ function renderApp() {
   $('#logout').onclick = () => { clearSession(); renderLogin(); };
   $('#exitTest')?.addEventListener('click', () => { state.testRole = null; state.activeTab = null; renderApp(); });
   $$('[data-test]').forEach((button) => button.onclick = () => { state.testRole = button.dataset.test; state.activeTab = null; renderApp(); });
-  $('[data-tab]').forEach((button) => button.onclick = () => { state.activeTab = button.dataset.tab; setHash(state.activeTab); void renderTab(); });
+  $$('[data-tab]').forEach((button) => button.onclick = () => { state.activeTab = button.dataset.tab; setHash(state.activeTab); void renderTab(); });
   void renderTab();
   startRealtime();
   globalThis.__BH_FAST_ENHANCE__?.();
