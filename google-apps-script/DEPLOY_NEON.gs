@@ -260,12 +260,12 @@ function sendEventToTokens_(event, status, unusedIdToken) {
 }
 
 function drainSheet_(token) {
-  const events = neonRpc_('worker_sheet_batch_rpc', {p_limit:500}, token) || [];
-  if (!events.length) return {count:0};
-  const ids = [];
-  events.forEach(function(event) { applyEvent_(event); ids.push(Number(event.id)); });
-  const acked = neonRpc_('worker_sheet_ack_rpc', {p_ids:ids}, token);
-  return {count:events.length,acked:Number(acked || 0)};
+  const events=neonRpc_('worker_sheet_batch_rpc',{p_limit:500},token)||[];
+  if(!events.length)return {count:0};
+  const applied=applyEventsBatch_(events);
+  const ids=events.map(function(event){return Number(event.id);});
+  const acked=neonRpc_('worker_sheet_ack_rpc',{p_ids:ids},token);
+  return {count:events.length,acked:Number(acked||0),sheet:applied};
 }
 
 function drainRealtime_(token) {
@@ -729,7 +729,122 @@ function sheetWebhook_(body) {
   const expected=PropertiesService.getScriptProperties().getProperty('WEBHOOK_SECRET');
   if(!expected||String(body.secret)!==expected)return {ok:false,error:'Unauthorized'};
   const lock=LockService.getScriptLock();lock.waitLock(25000);
-  try{(body.events||[]).forEach(applyEvent_);return {ok:true,processed:(body.events||[]).length};}finally{lock.releaseLock();}
+  try{
+    const events=Array.isArray(body.events)?body.events:[];
+    const applied=applyEventsBatch_(events);
+    return {ok:true,processed:events.length,sheet:applied};
+  }finally{lock.releaseLock();}
+}
+
+function applyEventsBatch_(events) {
+  const list=Array.isArray(events)?events:[];
+  if(!list.length)return {events_appended:0,users_upserted:0,issues_upserted:0};
+
+  const ss=reportSpreadsheet_();
+  const eventSheet=ss.getSheetByName('SU_KIEN');
+  const userSheet=ss.getSheetByName('NHAN_SU');
+  const issueSheet=ss.getSheetByName('TRANG_THAI_SKU');
+  if(!eventSheet||!userSheet||!issueSheet)throw new Error('SHEET_STRUCTURE_MISSING');
+
+  // SU_KIEN is append-only. Read only the recent tail so a retry after a
+  // partial write remains idempotent without scanning the full history.
+  const eventLast=eventSheet.getLastRow();
+  const tailStart=Math.max(2,eventLast-4999);
+  const tailCount=eventLast>=tailStart?eventLast-tailStart+1:0;
+  const recentIds=new Set(
+    tailCount>0
+      ? eventSheet.getRange(tailStart,1,tailCount,1).getValues().map(function(row){return String(row[0]||'');})
+      : []
+  );
+
+  const userLast=userSheet.getLastRow();
+  const userRows=userLast>=2?userSheet.getRange(2,1,userLast-1,BH_USER_HEADERS.length).getValues():[];
+  const userIndex={};
+  userRows.forEach(function(row,i){const key=String(row[0]||'').trim();if(key)userIndex[key]=i;});
+
+  const issueLast=issueSheet.getLastRow();
+  const issueRows=issueLast>=2?issueSheet.getRange(2,1,issueLast-1,BH_ISSUE_HEADERS.length).getValues():[];
+  const issueIndex={};
+  issueRows.forEach(function(row,i){const key=String(row[0]||'').trim();if(key)issueIndex[key]=i;});
+
+  const eventRows=[];
+  let usersChanged=0,issuesChanged=0;
+
+  list.forEach(function(event){
+    if(!event||typeof event!=='object')throw new Error('SHEET_EVENT_INVALID');
+    const payload=(event.payload&&typeof event.payload==='object'&&!Array.isArray(event.payload))?event.payload:{};
+    const eventType=String(event.event_type||event.type||'').trim().toUpperCase();
+    const eventId=String(event.event_id||event.queue_id||event.id||'').trim();
+    if(!eventId)throw new Error('SHEET_EVENT_ID_REQUIRED');
+
+    const issueId=String(event.issue_id||payload.id||event.ticket_id||'').trim();
+    const sku=String(event.sku||payload.sku||'').trim();
+    const productName=String(event.product_name||payload.product_name||'').trim();
+    const status=String(event.status||payload.status||'').trim();
+    const reportCount=Number(event.report_count!==undefined?event.report_count:(payload.report_count||0));
+    const actorId=String(event.actor_account_id||event.actor_user_id||payload.actor_id||payload.reporter_id||'').trim();
+    const eventTime=event.created_at||event.accepted_at_authority||event.occurred_at_device||payload.updated_at||new Date().toISOString();
+
+    if(!recentIds.has(eventId)){
+      eventRows.push([eventId,eventTime,eventType,issueId,sku,productName,status,reportCount,actorId,JSON.stringify(payload)]);
+      recentIds.add(eventId);
+    }
+
+    if(eventType==='USER_UPSERT'||eventType==='USER'){
+      const employeeCode=String(payload.employee_code||event.employee_code||'').trim();
+      if(!employeeCode)throw new Error('SHEET_EMPLOYEE_CODE_REQUIRED');
+      const active=(payload.active!==undefined?payload.active:event.active)!==false;
+      const row=[
+        employeeCode,
+        String(payload.full_name||event.full_name||''),
+        String(payload.contractor||event.contractor||''),
+        String(payload.role||event.role||''),
+        active?'HOẠT ĐỘNG':'NGỪNG HOẠT ĐỘNG',
+        payload.updated_at||event.updated_at||eventTime
+      ];
+      if(userIndex[employeeCode]===undefined){
+        userIndex[employeeCode]=userRows.length;
+        userRows.push(row);
+      }else userRows[userIndex[employeeCode]]=row;
+      usersChanged++;
+    }
+
+    if(eventType==='REPORT_SHORTAGE'||eventType==='ISSUE_STATUS'||eventType==='ISSUE'){
+      if(!issueId)throw new Error('SHEET_ISSUE_ID_REQUIRED');
+      const row=[
+        issueId,
+        sku,
+        productName,
+        status,
+        reportCount,
+        payload.first_reported_at||payload.reported_at||event.first_reported_at||'',
+        payload.updated_at||event.last_reported_at||event.updated_at||eventTime,
+        String(payload.assigned_name||event.invent_assignee_name||event.invent_assignee_id||''),
+        Number(payload.reopen_count!==undefined?payload.reopen_count:(event.reopen_count||0))
+      ];
+      if(issueIndex[issueId]===undefined){
+        issueIndex[issueId]=issueRows.length;
+        issueRows.push(row);
+      }else issueRows[issueIndex[issueId]]=row;
+      issuesChanged++;
+    }
+  });
+
+  if(eventRows.length){
+    eventSheet.getRange(eventLast+1,1,eventRows.length,BH_EVENT_HEADERS.length).setValues(eventRows);
+  }
+  if(usersChanged&&userRows.length){
+    userSheet.getRange(2,1,userRows.length,BH_USER_HEADERS.length).setValues(userRows);
+  }
+  if(issuesChanged&&issueRows.length){
+    issueSheet.getRange(2,1,issueRows.length,BH_ISSUE_HEADERS.length).setValues(issueRows);
+  }
+
+  return {
+    events_appended:eventRows.length,
+    users_upserted:usersChanged,
+    issues_upserted:issuesChanged
+  };
 }
 
 function applyEvent_(event) {
