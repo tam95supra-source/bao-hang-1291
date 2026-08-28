@@ -57,6 +57,10 @@ function doPost(e) {
     if (action === 'ping') return json_({ok:true,project:BH_PROJECT,provider:'NEON_FIREBASE_GOOGLE',staff_sheet_id:BH_STAFF_SHEET_ID,staff_sheet_name:BH_STAFF_SHEET_NAME});
     if (action === 'staff-source-ping' || action === 'staff-source-structure-ping') return json_(staffSourceBridgeReceive_(body));
     if (action === 'bootstrap-config') return json_(bootstrapConfig_(body));
+    if (action === 'realtime-kick') {
+      requireRealtimeCaller_(String(body.id_token || ''));
+      return json_(realtimeKick_(body));
+    }
     if (action === 'worker-kick') {
       requireUser_(String(body.id_token || ''), null);
       return json_(workerTick_('CLIENT_KICK'));
@@ -538,6 +542,49 @@ function requireUser_(idToken, allowedRoles) {
   return {uid:String(payload.sub||''),profile:profile.profile};
 }
 
+function requireRealtimeCaller_(idToken) {
+  if(!idToken)throw new Error('AUTH_REQUIRED');
+  // Neon Data API validates the Firebase JWT before the RPC executes, so the
+  // high-frequency realtime kick does not need a second Firebase lookup.
+  const session=neonRpc_('api_session_profile_rpc',{p_test_role:null},idToken);
+  if(!session||!session.profile||session.profile.active!==true)throw new Error('USER_INACTIVE');
+  return session.profile;
+}
+
+function realtimeKick_(body) {
+  const topic=String(body.topic||'').trim();
+  if(topic!=='issues')throw new Error('REALTIME_TOPIC_INVALID');
+  const entityId=String(body.entity_id||'').trim();
+  if(!/^[0-9a-f-]{36}$/i.test(entityId))throw new Error('REALTIME_ENTITY_INVALID');
+  const entityVersion=Math.max(0,Number(body.entity_version||0));
+  const reason=String(body.reason||'client').slice(0,80);
+  const access=firebaseOAuthAccessToken_('https://www.googleapis.com/auth/firebase.messaging');
+  const data={
+    event_type:'REALTIME_DELTA',
+    topic:'issues',
+    realtime_event_id:'0',
+    entity_id:entityId,
+    entity_version:String(entityVersion),
+    source:'client:'+reason
+  };
+  const message={
+    topic:'bao-hang-1291-issues-operators',
+    data:data,
+    android:{priority:'high',ttl:'60s',collapse_key:'realtime-issues'}
+  };
+  const url='https://fcm.googleapis.com/v1/projects/'+BH_PROJECT+'/messages:send';
+  const res=UrlFetchApp.fetch(url,{
+    method:'post',
+    contentType:'application/json',
+    headers:{Authorization:'Bearer '+access},
+    payload:JSON.stringify({message:message}),
+    muteHttpExceptions:true
+  });
+  const code=res.getResponseCode();
+  if(code<200||code>=300)throw new Error('FCM_REALTIME_TOPIC_'+code+': '+res.getContentText().slice(0,300));
+  return {ok:true,topic:topic,entity_id:entityId,entity_version:entityVersion};
+}
+
 function neonRpc_(name, payload, idToken) {
   const allowed=/^(api_|worker_|diagnostic_)[a-z0-9_]+_rpc$/.test(name)||name==='report_shortage_rpc';
   if(!allowed)throw new Error('RPC_NOT_ALLOWED');
@@ -551,13 +598,18 @@ function neonRpc_(name, payload, idToken) {
 }
 
 function workerAdminIdToken_() {
+  const cache=CacheService.getScriptCache();
+  const cached=cache.get('WORKER_ADMIN_ID_TOKEN');
+  if(cached)return cached;
   const uid=requiredProp_('WORKER_ADMIN_UID');
   const sa=serviceAccount_();
   const now=Math.floor(Date.now()/1000);
   const custom=signJwt_(sa,{iss:sa.client_email,sub:sa.client_email,aud:'https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit',iat:now,exp:now+3600,uid:uid});
   const data=fetchJson_('https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key='+encodeURIComponent(requiredProp_('FIREBASE_WEB_API_KEY')),{method:'post',contentType:'application/json',payload:JSON.stringify({token:custom,returnSecureToken:true}),muteHttpExceptions:true});
   if(!data.idToken)throw new Error('FIREBASE_CUSTOM_TOKEN_FAILED');
-  return String(data.idToken);
+  const token=String(data.idToken);
+  cache.put('WORKER_ADMIN_ID_TOKEN',token,3000);
+  return token;
 }
 
 function verifyFirebaseIdToken_(token) {
@@ -579,13 +631,24 @@ function verifyFirebaseIdToken_(token) {
 }
 
 function firebaseOAuthAccessToken_(scope) {
+  const cache=CacheService.getScriptCache();
+  const key='OAUTH_'+String(scope||'').replace(/[^a-z0-9]/gi,'_').slice(-80);
+  const cached=cache.get(key);
+  if(cached)return cached;
   const sa=serviceAccount_();
   const now=Math.floor(Date.now()/1000);
   const assertion=signJwt_(sa,{iss:sa.client_email,scope:scope,aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+3600});
-  const response=UrlFetchApp.fetch('https://oauth2.googleapis.com/token',{method:'post',payload:{grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:assertion},muteHttpExceptions:true});
-  const body=JSON.parse(response.getContentText()||'{}');
-  if(response.getResponseCode()!==200||!body.access_token)throw new Error('GOOGLE_OAUTH_FAILED');
-  return String(body.access_token);
+  const response=UrlFetchApp.fetch('https://oauth2.googleapis.com/token',{method:'post',payload:{grant_type:'urn:ietf:params:oauth:jwt-bearer',assertion:assertion},muteHttpExceptions:true});
+  let body={};try{body=JSON.parse(response.getContentText()||'{}')}catch(ignore){}
+  if(response.getResponseCode()!==200||!body.access_token){
+    // Compatibility retry for the canonical OAuth JWT bearer grant spelling.
+    const retry=UrlFetchApp.fetch('https://oauth2.googleapis.com/token',{method:'post',payload:{grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:assertion},muteHttpExceptions:true});
+    try{body=JSON.parse(retry.getContentText()||'{}')}catch(ignore2){body={};}
+    if(retry.getResponseCode()!==200||!body.access_token)throw new Error('GOOGLE_OAUTH_FAILED');
+  }
+  const token=String(body.access_token);
+  cache.put(key,token,3000);
+  return token;
 }
 
 function firebaseAdminCreate_(uid,email,password,displayName,disabled) {
