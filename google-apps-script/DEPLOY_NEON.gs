@@ -563,7 +563,8 @@ function uploadLog_(body) {
   const safeCode=String(caller.profile.employee_code||'user').replace(/[^a-zA-Z0-9._-]/g,'-');
   const file=getLogFolder_().createFile(Utilities.newBlob(bytes,'application/gzip','log_'+safeCode+'_'+Date.now()+'_'+Utilities.getUuid()+'.jsonl.gz'));
   try {
-    return neonRpc_('diagnostic_log_register_rpc',{p_object_path:'drive:'+file.getId(),p_compressed_bytes:bytes.length,p_sha256:expected,p_device_name:String(body.device_name||''),p_app_version:String(body.app_version||''),p_client_created_at:body.client_created_at||null},idToken);
+    const registered=neonRpc_('diagnostic_log_register_rpc',{p_object_path:'drive:'+file.getId(),p_compressed_bytes:bytes.length,p_sha256:expected,p_device_name:String(body.device_name||''),p_app_version:String(body.app_version||''),p_client_created_at:body.client_created_at||null},idToken)||{};
+    return Object.assign({ok:true},registered);
   } catch(error){try{file.setTrashed(true);}catch(ignore){}throw error;}
 }
 
