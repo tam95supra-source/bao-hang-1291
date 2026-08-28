@@ -981,8 +981,6 @@ class MainActivity : AppCompatActivity() {
     lifecycleScope.launch {
         runCatching { app.repository.loadMyIssues() }
             .onSuccess { issues ->
-                target.removeAllViews()
-                target.gravity = Gravity.TOP
                 val visibleIssues = issues.filter { issue ->
                     isTodayReport(issue.reportedAt) || issue.status.isOpenBucket
                 }
@@ -1041,6 +1039,8 @@ class MainActivity : AppCompatActivity() {
                     )
                 }
 
+                target.removeAllViews()
+                target.gravity = Gravity.TOP
                 val representedSkus = visibleIssues.map { it.sku }.toSet()
                 val pendingVisible = pickerPendingReports.values.filterNot { it.item.sku in representedSkus }
                 pendingVisible.forEach { pending ->
