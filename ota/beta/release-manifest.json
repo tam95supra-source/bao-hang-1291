@@ -1,11 +1,11 @@
 {
   "channel": "beta",
-  "versionCode": 24,
-  "versionName": "1.6.15",
-  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.15/bao-hang-1291-beta-1.6.15.apk",
-  "sha256": "bfb83e706f555fd97cc8a52b143ab6a8ae4310e2ff21a6626ba67e860434a9e7",
+  "versionCode": 25,
+  "versionName": "1.6.16",
+  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.16/bao-hang-1291-beta-1.6.16.apk",
+  "sha256": "f18f7d5767c1fc6b6bd3d5c2fa4a35f6af3148845d13f42cdf945a65df7c846d",
   "mandatory": true,
-  "releaseNotes": "Beta 1.6.15: sửa realtime Người báo hàng. Firestore first-marker/resume bắt buộc refresh canonical issue-board; pending FCM recovery dùng đúng issue-board; worker ưu tiên realtime/FCM trước Google Sheet và client kick không còn bị backlog Sheet/cleanup chặn.",
+  "releaseNotes": "Beta 1.6.16: tối ưu incremental realtime UI, cache-first startup, Web lazy-load, realtime delta/version, worker coalescing/batch, Sheet bulk sync và free-tier quota guard.",
   "signerSha256": "2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0",
-  "sourceSha": "7353d64900cedcdfdbfc5943e99af5ea1684cbb6"
+  "sourceSha": "f78a2629a08dfcd9694455252cfb35677388f0f0"
 }
