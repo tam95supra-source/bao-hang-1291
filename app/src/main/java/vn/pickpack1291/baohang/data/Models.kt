@@ -140,11 +140,29 @@ data class IssueBoard(
     val claimedCount: Int = claimed.size,
     val availableCount: Int = recent.count { it.status == IssueStatus.AVAILABLE },
     val skippedCount: Int = recent.count { it.status == IssueStatus.SKIP_ALLOWED },
-    val withdrawnCount: Int = withdrawn.size
+    val withdrawnCount: Int = withdrawn.size,
+    val realtimeSeq: Long = 0L
 ) {
     val skipped: List<StockIssue> get() = recent.filter { it.status == IssueStatus.SKIP_ALLOWED }
     val available: List<StockIssue> get() = recent.filter { it.status == IssueStatus.AVAILABLE }
 }
+
+data class IssueDeltaEvent(
+    val seq: Long,
+    val entityId: String,
+    val entityVersion: Long,
+    val visible: Boolean,
+    val withdrawnChanged: Boolean,
+    val issue: StockIssue?
+)
+
+data class IssueDelta(
+    val events: List<IssueDeltaEvent>,
+    val latestSeq: Long,
+    val serverSeq: Long,
+    val hasMore: Boolean,
+    val requiresFullReconcile: Boolean
+)
 
 data class PendingAlert(
     val eventId: String,
