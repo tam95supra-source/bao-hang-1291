@@ -205,7 +205,13 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
         val db = writableDatabase
         db.beginTransaction()
         try {
-            db.delete("issue_cache", null, null)
+            val ids = issues.map { it.id }.distinct()
+            if (ids.isEmpty()) {
+                db.delete("issue_cache", null, null)
+            } else {
+                val placeholders = ids.joinToString(",") { "?" }
+                db.delete("issue_cache", "id NOT IN ($placeholders)", ids.toTypedArray())
+            }
             val values = ContentValues()
             issues.forEach { issue ->
                 values.clear()
@@ -227,6 +233,10 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, D
             }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
+    }
+
+    fun removeIssue(issueId: String) {
+        if (issueId.isNotBlank()) writableDatabase.delete("issue_cache", "id=?", arrayOf(issueId))
     }
 
     private fun issueFromCursor(cursor: android.database.Cursor) = StockIssue(
