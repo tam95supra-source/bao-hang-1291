@@ -1,5 +1,5 @@
--- Acceptance harness stability: protect real user 10060 by current profile identity,
--- not by historical realtime event IDs that are legitimately removed by retention.
+-- Acceptance harness stability: protect real user 10060 by persistent profile identity,
+-- not by active state or historical realtime events; HR reconciliation may legitimately deactivate the row.
 -- No production auth, role, business, or delete-guard semantics are changed.
 
 CREATE OR REPLACE FUNCTION public.e2e_final_guard_rpc()
@@ -45,7 +45,7 @@ BEGIN
     WHERE p.id='8e3e2eac-ab15-4e28-9b91-6042d93e8773'::uuid
       AND p.employee_code='10060'
       AND p.role='PICKER'
-      AND p.active=true
+      AND p.source_kind='GSHEET'
   ) INTO real_ok;
   IF NOT real_ok THEN RAISE EXCEPTION 'REAL_USER_10060_GUARD_FAILED'; END IF;
 
@@ -143,7 +143,7 @@ BEGIN
       WHERE p.id='8e3e2eac-ab15-4e28-9b91-6042d93e8773'::uuid
         AND p.employee_code='10060'
         AND p.role='PICKER'
-        AND p.active=true
+        AND p.source_kind='GSHEET'
     ) INTO real_ok;
 
     RETURN jsonb_build_object('ok',(r_sku+r_profile+r_report+r_owner+r_event+r_notification+r_realtime)=0 AND real_ok,'mode','cleanup','deleted',jsonb_build_object('authority_events',n_authority,'conflicts',n_conflict,'sheet_queue',n_sheet,'mutation_requests',n_mut,'security_audit',n_sec,'realtime_events',n_rt,'notifications',n_notif,'push_outbox',n_push,'realtime_coalesce',n_coalesce,'issue_audit',n_audit,'issue_reports',n_report,'issues',n_issue,'skus',n_sku,'profiles',n_profile),'remaining',jsonb_build_object('test_sku_remaining',r_sku,'test_profile_remaining',r_profile,'test_report_remaining',r_report,'test_ownership_remaining',r_owner,'test_event_remaining',r_event,'test_notification_remaining',r_notification,'test_realtime_signal_remaining',r_realtime),'real_user_10060_preserved',real_ok);
