@@ -43,6 +43,7 @@ let realtimeToken = ''
 const realtimeSnapshotMarkers = new Map()
 const ISSUE_SIGNAL_ACTIONS = new Set(['report-shortage', 'claim-issue', 'reassign-issue', 'update-issue', 'restore-skipped', 'withdraw-shortage'])
 const PICKER_ALERT_ACTIONS = new Set(['update-issue', 'restore-skipped'])
+const FULL_WORKER_ACTIONS = new Set(['update-issue', 'restore-skipped', 'withdraw-shortage'])
 const originalFetch = globalThis.fetch.bind(globalThis)
 
 function jsonResponse(value, status = 200) {
@@ -198,12 +199,20 @@ async function neonRpc(action, body, init) {
     try {
       const payload = text ? JSON.parse(text) : {}
       const issue = payload?.issue || payload
-      void emitIssueRealtimeSignal(issue, `web:${action}`)
-        .catch((error) => console.warn('issue realtime signal deferred', action, error?.message || error))
+      if (issue?.id) {
+        void emitIssueRealtimeSignal(issue, `web:${action}`)
+          .catch((error) => console.warn('issue realtime signal deferred', action, error?.message || error))
+        void worker('realtime-kick', {
+          topic: 'issues',
+          entity_id: String(issue.id),
+          entity_version: Number(issue.issue_version || issue.issueVersion || 0),
+          reason: `web:${action}`,
+        }, init).catch(() => {})
+      }
     } catch (error) {
       console.warn('issue realtime signal parse deferred', action, error?.message || error)
     }
-    if (PICKER_ALERT_ACTIONS.has(action)) {
+    if (FULL_WORKER_ACTIONS.has(action)) {
       void worker('worker-kick', { reason: `web:${action}` }, init).catch(() => {})
     }
   }
