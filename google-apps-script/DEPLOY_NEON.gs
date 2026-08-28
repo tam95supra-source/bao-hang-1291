@@ -189,34 +189,38 @@ function scheduleAdaptiveTrigger_(iso) {
 }
 
 function drainNotifications_(token) {
-  const batch = neonRpc_('worker_notification_batch_rpc', {p_limit:200}, token) || [];
-  let accepted = 0, failed = 0;
-  batch.forEach(function(event) {
-    const result = sendEventToTokens_(event, String(event.status || ''), token);
-    neonRpc_('worker_notification_result_rpc', {
-      p_event_id:String(event.event_id),
-      p_accepted:result.accepted,
-      p_invalid_tokens:result.invalidTokens,
-      p_error:result.error || ''
-    }, token);
-    result.accepted ? accepted++ : failed++;
+  const batch=neonRpc_('worker_notification_batch_rpc',{p_limit:200},token)||[];
+  let accepted=0,failed=0;
+  const results=[];
+  batch.forEach(function(event){
+    const result=sendEventToTokens_(event,String(event.status||''),token);
+    results.push({
+      event_id:String(event.event_id),
+      accepted:!!result.accepted,
+      invalid_tokens:result.invalidTokens||[],
+      error:result.error||''
+    });
+    result.accepted?accepted++:failed++;
   });
+  if(results.length)neonRpc_('worker_notification_results_rpc',{p_results:results},token);
   return {count:batch.length,accepted:accepted,failed:failed};
 }
 
 function drainPushes_(token) {
-  const batch = neonRpc_('worker_push_batch_rpc', {p_limit:200}, token) || [];
-  let accepted = 0, failed = 0;
-  batch.forEach(function(event) {
-    const result = sendEventToTokens_(event, String(event.event_status || ''), token);
-    neonRpc_('worker_push_result_rpc', {
-      p_id:String(event.id),
-      p_accepted:result.accepted,
-      p_invalid_tokens:result.invalidTokens,
-      p_error:result.error || ''
-    }, token);
-    result.accepted ? accepted++ : failed++;
+  const batch=neonRpc_('worker_push_batch_rpc',{p_limit:200},token)||[];
+  let accepted=0,failed=0;
+  const results=[];
+  batch.forEach(function(event){
+    const result=sendEventToTokens_(event,String(event.event_status||''),token);
+    results.push({
+      id:String(event.id),
+      accepted:!!result.accepted,
+      invalid_tokens:result.invalidTokens||[],
+      error:result.error||''
+    });
+    result.accepted?accepted++:failed++;
   });
+  if(results.length)neonRpc_('worker_push_results_rpc',{p_results:results},token);
   return {count:batch.length,accepted:accepted,failed:failed};
 }
 
@@ -265,21 +269,41 @@ function drainSheet_(token) {
 }
 
 function drainRealtime_(token) {
-  const events = neonRpc_('worker_realtime_batch_rpc', {p_limit:200}, token) || [];
-  let published = 0, failed = 0;
-  events.forEach(function(event) {
-    try {
-      publishFirestoreRealtime_(event);
-      const push = sendRealtimeDeltaToTokens_(event);
-      if (!push.accepted) throw new Error(push.error || 'REALTIME_FCM_FAILED');
-      neonRpc_('worker_realtime_result_rpc', {p_id:Number(event.id),p_published:true,p_error:''}, token);
-      published++;
-    } catch (error) {
-      failed++;
-      neonRpc_('worker_realtime_result_rpc', {p_id:Number(event.id),p_published:false,p_error:safeError_(error)}, token);
+  const events=neonRpc_('worker_realtime_batch_rpc',{p_limit:200},token)||[];
+  if(!events.length)return {enabled:true,count:0,published:0,failed:0,groups:0};
+  const groups={};
+  events.forEach(function(event){
+    const topic=String(event.topic||'');
+    (groups[topic]||(groups[topic]=[])).push(event);
+  });
+  let published=0,failed=0;
+  const results=[];
+  Object.keys(groups).forEach(function(topic){
+    const group=groups[topic];
+    const latest=group[group.length-1];
+    try{
+      publishFirestoreRealtime_(latest);
+      const push=sendRealtimeDeltaToTokens_(latest);
+      if(!push.accepted)throw new Error(push.error||'REALTIME_FCM_FAILED');
+      results.push({
+        ids:group.map(function(e){return Number(e.id);}),
+        published:true,
+        invalid_tokens:push.invalidTokens||[],
+        error:''
+      });
+      published+=group.length;
+    }catch(error){
+      failed+=group.length;
+      results.push({
+        ids:group.map(function(e){return Number(e.id);}),
+        published:false,
+        invalid_tokens:[],
+        error:safeError_(error)
+      });
     }
   });
-  return {enabled:true,count:events.length,published:published,failed:failed};
+  if(results.length)neonRpc_('worker_realtime_results_rpc',{p_results:results},token);
+  return {enabled:true,count:events.length,published:published,failed:failed,groups:Object.keys(groups).length};
 }
 
 function publishFirestoreRealtime_(event) {
@@ -303,15 +327,39 @@ function publishFirestoreRealtime_(event) {
 }
 
 function sendRealtimeDeltaToTokens_(event) {
-  const tokens = Array.isArray(event.device_tokens) ? event.device_tokens : [];
-  if (!tokens.length) return {accepted:true,invalidTokens:[],error:''};
-  const access = firebaseOAuthAccessToken_('https://www.googleapis.com/auth/firebase.messaging');
-  const invalid = [];
-  let success = 0, lastError = '';
-  tokens.forEach(function(token) {
-    const data={event_type:'REALTIME_DELTA',topic:String(event.topic||''),realtime_event_id:String(event.id||''),entity_id:String(event.entity_id||''),entity_version:String(event.entity_version||0)};
-    const body={message:{token:String(token),data:data,android:{priority:'high',ttl:'60s',collapse_key:'realtime-'+String(event.topic||'all').slice(0,48)}}};
-    const url='https://fcm.googleapis.com/v1/projects/'+BH_PROJECT+'/messages:send';
+  const tokens=Array.isArray(event.device_tokens)?event.device_tokens:[];
+  const access=firebaseOAuthAccessToken_('https://www.googleapis.com/auth/firebase.messaging');
+  const invalid=[];
+  let attempted=0,success=0,lastError='';
+  const data={
+    event_type:'REALTIME_DELTA',
+    topic:String(event.topic||''),
+    realtime_event_id:String(event.id||''),
+    entity_id:String(event.entity_id||''),
+    entity_version:String(event.entity_version||0)
+  };
+  const url='https://fcm.googleapis.com/v1/projects/'+BH_PROJECT+'/messages:send';
+
+  if(String(event.topic||'')==='issues'){
+    attempted++;
+    const topicBody={message:{
+      topic:'bao-hang-1291-issues-operators',
+      data:data,
+      android:{priority:'high',ttl:'60s',collapse_key:'realtime-issues'}
+    }};
+    const topicRes=UrlFetchApp.fetch(url,{method:'post',contentType:'application/json',headers:{Authorization:'Bearer '+access},payload:JSON.stringify(topicBody),muteHttpExceptions:true});
+    const topicCode=topicRes.getResponseCode();
+    if(topicCode>=200&&topicCode<300)success++;
+    else lastError=('FCM_REALTIME_TOPIC '+topicCode+' '+topicRes.getContentText()).slice(0,500);
+  }
+
+  tokens.forEach(function(token){
+    attempted++;
+    const body={message:{
+      token:String(token),
+      data:data,
+      android:{priority:'high',ttl:'60s',collapse_key:'realtime-'+String(event.topic||'all').slice(0,48)}
+    }};
     const res=UrlFetchApp.fetch(url,{method:'post',contentType:'application/json',headers:{Authorization:'Bearer '+access},payload:JSON.stringify(body),muteHttpExceptions:true});
     const code=res.getResponseCode();
     if(code>=200&&code<300){success++;return;}
@@ -319,7 +367,7 @@ function sendRealtimeDeltaToTokens_(event) {
     lastError=('FCM_REALTIME '+code+' '+text).slice(0,500);
     if(code===404||text.indexOf('UNREGISTERED')>=0||text.indexOf('registration-token-not-registered')>=0)invalid.push(String(token));
   });
-  return {accepted:success>0||invalid.length===tokens.length,invalidTokens:invalid,error:lastError};
+  return {accepted:attempted===0||success>0||invalid.length===tokens.length,invalidTokens:invalid,error:lastError};
 }
 
 function maybeCleanup_(token) {
@@ -638,14 +686,9 @@ function firebaseOAuthAccessToken_(scope) {
   const sa=serviceAccount_();
   const now=Math.floor(Date.now()/1000);
   const assertion=signJwt_(sa,{iss:sa.client_email,scope:scope,aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+3600});
-  const response=UrlFetchApp.fetch('https://oauth2.googleapis.com/token',{method:'post',payload:{grant_type:'urn:ietf:params:oauth:jwt-bearer',assertion:assertion},muteHttpExceptions:true});
+  const response=UrlFetchApp.fetch('https://oauth2.googleapis.com/token',{method:'post',payload:{grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:assertion},muteHttpExceptions:true});
   let body={};try{body=JSON.parse(response.getContentText()||'{}')}catch(ignore){}
-  if(response.getResponseCode()!==200||!body.access_token){
-    // Compatibility retry for the canonical OAuth JWT bearer grant spelling.
-    const retry=UrlFetchApp.fetch('https://oauth2.googleapis.com/token',{method:'post',payload:{grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:assertion},muteHttpExceptions:true});
-    try{body=JSON.parse(retry.getContentText()||'{}')}catch(ignore2){body={};}
-    if(retry.getResponseCode()!==200||!body.access_token)throw new Error('GOOGLE_OAUTH_FAILED');
-  }
+  if(response.getResponseCode()!==200||!body.access_token)throw new Error('GOOGLE_OAUTH_FAILED');
   const token=String(body.access_token);
   cache.put(key,token,3000);
   return token;
