@@ -151,12 +151,46 @@ class MainActivity : AppCompatActivity() {
                     startActivity(Intent(this, LoginActivity::class.java)); finish()
                 }.show()
         }
+        val startupStartedMs = SystemClock.elapsedRealtime()
+        val cachedRole = app.session.effectiveRole
+        renderForRole()
+        app.diagnostics.info(
+            "startup_cached_render",
+            mapOf(
+                "elapsed_ms" to (SystemClock.elapsedRealtime() - startupStartedMs),
+                "role" to cachedRole.wire
+            )
+        )
+        ensureOverlayPermissionForPicker()
+
         lifecycleScope.launch {
+            val beforeRole = app.session.effectiveRole
             runCatching { app.repository.refreshProfile() }
-                .onFailure { app.diagnostics.warn("profile_refresh_fallback", mapOf("error" to it.message.orEmpty())) }
-            renderForRole()
-            ensureOverlayPermissionForPicker()
-            checkPendingAlerts()
+                .onSuccess { profile ->
+                    val afterRole = app.session.effectiveRole
+                    app.diagnostics.info(
+                        "startup_profile_refresh",
+                        mapOf(
+                            "elapsed_ms" to (SystemClock.elapsedRealtime() - startupStartedMs),
+                            "role_changed" to (beforeRole != afterRole),
+                            "active" to profile.active
+                        )
+                    )
+                    if (beforeRole != afterRole && !isFinishing && !isDestroyed) renderForRole()
+                }
+                .onFailure {
+                    app.diagnostics.warn(
+                        "profile_refresh_fallback",
+                        mapOf(
+                            "elapsed_ms" to (SystemClock.elapsedRealtime() - startupStartedMs),
+                            "error" to it.message.orEmpty()
+                        )
+                    )
+                }
+        }
+        lifecycleScope.launch {
+            runCatching { checkPendingAlerts() }
+                .onFailure { app.diagnostics.warn("pending_alert_startup_failed", mapOf("error" to it.message.orEmpty())) }
         }
         AppUpdater(this, app.diagnostics).check()
         lifecycleScope.launch(Dispatchers.IO) {
@@ -501,12 +535,17 @@ class MainActivity : AppCompatActivity() {
                         inventRefresh?.invoke()
                         break
                     }
-                    val delta = runCatching { app.repository.loadIssueDelta(snapshot.realtimeSeq) }
-                        .getOrElse {
-                            app.diagnostics.warn("issue_delta_failed", mapOf("after_seq" to snapshot.realtimeSeq, "error" to it.message.orEmpty()))
-                            inventRefresh?.invoke()
-                            break
-                        }
+                    val deltaResult = runCatching { app.repository.loadIssueDelta(snapshot.realtimeSeq) }
+                    if (deltaResult.isFailure) {
+                        val error = deltaResult.exceptionOrNull()
+                        app.diagnostics.warn(
+                            "issue_delta_failed",
+                            mapOf("after_seq" to snapshot.realtimeSeq, "error" to error?.message.orEmpty())
+                        )
+                        inventRefresh?.invoke()
+                        break
+                    }
+                    val delta = deltaResult.getOrThrow()
                     if (delta.requiresFullReconcile) {
                         app.diagnostics.warn("issue_delta_gap", mapOf("after_seq" to snapshot.realtimeSeq, "server_seq" to delta.serverSeq))
                         inventRefresh?.invoke()
