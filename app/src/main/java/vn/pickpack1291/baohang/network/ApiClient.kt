@@ -13,6 +13,8 @@ import vn.pickpack1291.baohang.data.AppConfig
 import vn.pickpack1291.baohang.data.AuthSession
 import vn.pickpack1291.baohang.data.ImportUserRow
 import vn.pickpack1291.baohang.data.IssueBoard
+import vn.pickpack1291.baohang.data.IssueDelta
+import vn.pickpack1291.baohang.data.IssueDeltaEvent
 import vn.pickpack1291.baohang.data.IssueStatus
 import vn.pickpack1291.baohang.data.OperationalConfig
 import vn.pickpack1291.baohang.data.PendingAlert
@@ -139,13 +141,41 @@ class ApiClient(
             claimedCount = counts.optInt("claimed", claimed.size),
             availableCount = counts.optInt("available", recent.count { it.status == IssueStatus.AVAILABLE }),
             skippedCount = counts.optInt("skipped", recent.count { it.status == IssueStatus.SKIP_ALLOWED }),
-            withdrawnCount = withdrawal.optInt("count", withdrawn.size)
+            withdrawnCount = withdrawal.optInt("count", withdrawn.size),
+            realtimeSeq = response.optLong("realtime_seq", 0L)
         )
     }
 
     suspend fun issueDetail(issueId: String): StockIssue = StockIssue.fromJson(
         invoke("issue-detail", JSONObject().put("issue_id", issueId)).getJSONObject("issue")
     )
+
+    suspend fun issueDelta(afterSeq: Long, limit: Int = 200): IssueDelta {
+        val response = invoke("issue-delta", JSONObject().put("after_seq", afterSeq).put("limit", limit))
+        val array = response.optJSONArray("events") ?: JSONArray()
+        val events = buildList {
+            for (index in 0 until array.length()) {
+                val row = array.getJSONObject(index)
+                add(
+                    IssueDeltaEvent(
+                        seq = row.optLong("seq", afterSeq),
+                        entityId = row.optString("entity_id"),
+                        entityVersion = row.optLong("entity_version", 0L),
+                        visible = row.optBoolean("visible", false),
+                        withdrawnChanged = row.optBoolean("withdrawn_changed", false),
+                        issue = row.optJSONObject("issue")?.let(StockIssue::fromJson)
+                    )
+                )
+            }
+        }
+        return IssueDelta(
+            events = events,
+            latestSeq = response.optLong("latest_seq", afterSeq),
+            serverSeq = response.optLong("server_seq", afterSeq),
+            hasMore = response.optBoolean("has_more", false),
+            requiresFullReconcile = response.optBoolean("requires_full_reconcile", false)
+        )
+    }
 
     suspend fun myIssues(): List<StockIssue> = invoke("picker-my-issues", JSONObject()).optJSONArray("issues").toStockIssues()
 
@@ -340,6 +370,9 @@ class ApiClient(
             "issue-board" -> "api_issue_board_rpc" to base()
             "withdrawn-board" -> "api_withdrawn_board_rpc" to base()
             "issue-detail" -> "api_issue_detail_rpc" to base().put("p_issue_id", payload.getString("issue_id"))
+            "issue-delta" -> "api_issue_delta_rpc" to base()
+                .put("p_after_seq", payload.optLong("after_seq", 0L))
+                .put("p_limit", payload.optInt("limit", 200))
             "picker-my-issues", "my-issues" -> "api_picker_my_issues_rpc" to base()
             "claim-issue" -> "api_claim_issue_rpc" to base().put("p_issue_id", payload.getString("issue_id")).put("p_client_request_id", payload.optString("client_request_id", UUID.randomUUID().toString()))
             "reassign-issue" -> "api_reassign_issue_rpc" to base()
