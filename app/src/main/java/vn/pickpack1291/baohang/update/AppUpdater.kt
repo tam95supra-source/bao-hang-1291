@@ -35,6 +35,14 @@ class AppUpdater(
     )
 
     fun check(showUpToDate: Boolean = false) {
+        val prefs = activity.getSharedPreferences("bao_hang_1291_update", AppCompatActivity.MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        if (!showUpToDate) {
+            val lastSuccess = prefs.getLong(KEY_LAST_SUCCESS_MS, 0L)
+            val lastAttempt = prefs.getLong(KEY_LAST_ATTEMPT_MS, 0L)
+            if (now - lastSuccess < AUTO_SUCCESS_TTL_MS || now - lastAttempt < AUTO_RETRY_TTL_MS) return
+            prefs.edit().putLong(KEY_LAST_ATTEMPT_MS, now).apply()
+        }
         val installedChannel = BuildConfig.OTA_CHANNEL.trim().lowercase()
         if (BuildConfig.UPDATE_MANIFEST_URL.isBlank() || installedChannel !in setOf("stable", "beta")) {
             if (showUpToDate) Toast.makeText(activity, "Bản này không dùng OTA production", Toast.LENGTH_LONG).show()
@@ -47,6 +55,7 @@ class AppUpdater(
                 if (showUpToDate) Toast.makeText(activity, "Không kiểm tra được cập nhật: ${error.message}", Toast.LENGTH_LONG).show()
                 return@launch
             }
+            if (!showUpToDate) prefs.edit().putLong(KEY_LAST_SUCCESS_MS, System.currentTimeMillis()).apply()
             if (release.channel != installedChannel) {
                 diagnostics.error("ota_channel_manifest_mismatch", fields = mapOf("installed_channel" to installedChannel, "manifest_channel" to release.channel))
                 if (showUpToDate) Toast.makeText(activity, "Kênh cập nhật không khớp; đã hủy", Toast.LENGTH_LONG).show()
@@ -164,5 +173,9 @@ class AppUpdater(
 
     companion object {
         private const val OTA_CHANNEL_META = "vn.pickpack1291.baohang.OTA_CHANNEL"
+        private const val KEY_LAST_ATTEMPT_MS = "last_attempt_ms"
+        private const val KEY_LAST_SUCCESS_MS = "last_success_ms"
+        private const val AUTO_RETRY_TTL_MS = 30 * 60 * 1000L
+        private const val AUTO_SUCCESS_TTL_MS = 6 * 60 * 60 * 1000L
     }
 }
