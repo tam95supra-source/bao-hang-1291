@@ -232,7 +232,16 @@ BEGIN
       'device_tokens',coalesce((
         SELECT jsonb_agg(d.fcm_token ORDER BY d.fcm_token)
         FROM public.device_tokens d
-        WHERE d.active=true AND d.realtime_topic_capable=false
+        JOIN public.profiles p ON p.id=d.user_id
+        WHERE d.active=true
+          AND (
+            r.topic='catalog'
+            OR (r.topic='issues'
+                AND p.role IN ('ADMIN','ADMIN_INVENT','INVENT')
+                AND d.realtime_topic_capable=false)
+            OR (r.topic IN ('staff','config')
+                AND p.role IN ('ADMIN','ADMIN_INVENT','INVENT'))
+          )
       ),'[]'::jsonb)
     )
     ORDER BY r.id
