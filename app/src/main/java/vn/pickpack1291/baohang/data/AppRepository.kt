@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.tasks.await
 import org.json.JSONArray
 import org.json.JSONObject
@@ -61,7 +62,7 @@ class AppRepository(
     suspend fun searchSkuDigitsOnline(query: String) = api.searchSkuDigits(query)
     suspend fun withdrawShortage(issueId: String) = api.withdrawShortage(issueId)
 
-    suspend fun reportShortage(sku: String): ReportResult {
+    suspend fun reportShortage(sku: String): ReportResult = withContext(Dispatchers.IO) {
         val requestId = UUID.randomUUID().toString()
         diagnostics.info("shortage_submit", mapOf("sku" to sku, "request_id" to requestId))
         return try {
@@ -76,17 +77,34 @@ class AppRepository(
         }
     }
 
-    suspend fun loadMyIssues(): List<StockIssue> = try {
-        api.myIssues().also(database::replaceIssues)
-    } catch (_: Exception) { database.cachedIssues(100) }
-
-    suspend fun loadActiveIssues(): List<StockIssue> = try {
-        api.activeIssues().also(database::replaceIssues)
-    } catch (_: Exception) { database.cachedIssues(200).filter { it.status.isOpenBucket } }
-
-    suspend fun loadIssueBoard(): IssueBoard = api.issueBoard().also {
-        database.replaceIssues(it.open + it.claimed + it.recent + it.withdrawn)
+    suspend fun loadMyIssues(): List<StockIssue> = withContext(Dispatchers.IO) {
+        try { api.myIssues().also(database::replaceIssues) }
+        catch (_: Exception) { database.cachedIssues(100) }
     }
+
+    suspend fun loadActiveIssues(): List<StockIssue> = withContext(Dispatchers.IO) {
+        try { api.activeIssues().also(database::replaceIssues) }
+        catch (_: Exception) { database.cachedIssues(200).filter { it.status.isOpenBucket } }
+    }
+
+    suspend fun loadIssueBoard(): IssueBoard = withContext(Dispatchers.IO) {
+        api.issueBoard().also {
+            database.replaceIssues(it.open + it.claimed + it.recent + it.withdrawn)
+            database.setMetadata("issue_realtime_seq", it.realtimeSeq.toString())
+        }
+    }
+
+    suspend fun loadIssueDelta(afterSeq: Long): IssueDelta = withContext(Dispatchers.IO) {
+        api.issueDelta(afterSeq).also { delta ->
+            delta.events.forEach { event ->
+                event.issue?.takeIf { event.visible }?.let { database.upsertIssues(listOf(it)) }
+                    ?: database.removeIssue(event.entityId)
+            }
+            database.setMetadata("issue_realtime_seq", delta.latestSeq.toString())
+        }
+    }
+
+    fun cachedIssueRealtimeSeq(): Long = database.metadata("issue_realtime_seq")?.toLongOrNull() ?: 0L
 
     suspend fun claimIssue(issueId: String): StockIssue = api.claimIssue(issueId).also {
         database.upsertIssues(listOf(it))
