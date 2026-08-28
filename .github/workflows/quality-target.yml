@@ -107,6 +107,14 @@ jobs:
           }
           console.log('WEB_INITIAL_JS_GZIP_GATE=PASS');
           NODE
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const source = fs.readFileSync('web-admin/src/main.js', 'utf8');
+          const invalid = /(?<!\$)\$\([^\n;]*\)\.forEach\s*\(/g;
+          const matches = [...source.matchAll(invalid)].map((m) => m[0]);
+          if (matches.length) throw new Error('WEB_SINGLE_SELECTOR_FOREACH=' + JSON.stringify(matches));
+          console.log('WEB_DOM_COLLECTION_HELPER_GATE=PASS');
+          NODE
           echo 'APPS_SCRIPT_SYNTAX_GATE=PASS'
 
       - name: Enforce Neon-only runtime and public-source security
