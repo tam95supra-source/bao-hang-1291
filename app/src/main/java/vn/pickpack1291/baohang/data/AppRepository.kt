@@ -33,7 +33,10 @@ class AppRepository(
         val auth = api.signIn(employeeCode.trim(), password)
         session.save(auth)
         diagnostics.info("session_saved", mapOf("employee_code" to auth.profile.employeeCode, "role" to auth.profile.role.wire))
-        registerCurrentDevice()
+        scope.launch {
+            runCatching { registerCurrentDevice() }
+                .onFailure { diagnostics.warn("device_register_deferred", mapOf("error" to it.message.orEmpty())) }
+        }
         if (database.outboxCount() > 0) SyncScheduler.enqueueOutbox(context)
         if (catalogNeedsRefresh()) SyncScheduler.enqueueCatalog(context)
         return auth.profile
@@ -41,6 +44,7 @@ class AppRepository(
 
     fun logout() {
         diagnostics.info("logout", mapOf("employee_code" to (session.profile?.employeeCode ?: "")))
+        scope.launch { runCatching { FirebaseMessaging.getInstance().unsubscribeFromTopic(ISSUE_OPERATOR_TOPIC).await() } }
         session.clear()
     }
 
@@ -208,16 +212,29 @@ class AppRepository(
     fun outboxCount(): Int = database.outboxCount()
 
     suspend fun registerCurrentDevice() {
-        val token = FirebaseMessaging.getInstance().token.await()
+        val messaging = FirebaseMessaging.getInstance()
+        val token = messaging.token.await()
         api.registerDevice(token, "${Build.MANUFACTURER} ${Build.MODEL}", "${BuildConfig.VERSION_NAME} [${BuildConfig.OTA_CHANNEL.uppercase()}]")
+        if (session.effectiveRole.canProcessIssues) messaging.subscribeToTopic(ISSUE_OPERATOR_TOPIC).await()
+        else messaging.unsubscribeFromTopic(ISSUE_OPERATOR_TOPIC).await()
         session.markDeviceRegistered()
-        diagnostics.info("device_registered", mapOf("device" to "${Build.MANUFACTURER} ${Build.MODEL}", "version" to BuildConfig.VERSION_NAME))
+        diagnostics.info(
+            "device_registered",
+            mapOf(
+                "device" to "${Build.MANUFACTURER} ${Build.MODEL}",
+                "version" to BuildConfig.VERSION_NAME,
+                "issue_topic" to session.effectiveRole.canProcessIssues
+            )
+        )
     }
 
     fun registerDeviceAsync(token: String) {
         scope.launch {
             runCatching {
                 api.registerDevice(token, "${Build.MANUFACTURER} ${Build.MODEL}", "${BuildConfig.VERSION_NAME} [${BuildConfig.OTA_CHANNEL.uppercase()}]")
+                val messaging = FirebaseMessaging.getInstance()
+                if (session.effectiveRole.canProcessIssues) messaging.subscribeToTopic(ISSUE_OPERATOR_TOPIC).await()
+                else messaging.unsubscribeFromTopic(ISSUE_OPERATOR_TOPIC).await()
                 session.markDeviceRegistered()
                 diagnostics.info("fcm_token_registered", mapOf("version" to BuildConfig.VERSION_NAME))
             }.onFailure { diagnostics.error("fcm_token_register_failed", it) }
@@ -255,4 +272,8 @@ class AppRepository(
     suspend fun syncGoogleSheet() = api.syncGoogleSheet()
     suspend fun reportsSummary() = api.reportsSummary()
     suspend fun issueHistory(limit: Int = 200): JSONArray = api.issueHistory(limit)
+
+    private companion object {
+        const val ISSUE_OPERATOR_TOPIC = "bao-hang-1291-issues-operators"
+    }
 }
