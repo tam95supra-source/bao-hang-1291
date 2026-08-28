@@ -9,7 +9,6 @@ import android.provider.Settings
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import vn.pickpack1291.baohang.BaoHangApplication
 import vn.pickpack1291.baohang.R
@@ -19,7 +18,6 @@ class SplashActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_splash)
         lifecycleScope.launch {
-            delay(450)
             val app = application as BaoHangApplication
             val destination = when {
                 !app.session.isLoggedIn -> LoginActivity::class.java

@@ -1,7 +1,10 @@
 package vn.pickpack1291.baohang.network
 
 import android.util.Base64
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -10,6 +13,8 @@ import vn.pickpack1291.baohang.data.AppConfig
 import vn.pickpack1291.baohang.data.AuthSession
 import vn.pickpack1291.baohang.data.ImportUserRow
 import vn.pickpack1291.baohang.data.IssueBoard
+import vn.pickpack1291.baohang.data.IssueDelta
+import vn.pickpack1291.baohang.data.IssueDeltaEvent
 import vn.pickpack1291.baohang.data.IssueStatus
 import vn.pickpack1291.baohang.data.OperationalConfig
 import vn.pickpack1291.baohang.data.PendingAlert
@@ -35,6 +40,7 @@ class ApiClient(
     private val neonApi = BuildConfig.NEON_DATA_API.trimEnd('/')
     private val firebaseWebApiKey = BuildConfig.FIREBASE_WEB_API_KEY.trim()
     private val workerUrl = BuildConfig.APPS_SCRIPT_WORKER_URL.trim()
+    private val signalScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     val isConfigured: Boolean
         get() = neonApi.startsWith("https://") && neonApi.contains("ap-southeast-1") &&
@@ -101,15 +107,14 @@ class ApiClient(
 
     suspend fun withdrawShortage(issueId: String): JSONObject {
         val result = invoke("withdraw-shortage", JSONObject().put("issue_id", issueId))
-        kickWorkerBestEffort("withdraw_shortage")
+        deferWorkerKick("withdraw_shortage")
         return result
     }
 
     suspend fun reportShortage(sku: String, clientRequestId: String): ReportResult {
         val json = invoke("report-shortage", JSONObject().put("sku", sku).put("client_request_id", clientRequestId))
         val issue = StockIssue.fromJson(json.getJSONObject("issue"))
-        emitIssueRealtimeBestEffort(issue, "report_shortage")
-        kickWorkerBestEffort("report_shortage")
+        deferIssueTransport(issue, "report_shortage")
         return ReportResult(
             issue,
             json.optBoolean("already_reported", false),
@@ -136,7 +141,8 @@ class ApiClient(
             claimedCount = counts.optInt("claimed", claimed.size),
             availableCount = counts.optInt("available", recent.count { it.status == IssueStatus.AVAILABLE }),
             skippedCount = counts.optInt("skipped", recent.count { it.status == IssueStatus.SKIP_ALLOWED }),
-            withdrawnCount = withdrawal.optInt("count", withdrawn.size)
+            withdrawnCount = withdrawal.optInt("count", withdrawn.size),
+            realtimeSeq = response.optLong("realtime_seq", 0L)
         )
     }
 
@@ -144,14 +150,40 @@ class ApiClient(
         invoke("issue-detail", JSONObject().put("issue_id", issueId)).getJSONObject("issue")
     )
 
+    suspend fun issueDelta(afterSeq: Long, limit: Int = 200): IssueDelta {
+        val response = invoke("issue-delta", JSONObject().put("after_seq", afterSeq).put("limit", limit))
+        val array = response.optJSONArray("events") ?: JSONArray()
+        val events = buildList {
+            for (index in 0 until array.length()) {
+                val row = array.getJSONObject(index)
+                add(
+                    IssueDeltaEvent(
+                        seq = row.optLong("seq", afterSeq),
+                        entityId = row.optString("entity_id"),
+                        entityVersion = row.optLong("entity_version", 0L),
+                        visible = row.optBoolean("visible", false),
+                        withdrawnChanged = row.optBoolean("withdrawn_changed", false),
+                        issue = row.optJSONObject("issue")?.let(StockIssue::fromJson)
+                    )
+                )
+            }
+        }
+        return IssueDelta(
+            events = events,
+            latestSeq = response.optLong("latest_seq", afterSeq),
+            serverSeq = response.optLong("server_seq", afterSeq),
+            hasMore = response.optBoolean("has_more", false),
+            requiresFullReconcile = response.optBoolean("requires_full_reconcile", false)
+        )
+    }
+
     suspend fun myIssues(): List<StockIssue> = invoke("picker-my-issues", JSONObject()).optJSONArray("issues").toStockIssues()
 
     suspend fun claimIssue(issueId: String): StockIssue {
         val issue = StockIssue.fromJson(
             invoke("claim-issue", JSONObject().put("issue_id", issueId).put("client_request_id", UUID.randomUUID().toString())).getJSONObject("issue")
         )
-        emitIssueRealtimeBestEffort(issue, "claim_issue")
-        kickWorkerBestEffort("claim_issue")
+        deferIssueTransport(issue, "claim_issue")
         return issue
     }
 
@@ -166,8 +198,7 @@ class ApiClient(
                     .put("client_request_id", UUID.randomUUID().toString())
             ).getJSONObject("issue")
         )
-        emitIssueRealtimeBestEffort(issue, "reassign_issue")
-        kickWorkerBestEffort("reassign_issue")
+        deferIssueTransport(issue, "reassign_issue")
         return issue
     }
 
@@ -181,8 +212,7 @@ class ApiClient(
                     .put("client_request_id", UUID.randomUUID().toString())
             ).getJSONObject("issue")
         )
-        emitIssueRealtimeBestEffort(issue, "update_issue")
-        kickWorkerBestEffort("update_issue")
+        deferIssueTransport(issue, "update_issue")
         return issue
     }
 
@@ -195,8 +225,7 @@ class ApiClient(
                     .put("reason", "Đã tìm thấy hàng sau khi cho phép bỏ qua")
             ).getJSONObject("issue")
         )
-        emitIssueRealtimeBestEffort(issue, "restore_skipped")
-        kickWorkerBestEffort("restore_skipped")
+        deferIssueTransport(issue, "restore_skipped")
         return issue
     }
 
@@ -211,9 +240,10 @@ class ApiClient(
 
     suspend fun registerDevice(token: String, deviceName: String, appVersion: String) {
         invoke(
-            "register-device",
+            "register-device-v2",
             JSONObject().put("fcm_token", token).put("device_name", deviceName)
                 .put("app_version", appVersion).put("platform", "android")
+                .put("realtime_topic_capable", true)
         )
     }
 
@@ -341,6 +371,9 @@ class ApiClient(
             "issue-board" -> "api_issue_board_rpc" to base()
             "withdrawn-board" -> "api_withdrawn_board_rpc" to base()
             "issue-detail" -> "api_issue_detail_rpc" to base().put("p_issue_id", payload.getString("issue_id"))
+            "issue-delta" -> "api_issue_delta_rpc" to base()
+                .put("p_after_seq", payload.optLong("after_seq", 0L))
+                .put("p_limit", payload.optInt("limit", 200))
             "picker-my-issues", "my-issues" -> "api_picker_my_issues_rpc" to base()
             "claim-issue" -> "api_claim_issue_rpc" to base().put("p_issue_id", payload.getString("issue_id")).put("p_client_request_id", payload.optString("client_request_id", UUID.randomUUID().toString()))
             "reassign-issue" -> "api_reassign_issue_rpc" to base()
@@ -365,6 +398,12 @@ class ApiClient(
                 .put("p_device_name", payload.optString("device_name"))
                 .put("p_app_version", payload.optString("app_version"))
                 .put("p_platform", payload.optString("platform", "android"))
+            "register-device-v2" -> "api_register_device_v2_rpc" to base()
+                .put("p_fcm_token", payload.getString("fcm_token"))
+                .put("p_device_name", payload.optString("device_name"))
+                .put("p_app_version", payload.optString("app_version"))
+                .put("p_platform", payload.optString("platform", "android"))
+                .put("p_realtime_topic_capable", payload.optBoolean("realtime_topic_capable", true))
             "sync-catalog" -> "api_sync_catalog_rpc" to base()
                 .putNullable("p_after_sku", payload.optNullableString("after_sku"))
                 .putNullable("p_updated_since", payload.optNullableString("updated_since"))
@@ -433,6 +472,37 @@ class ApiClient(
             throw ApiException(500, result.optString("error", "Worker Google trả lỗi"), "WORKER_ERROR")
         }
         return result
+    }
+
+    private fun deferIssueTransport(issue: StockIssue, reason: String) {
+        signalScope.launch {
+            emitIssueRealtimeBestEffort(issue, reason)
+            kickRealtimeBestEffort(issue, reason)
+            if (reason == "update_issue" || reason == "restore_skipped") {
+                kickWorkerBestEffort(reason)
+            }
+        }
+    }
+
+    private fun deferWorkerKick(reason: String) {
+        signalScope.launch { kickWorkerBestEffort(reason) }
+    }
+
+    private suspend fun kickRealtimeBestEffort(issue: StockIssue, reason: String) = withContext(Dispatchers.IO) {
+        if (workerUrl.isBlank() || sessionStore.accessToken.isBlank()) return@withContext
+        runCatching {
+            refreshSessionIfNeeded()
+            val body = JSONObject()
+                .put("action", "realtime-kick")
+                .put("id_token", sessionStore.accessToken)
+                .put("topic", "issues")
+                .put("entity_id", issue.id)
+                .put("entity_version", issue.issueVersion)
+                .put("reason", reason)
+            requestJson("POST", workerUrl, body, token = null, eventName = "realtime_kick_$reason", connectTimeout = 4_000, readTimeout = 8_000)
+        }.onFailure {
+            diagnostics.warn("realtime_kick_deferred", mapOf("reason" to reason, "error" to (it.message ?: it.javaClass.simpleName).take(240)))
+        }
     }
 
     private suspend fun emitIssueRealtimeBestEffort(issue: StockIssue, reason: String) = withContext(Dispatchers.IO) {

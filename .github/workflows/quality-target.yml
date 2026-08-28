@@ -67,6 +67,48 @@ jobs:
           npm --prefix web-admin install --ignore-scripts --no-audit --no-fund --no-package-lock
           npm --prefix web-admin run build
 
+      - name: Verify Apps Script syntax and Web initial JS budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp google-apps-script/DEPLOY_NEON.gs "$RUNNER_TEMP/deploy-neon.js"
+          node --check "$RUNNER_TEMP/deploy-neon.js"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import zlib from 'node:zlib';
+
+          const root = 'web-admin/dist';
+          const manifest = JSON.parse(fs.readFileSync(path.join(root, '.vite/manifest.json'), 'utf8'));
+          const entry = manifest['index.html'] || Object.values(manifest).find((item) => item.isEntry);
+          if (!entry) throw new Error('WEB_MANIFEST_ENTRY_MISSING');
+
+          const seen = new Set();
+          function walk(item) {
+            if (!item || seen.has(item.file)) return;
+            seen.add(item.file);
+            for (const key of item.imports || []) walk(manifest[key]);
+          }
+          walk(entry);
+
+          let gzipBytes = 0;
+          const files = [];
+          for (const file of [...seen].sort()) {
+            if (!file.endsWith('.js')) continue;
+            const bytes = fs.readFileSync(path.join(root, file));
+            const gz = zlib.gzipSync(bytes, { level: 9 }).length;
+            gzipBytes += gz;
+            files.push({ file, gzipBytes: gz });
+          }
+          console.log('WEB_INITIAL_JS_GZIP_FILES=' + JSON.stringify(files));
+          console.log('WEB_INITIAL_JS_GZIP_BYTES=' + gzipBytes);
+          if (gzipBytes > 150 * 1024) {
+            throw new Error('WEB_INITIAL_JS_GZIP_BUDGET_EXCEEDED:' + gzipBytes);
+          }
+          console.log('WEB_INITIAL_JS_GZIP_GATE=PASS');
+          NODE
+          echo 'APPS_SCRIPT_SYNTAX_GATE=PASS'
+
       - name: Enforce Neon-only runtime and public-source security
         shell: bash
         run: |

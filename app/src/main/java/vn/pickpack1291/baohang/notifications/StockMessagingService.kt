@@ -30,7 +30,12 @@ class StockMessagingService : FirebaseMessagingService() {
 
         if (data["event_type"] == "REALTIME_DELTA") {
             val topic = data["topic"].orEmpty()
-            val published = RealtimeSignalBus.publish(topic)
+            val published = RealtimeSignalBus.publish(
+                topic,
+                entityId = data["entity_id"].orEmpty(),
+                entityVersion = data["entity_version"]?.toLongOrNull() ?: 0L,
+                seq = data["realtime_event_id"]?.toLongOrNull() ?: 0L
+            )
             if (!published) RealtimeInvalidationStore.markPending(this, topic)
             app.diagnostics.info(
                 "fcm_realtime_delta",

@@ -57,6 +57,10 @@ function doPost(e) {
     if (action === 'ping') return json_({ok:true,project:BH_PROJECT,provider:'NEON_FIREBASE_GOOGLE',staff_sheet_id:BH_STAFF_SHEET_ID,staff_sheet_name:BH_STAFF_SHEET_NAME});
     if (action === 'staff-source-ping' || action === 'staff-source-structure-ping') return json_(staffSourceBridgeReceive_(body));
     if (action === 'bootstrap-config') return json_(bootstrapConfig_(body));
+    if (action === 'realtime-kick') {
+      requireRealtimeCaller_(String(body.id_token || ''));
+      return json_(realtimeKick_(body));
+    }
     if (action === 'worker-kick') {
       requireUser_(String(body.id_token || ''), null);
       return json_(workerTick_('CLIENT_KICK'));
@@ -185,34 +189,38 @@ function scheduleAdaptiveTrigger_(iso) {
 }
 
 function drainNotifications_(token) {
-  const batch = neonRpc_('worker_notification_batch_rpc', {p_limit:200}, token) || [];
-  let accepted = 0, failed = 0;
-  batch.forEach(function(event) {
-    const result = sendEventToTokens_(event, String(event.status || ''), token);
-    neonRpc_('worker_notification_result_rpc', {
-      p_event_id:String(event.event_id),
-      p_accepted:result.accepted,
-      p_invalid_tokens:result.invalidTokens,
-      p_error:result.error || ''
-    }, token);
-    result.accepted ? accepted++ : failed++;
+  const batch=neonRpc_('worker_notification_batch_rpc',{p_limit:200},token)||[];
+  let accepted=0,failed=0;
+  const results=[];
+  batch.forEach(function(event){
+    const result=sendEventToTokens_(event,String(event.status||''),token);
+    results.push({
+      event_id:String(event.event_id),
+      accepted:!!result.accepted,
+      invalid_tokens:result.invalidTokens||[],
+      error:result.error||''
+    });
+    result.accepted?accepted++:failed++;
   });
+  if(results.length)neonRpc_('worker_notification_results_rpc',{p_results:results},token);
   return {count:batch.length,accepted:accepted,failed:failed};
 }
 
 function drainPushes_(token) {
-  const batch = neonRpc_('worker_push_batch_rpc', {p_limit:200}, token) || [];
-  let accepted = 0, failed = 0;
-  batch.forEach(function(event) {
-    const result = sendEventToTokens_(event, String(event.event_status || ''), token);
-    neonRpc_('worker_push_result_rpc', {
-      p_id:String(event.id),
-      p_accepted:result.accepted,
-      p_invalid_tokens:result.invalidTokens,
-      p_error:result.error || ''
-    }, token);
-    result.accepted ? accepted++ : failed++;
+  const batch=neonRpc_('worker_push_batch_rpc',{p_limit:200},token)||[];
+  let accepted=0,failed=0;
+  const results=[];
+  batch.forEach(function(event){
+    const result=sendEventToTokens_(event,String(event.event_status||''),token);
+    results.push({
+      id:String(event.id),
+      accepted:!!result.accepted,
+      invalid_tokens:result.invalidTokens||[],
+      error:result.error||''
+    });
+    result.accepted?accepted++:failed++;
   });
+  if(results.length)neonRpc_('worker_push_results_rpc',{p_results:results},token);
   return {count:batch.length,accepted:accepted,failed:failed};
 }
 
@@ -252,30 +260,50 @@ function sendEventToTokens_(event, status, unusedIdToken) {
 }
 
 function drainSheet_(token) {
-  const events = neonRpc_('worker_sheet_batch_rpc', {p_limit:500}, token) || [];
-  if (!events.length) return {count:0};
-  const ids = [];
-  events.forEach(function(event) { applyEvent_(event); ids.push(Number(event.id)); });
-  const acked = neonRpc_('worker_sheet_ack_rpc', {p_ids:ids}, token);
-  return {count:events.length,acked:Number(acked || 0)};
+  const events=neonRpc_('worker_sheet_batch_rpc',{p_limit:500},token)||[];
+  if(!events.length)return {count:0};
+  const applied=applyEventsBatch_(events);
+  const ids=events.map(function(event){return Number(event.id);});
+  const acked=neonRpc_('worker_sheet_ack_rpc',{p_ids:ids},token);
+  return {count:events.length,acked:Number(acked||0),sheet:applied};
 }
 
 function drainRealtime_(token) {
-  const events = neonRpc_('worker_realtime_batch_rpc', {p_limit:200}, token) || [];
-  let published = 0, failed = 0;
-  events.forEach(function(event) {
-    try {
-      publishFirestoreRealtime_(event);
-      const push = sendRealtimeDeltaToTokens_(event);
-      if (!push.accepted) throw new Error(push.error || 'REALTIME_FCM_FAILED');
-      neonRpc_('worker_realtime_result_rpc', {p_id:Number(event.id),p_published:true,p_error:''}, token);
-      published++;
-    } catch (error) {
-      failed++;
-      neonRpc_('worker_realtime_result_rpc', {p_id:Number(event.id),p_published:false,p_error:safeError_(error)}, token);
+  const events=neonRpc_('worker_realtime_batch_rpc',{p_limit:200},token)||[];
+  if(!events.length)return {enabled:true,count:0,published:0,failed:0,groups:0};
+  const groups={};
+  events.forEach(function(event){
+    const topic=String(event.topic||'');
+    (groups[topic]||(groups[topic]=[])).push(event);
+  });
+  let published=0,failed=0;
+  const results=[];
+  Object.keys(groups).forEach(function(topic){
+    const group=groups[topic];
+    const latest=group[group.length-1];
+    try{
+      publishFirestoreRealtime_(latest);
+      const push=sendRealtimeDeltaToTokens_(latest);
+      if(!push.accepted)throw new Error(push.error||'REALTIME_FCM_FAILED');
+      results.push({
+        ids:group.map(function(e){return Number(e.id);}),
+        published:true,
+        invalid_tokens:push.invalidTokens||[],
+        error:''
+      });
+      published+=group.length;
+    }catch(error){
+      failed+=group.length;
+      results.push({
+        ids:group.map(function(e){return Number(e.id);}),
+        published:false,
+        invalid_tokens:[],
+        error:safeError_(error)
+      });
     }
   });
-  return {enabled:true,count:events.length,published:published,failed:failed};
+  if(results.length)neonRpc_('worker_realtime_results_rpc',{p_results:results},token);
+  return {enabled:true,count:events.length,published:published,failed:failed,groups:Object.keys(groups).length};
 }
 
 function publishFirestoreRealtime_(event) {
@@ -299,15 +327,39 @@ function publishFirestoreRealtime_(event) {
 }
 
 function sendRealtimeDeltaToTokens_(event) {
-  const tokens = Array.isArray(event.device_tokens) ? event.device_tokens : [];
-  if (!tokens.length) return {accepted:true,invalidTokens:[],error:''};
-  const access = firebaseOAuthAccessToken_('https://www.googleapis.com/auth/firebase.messaging');
-  const invalid = [];
-  let success = 0, lastError = '';
-  tokens.forEach(function(token) {
-    const data={event_type:'REALTIME_DELTA',topic:String(event.topic||''),realtime_event_id:String(event.id||''),entity_id:String(event.entity_id||''),entity_version:String(event.entity_version||0)};
-    const body={message:{token:String(token),data:data,android:{priority:'high',ttl:'60s',collapse_key:'realtime-'+String(event.topic||'all').slice(0,48)}}};
-    const url='https://fcm.googleapis.com/v1/projects/'+BH_PROJECT+'/messages:send';
+  const tokens=Array.isArray(event.device_tokens)?event.device_tokens:[];
+  const access=firebaseOAuthAccessToken_('https://www.googleapis.com/auth/firebase.messaging');
+  const invalid=[];
+  let attempted=0,success=0,lastError='';
+  const data={
+    event_type:'REALTIME_DELTA',
+    topic:String(event.topic||''),
+    realtime_event_id:String(event.id||''),
+    entity_id:String(event.entity_id||''),
+    entity_version:String(event.entity_version||0)
+  };
+  const url='https://fcm.googleapis.com/v1/projects/'+BH_PROJECT+'/messages:send';
+
+  if(String(event.topic||'')==='issues'){
+    attempted++;
+    const topicBody={message:{
+      topic:'bao-hang-1291-issues-operators',
+      data:data,
+      android:{priority:'high',ttl:'60s',collapse_key:'realtime-issues'}
+    }};
+    const topicRes=UrlFetchApp.fetch(url,{method:'post',contentType:'application/json',headers:{Authorization:'Bearer '+access},payload:JSON.stringify(topicBody),muteHttpExceptions:true});
+    const topicCode=topicRes.getResponseCode();
+    if(topicCode>=200&&topicCode<300)success++;
+    else lastError=('FCM_REALTIME_TOPIC '+topicCode+' '+topicRes.getContentText()).slice(0,500);
+  }
+
+  tokens.forEach(function(token){
+    attempted++;
+    const body={message:{
+      token:String(token),
+      data:data,
+      android:{priority:'high',ttl:'60s',collapse_key:'realtime-'+String(event.topic||'all').slice(0,48)}
+    }};
     const res=UrlFetchApp.fetch(url,{method:'post',contentType:'application/json',headers:{Authorization:'Bearer '+access},payload:JSON.stringify(body),muteHttpExceptions:true});
     const code=res.getResponseCode();
     if(code>=200&&code<300){success++;return;}
@@ -315,7 +367,7 @@ function sendRealtimeDeltaToTokens_(event) {
     lastError=('FCM_REALTIME '+code+' '+text).slice(0,500);
     if(code===404||text.indexOf('UNREGISTERED')>=0||text.indexOf('registration-token-not-registered')>=0)invalid.push(String(token));
   });
-  return {accepted:success>0||invalid.length===tokens.length,invalidTokens:invalid,error:lastError};
+  return {accepted:attempted===0||success>0||invalid.length===tokens.length,invalidTokens:invalid,error:lastError};
 }
 
 function maybeCleanup_(token) {
@@ -538,6 +590,49 @@ function requireUser_(idToken, allowedRoles) {
   return {uid:String(payload.sub||''),profile:profile.profile};
 }
 
+function requireRealtimeCaller_(idToken) {
+  if(!idToken)throw new Error('AUTH_REQUIRED');
+  // Neon Data API validates the Firebase JWT before the RPC executes, so the
+  // high-frequency realtime kick does not need a second Firebase lookup.
+  const session=neonRpc_('api_session_profile_rpc',{p_test_role:null},idToken);
+  if(!session||!session.profile||session.profile.active!==true)throw new Error('USER_INACTIVE');
+  return session.profile;
+}
+
+function realtimeKick_(body) {
+  const topic=String(body.topic||'').trim();
+  if(topic!=='issues')throw new Error('REALTIME_TOPIC_INVALID');
+  const entityId=String(body.entity_id||'').trim();
+  if(!/^[0-9a-f-]{36}$/i.test(entityId))throw new Error('REALTIME_ENTITY_INVALID');
+  const entityVersion=Math.max(0,Number(body.entity_version||0));
+  const reason=String(body.reason||'client').slice(0,80);
+  const access=firebaseOAuthAccessToken_('https://www.googleapis.com/auth/firebase.messaging');
+  const data={
+    event_type:'REALTIME_DELTA',
+    topic:'issues',
+    realtime_event_id:'0',
+    entity_id:entityId,
+    entity_version:String(entityVersion),
+    source:'client:'+reason
+  };
+  const message={
+    topic:'bao-hang-1291-issues-operators',
+    data:data,
+    android:{priority:'high',ttl:'60s',collapse_key:'realtime-issues'}
+  };
+  const url='https://fcm.googleapis.com/v1/projects/'+BH_PROJECT+'/messages:send';
+  const res=UrlFetchApp.fetch(url,{
+    method:'post',
+    contentType:'application/json',
+    headers:{Authorization:'Bearer '+access},
+    payload:JSON.stringify({message:message}),
+    muteHttpExceptions:true
+  });
+  const code=res.getResponseCode();
+  if(code<200||code>=300)throw new Error('FCM_REALTIME_TOPIC_'+code+': '+res.getContentText().slice(0,300));
+  return {ok:true,topic:topic,entity_id:entityId,entity_version:entityVersion};
+}
+
 function neonRpc_(name, payload, idToken) {
   const allowed=/^(api_|worker_|diagnostic_)[a-z0-9_]+_rpc$/.test(name)||name==='report_shortage_rpc';
   if(!allowed)throw new Error('RPC_NOT_ALLOWED');
@@ -551,13 +646,18 @@ function neonRpc_(name, payload, idToken) {
 }
 
 function workerAdminIdToken_() {
+  const cache=CacheService.getScriptCache();
+  const cached=cache.get('WORKER_ADMIN_ID_TOKEN');
+  if(cached)return cached;
   const uid=requiredProp_('WORKER_ADMIN_UID');
   const sa=serviceAccount_();
   const now=Math.floor(Date.now()/1000);
   const custom=signJwt_(sa,{iss:sa.client_email,sub:sa.client_email,aud:'https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit',iat:now,exp:now+3600,uid:uid});
   const data=fetchJson_('https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key='+encodeURIComponent(requiredProp_('FIREBASE_WEB_API_KEY')),{method:'post',contentType:'application/json',payload:JSON.stringify({token:custom,returnSecureToken:true}),muteHttpExceptions:true});
   if(!data.idToken)throw new Error('FIREBASE_CUSTOM_TOKEN_FAILED');
-  return String(data.idToken);
+  const token=String(data.idToken);
+  cache.put('WORKER_ADMIN_ID_TOKEN',token,3000);
+  return token;
 }
 
 function verifyFirebaseIdToken_(token) {
@@ -579,13 +679,19 @@ function verifyFirebaseIdToken_(token) {
 }
 
 function firebaseOAuthAccessToken_(scope) {
+  const cache=CacheService.getScriptCache();
+  const key='OAUTH_'+String(scope||'').replace(/[^a-z0-9]/gi,'_').slice(-80);
+  const cached=cache.get(key);
+  if(cached)return cached;
   const sa=serviceAccount_();
   const now=Math.floor(Date.now()/1000);
   const assertion=signJwt_(sa,{iss:sa.client_email,scope:scope,aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+3600});
   const response=UrlFetchApp.fetch('https://oauth2.googleapis.com/token',{method:'post',payload:{grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:assertion},muteHttpExceptions:true});
-  const body=JSON.parse(response.getContentText()||'{}');
+  let body={};try{body=JSON.parse(response.getContentText()||'{}')}catch(ignore){}
   if(response.getResponseCode()!==200||!body.access_token)throw new Error('GOOGLE_OAUTH_FAILED');
-  return String(body.access_token);
+  const token=String(body.access_token);
+  cache.put(key,token,3000);
+  return token;
 }
 
 function firebaseAdminCreate_(uid,email,password,displayName,disabled) {
@@ -623,7 +729,122 @@ function sheetWebhook_(body) {
   const expected=PropertiesService.getScriptProperties().getProperty('WEBHOOK_SECRET');
   if(!expected||String(body.secret)!==expected)return {ok:false,error:'Unauthorized'};
   const lock=LockService.getScriptLock();lock.waitLock(25000);
-  try{(body.events||[]).forEach(applyEvent_);return {ok:true,processed:(body.events||[]).length};}finally{lock.releaseLock();}
+  try{
+    const events=Array.isArray(body.events)?body.events:[];
+    const applied=applyEventsBatch_(events);
+    return {ok:true,processed:events.length,sheet:applied};
+  }finally{lock.releaseLock();}
+}
+
+function applyEventsBatch_(events) {
+  const list=Array.isArray(events)?events:[];
+  if(!list.length)return {events_appended:0,users_upserted:0,issues_upserted:0};
+
+  const ss=reportSpreadsheet_();
+  const eventSheet=ss.getSheetByName('SU_KIEN');
+  const userSheet=ss.getSheetByName('NHAN_SU');
+  const issueSheet=ss.getSheetByName('TRANG_THAI_SKU');
+  if(!eventSheet||!userSheet||!issueSheet)throw new Error('SHEET_STRUCTURE_MISSING');
+
+  // SU_KIEN is append-only. Read only the recent tail so a retry after a
+  // partial write remains idempotent without scanning the full history.
+  const eventLast=eventSheet.getLastRow();
+  const tailStart=Math.max(2,eventLast-4999);
+  const tailCount=eventLast>=tailStart?eventLast-tailStart+1:0;
+  const recentIds=new Set(
+    tailCount>0
+      ? eventSheet.getRange(tailStart,1,tailCount,1).getValues().map(function(row){return String(row[0]||'');})
+      : []
+  );
+
+  const userLast=userSheet.getLastRow();
+  const userRows=userLast>=2?userSheet.getRange(2,1,userLast-1,BH_USER_HEADERS.length).getValues():[];
+  const userIndex={};
+  userRows.forEach(function(row,i){const key=String(row[0]||'').trim();if(key)userIndex[key]=i;});
+
+  const issueLast=issueSheet.getLastRow();
+  const issueRows=issueLast>=2?issueSheet.getRange(2,1,issueLast-1,BH_ISSUE_HEADERS.length).getValues():[];
+  const issueIndex={};
+  issueRows.forEach(function(row,i){const key=String(row[0]||'').trim();if(key)issueIndex[key]=i;});
+
+  const eventRows=[];
+  let usersChanged=0,issuesChanged=0;
+
+  list.forEach(function(event){
+    if(!event||typeof event!=='object')throw new Error('SHEET_EVENT_INVALID');
+    const payload=(event.payload&&typeof event.payload==='object'&&!Array.isArray(event.payload))?event.payload:{};
+    const eventType=String(event.event_type||event.type||'').trim().toUpperCase();
+    const eventId=String(event.event_id||event.queue_id||event.id||'').trim();
+    if(!eventId)throw new Error('SHEET_EVENT_ID_REQUIRED');
+
+    const issueId=String(event.issue_id||payload.id||event.ticket_id||'').trim();
+    const sku=String(event.sku||payload.sku||'').trim();
+    const productName=String(event.product_name||payload.product_name||'').trim();
+    const status=String(event.status||payload.status||'').trim();
+    const reportCount=Number(event.report_count!==undefined?event.report_count:(payload.report_count||0));
+    const actorId=String(event.actor_account_id||event.actor_user_id||payload.actor_id||payload.reporter_id||'').trim();
+    const eventTime=event.created_at||event.accepted_at_authority||event.occurred_at_device||payload.updated_at||new Date().toISOString();
+
+    if(!recentIds.has(eventId)){
+      eventRows.push([eventId,eventTime,eventType,issueId,sku,productName,status,reportCount,actorId,JSON.stringify(payload)]);
+      recentIds.add(eventId);
+    }
+
+    if(eventType==='USER_UPSERT'||eventType==='USER'){
+      const employeeCode=String(payload.employee_code||event.employee_code||'').trim();
+      if(!employeeCode)throw new Error('SHEET_EMPLOYEE_CODE_REQUIRED');
+      const active=(payload.active!==undefined?payload.active:event.active)!==false;
+      const row=[
+        employeeCode,
+        String(payload.full_name||event.full_name||''),
+        String(payload.contractor||event.contractor||''),
+        String(payload.role||event.role||''),
+        active?'HOẠT ĐỘNG':'NGỪNG HOẠT ĐỘNG',
+        payload.updated_at||event.updated_at||eventTime
+      ];
+      if(userIndex[employeeCode]===undefined){
+        userIndex[employeeCode]=userRows.length;
+        userRows.push(row);
+      }else userRows[userIndex[employeeCode]]=row;
+      usersChanged++;
+    }
+
+    if(eventType==='REPORT_SHORTAGE'||eventType==='ISSUE_STATUS'||eventType==='ISSUE'){
+      if(!issueId)throw new Error('SHEET_ISSUE_ID_REQUIRED');
+      const row=[
+        issueId,
+        sku,
+        productName,
+        status,
+        reportCount,
+        payload.first_reported_at||payload.reported_at||event.first_reported_at||'',
+        payload.updated_at||event.last_reported_at||event.updated_at||eventTime,
+        String(payload.assigned_name||event.invent_assignee_name||event.invent_assignee_id||''),
+        Number(payload.reopen_count!==undefined?payload.reopen_count:(event.reopen_count||0))
+      ];
+      if(issueIndex[issueId]===undefined){
+        issueIndex[issueId]=issueRows.length;
+        issueRows.push(row);
+      }else issueRows[issueIndex[issueId]]=row;
+      issuesChanged++;
+    }
+  });
+
+  if(eventRows.length){
+    eventSheet.getRange(eventLast+1,1,eventRows.length,BH_EVENT_HEADERS.length).setValues(eventRows);
+  }
+  if(usersChanged&&userRows.length){
+    userSheet.getRange(2,1,userRows.length,BH_USER_HEADERS.length).setValues(userRows);
+  }
+  if(issuesChanged&&issueRows.length){
+    issueSheet.getRange(2,1,issueRows.length,BH_ISSUE_HEADERS.length).setValues(issueRows);
+  }
+
+  return {
+    events_appended:eventRows.length,
+    users_upserted:usersChanged,
+    issues_upserted:issuesChanged
+  };
 }
 
 function applyEvent_(event) {

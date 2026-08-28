@@ -16,6 +16,8 @@ const state = {
   board: null,
   loading: false,
   queued: false,
+  deltaBusy: false,
+  pendingSeq: 0,
   withdrawnLoaded: false,
   withdrawnLoading: false,
   role: '',
@@ -329,7 +331,7 @@ async function loadBoard(force = false) {
   ensureShell();
   try {
     const main = await api('issue-board');
-    state.board = { ...main, withdrawn: state.board?.withdrawn || [] };
+    state.board = { ...main, withdrawn: state.board?.withdrawn || [], realtime_seq: Number(main.realtime_seq || 0) };
     if (!force && state.bucket === 'claimed' && !(state.board.claimed || []).length && (state.board.open || []).length) state.bucket = 'open';
     $$('#fastEvents [data-fast-bucket]').forEach((b) => b.classList.toggle('active', b.dataset.fastBucket === state.bucket));
     reconcile();
@@ -346,6 +348,66 @@ async function loadBoard(force = false) {
   }
 }
 
+function removeIssueFromBoard(issueId) {
+  if (!state.board) return;
+  for (const key of ['open','claimed','recent']) {
+    state.board[key] = (state.board[key] || []).filter((item) => String(item.id) !== String(issueId));
+  }
+}
+
+function addVisibleIssue(issue) {
+  if (!state.board || !issue) return;
+  removeIssueFromBoard(issue.id);
+  if (['OPEN','CLAIMED','SEARCHING','REPLENISHING'].includes(issue.status)) {
+    const key = issue.status === 'OPEN' ? 'open' : 'claimed';
+    state.board[key] = [...(state.board[key] || []), issue];
+  } else if (['AVAILABLE','SKIP_ALLOWED'].includes(issue.status)) {
+    state.board.recent = [issue, ...(state.board.recent || [])];
+  }
+}
+
+async function applyIssueSignal(signal = {}) {
+  const incomingSeq = Number(signal.event_id || signal.realtime_event_id || 0);
+  state.pendingSeq = Math.max(state.pendingSeq, incomingSeq);
+  if (state.deltaBusy) return;
+  state.deltaBusy = true;
+  try {
+    while (state.board) {
+      const afterSeq = Number(state.board.realtime_seq || 0);
+      if (incomingSeq > 0 && incomingSeq <= afterSeq && state.pendingSeq <= afterSeq) break;
+      const delta = await api('issue-delta', { after_seq: afterSeq, limit: 200 });
+      if (delta.requires_full_reconcile) {
+        await loadBoard(true);
+        break;
+      }
+      let withdrawnChanged = false;
+      for (const event of delta.events || []) {
+        removeIssueFromBoard(event.entity_id);
+        if (event.visible && event.issue) addVisibleIssue(event.issue);
+        withdrawnChanged ||= Boolean(event.withdrawn_changed);
+      }
+      state.board.realtime_seq = Number(delta.latest_seq || afterSeq);
+      if (withdrawnChanged) {
+        state.withdrawnLoaded = false;
+        if (state.bucket === 'withdrawn') await loadWithdrawn();
+      }
+      reconcile();
+      if (delta.has_more) continue;
+      if (state.pendingSeq > state.board.realtime_seq) {
+        state.pendingSeq = 0;
+        continue;
+      }
+      state.pendingSeq = 0;
+      break;
+    }
+  } catch (error) {
+    console.warn('issue delta reconcile failed', error?.message || error);
+    await loadBoard(true).catch(() => {});
+  } finally {
+    state.deltaBusy = false;
+  }
+}
+
 async function renderFastEvents() {
   applyRoleState();
   ensureShell();
@@ -355,8 +417,6 @@ async function renderFastEvents() {
 function installRenderer() {
   const renderers = globalThis.__BH_WV2_RENDER__ || (globalThis.__BH_WV2_RENDER__ = {});
   renderers.events = renderFastEvents;
-  const active = document.querySelector('button[data-tab="events"].active');
-  if (active && ['ADMIN','ADMIN_INVENT','INVENT'].includes(state.role)) active.click();
 }
 
 function enhanceStaticUi() {
@@ -368,16 +428,8 @@ function enhanceStaticUi() {
   if (roleNode && roleLabel && roleNode.textContent !== roleLabel) roleNode.textContent = roleLabel;
 }
 
-let enhanceFrame = 0;
-const observer = new MutationObserver(() => {
-  if (enhanceFrame) return;
-  enhanceFrame = requestAnimationFrame(() => {
-    enhanceFrame = 0;
-    enhanceStaticUi();
-  });
-});
-observer.observe(document.documentElement, { childList: true, subtree: true });
-
-window.addEventListener('storage', enhanceStaticUi);
-window.addEventListener('pageshow', enhanceStaticUi);
-setTimeout(() => { enhanceStaticUi(); installRenderer(); }, 0);
+globalThis.__BH_FAST_ISSUE_SIGNAL__ = applyIssueSignal;
+globalThis.__BH_FAST_ENHANCE__ = enhanceStaticUi;
+globalThis.__BH_FAST_INSTALL__ = installRenderer;
+enhanceStaticUi();
+installRenderer();

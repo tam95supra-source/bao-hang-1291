@@ -31,6 +31,7 @@ const state = {
   issueChannel: null,
   catalogChannel: null,
   staffChannel: null,
+  configChannel: null,
   realtimeStatus: 'OFFLINE',
   fallbackTimer: null,
   refreshTimer: null,
@@ -74,10 +75,11 @@ async function stopRealtime() {
   state.fallbackTimer = null;
   clearTimeout(state.refreshTimer);
   state.refreshTimer = null;
-  const channels = [state.issueChannel, state.catalogChannel, state.staffChannel].filter(Boolean);
+  const channels = [state.issueChannel, state.catalogChannel, state.staffChannel, state.configChannel].filter(Boolean);
   state.issueChannel = null;
   state.catalogChannel = null;
   state.staffChannel = null;
+  state.configChannel = null;
   for (const channel of channels) await realtimeClient.removeChannel(channel).catch(() => {});
   state.realtimeStatus = 'OFFLINE';
 }
@@ -230,6 +232,25 @@ function setHash(id) {
   if (location.hash !== `#/${id}`) history.replaceState(null, '', `#/${id}`);
 }
 function healthChip(label, value, kind = '', displayLabel = label) { return `<span class="health-chip ${kind}" data-health="${label}"><b>${escapeHtml(displayLabel)}</b><em>${escapeHtml(value)}</em></span>`; }
+const tabModulePromises = new Map();
+async function ensureTabModule(tab) {
+  const currentRole = role();
+  let key = '';
+  let loader = null;
+  if (tab === 'events' && ['ADMIN','ADMIN_INVENT','INVENT'].includes(currentRole)) {
+    key = 'events'; loader = () => import('./web-fast-ui.js');
+  } else if (['overview','reports'].includes(tab)) {
+    key = 'warehouse'; loader = () => import('./warehouse-ui-v2.js');
+  } else if (['users','services','sla','config'].includes(tab)) {
+    key = 'ops'; loader = () => import('./ops-console.js');
+  } else if (tab === 'picker' && currentRole === 'PICKER') {
+    key = 'picker'; loader = () => import('./picker-realtime.js');
+  }
+  if (!loader) return;
+  if (!tabModulePromises.has(key)) tabModulePromises.set(key, loader());
+  await tabModulePromises.get(key);
+}
+
 function renderApp() {
   const profile = state.session.profile;
   const currentRole = role();
@@ -248,11 +269,13 @@ function renderApp() {
   $('#logout').onclick = () => { clearSession(); renderLogin(); };
   $('#exitTest')?.addEventListener('click', () => { state.testRole = null; state.activeTab = null; renderApp(); });
   $$('[data-test]').forEach((button) => button.onclick = () => { state.testRole = button.dataset.test; state.activeTab = null; renderApp(); });
-  $$('[data-tab]').forEach((button) => button.onclick = () => { state.activeTab = button.dataset.tab; setHash(state.activeTab); renderTab(); });
-  renderTab();
+  $('[data-tab]').forEach((button) => button.onclick = () => { state.activeTab = button.dataset.tab; setHash(state.activeTab); void renderTab(); });
+  void renderTab();
   startRealtime();
+  globalThis.__BH_FAST_ENHANCE__?.();
 }
-function renderTab() {
+async function renderTab() {
+  await ensureTabModule(state.activeTab).catch((error) => console.warn('lazy tab module failed', error?.message || error));
   $$('[data-tab]').forEach((button) => button.classList.toggle('active', button.dataset.tab === state.activeTab));
   window.__BH_OPS_NORMALIZE__?.();
   const wv2 = window.__BH_WV2_RENDER__ || {};
@@ -286,9 +309,9 @@ function scheduleLiveRefresh(kind) {
   if (document.hidden) return;
   clearTimeout(state.refreshTimer);
   state.refreshTimer = setTimeout(() => {
-    if (kind === 'catalog' && ['sku','overview','picker'].includes(state.activeTab)) renderTab();
-    if (kind === 'staff' && ['users','overview'].includes(state.activeTab)) renderTab();
-    if (kind === 'issue' && ['events','overview','picker'].includes(state.activeTab)) renderTab();
+    if (kind === 'catalog' && ['sku','overview','picker'].includes(state.activeTab)) void renderTab();
+    if (kind === 'staff' && ['users','overview'].includes(state.activeTab)) void renderTab();
+    if (kind === 'issue' && ['events','overview','picker'].includes(state.activeTab)) void renderTab();
   }, 220);
 }
 function setRealtimeHealth(value, kind = '') {
@@ -318,10 +341,25 @@ async function startRealtime() {
     .on('broadcast', { event: 'catalog_changed' }, () => { showRealtimeNotice('Danh mục SKU vừa cập nhật'); scheduleLiveRefresh('catalog'); }).subscribe(subscribeStatus);
   if (canReceiveOperationalRealtime) {
     state.issueChannel = realtimeClient.channel('site:1291:issues', { config: { private: true } })
-      .on('broadcast', { event: 'issue_changed' }, () => { showRealtimeNotice('Có cập nhật báo hàng mới'); scheduleLiveRefresh('issue'); })
+      .on('broadcast', { event: 'issue_changed' }, ({ payload } = {}) => {
+        showRealtimeNotice('Có cập nhật báo hàng mới');
+        if (typeof globalThis.__BH_FAST_ISSUE_SIGNAL__ === 'function') {
+          void globalThis.__BH_FAST_ISSUE_SIGNAL__(payload || {});
+        } else {
+          scheduleLiveRefresh('issue');
+        }
+      })
       .subscribe(subscribeStatus);
     state.staffChannel = realtimeClient.channel('site:1291:staff', { config: { private: true } })
       .on('broadcast', { event: 'staff_changed' }, () => { showRealtimeNotice('Danh sách nhân sự vừa cập nhật'); scheduleLiveRefresh('staff'); }).subscribe(subscribeStatus);
+  }
+  if (['ADMIN','ADMIN_INVENT'].includes(actualRole())) {
+    state.configChannel = realtimeClient.channel('site:1291:config', { config: { private: true } })
+      .on('broadcast', { event: 'config_changed' }, () => {
+        showRealtimeNotice('Cấu hình vừa cập nhật');
+        if (['config','sla'].includes(state.activeTab)) void renderTab();
+      })
+      .subscribe(subscribeStatus);
   }
   setTimeout(() => { if (state.realtimeStatus !== 'ONLINE') ensureFallbackPolling(); }, 6000);
 }
@@ -329,7 +367,7 @@ function ensureFallbackPolling() {
   if (state.fallbackTimer || document.hidden || !state.session) return;
   state.fallbackTimer = setInterval(() => {
     if (document.hidden) return;
-    if (['events','picker','sku','overview','users'].includes(state.activeTab)) renderTab();
+    if (['events','picker','sku','overview','users'].includes(state.activeTab)) void renderTab();
   }, 30_000);
 }
 document.addEventListener('visibilitychange', () => {
@@ -343,7 +381,7 @@ window.addEventListener('hashchange', () => {
   if (!state.session) return;
   const tabs = tabsForRole(role());
   const tab = tabFromHash(tabs);
-  if (tab && tab !== state.activeTab) { state.activeTab = tab; renderTab(); }
+  if (tab && tab !== state.activeTab) { state.activeTab = tab; void renderTab(); }
 });
 
 async function renderOverview(){

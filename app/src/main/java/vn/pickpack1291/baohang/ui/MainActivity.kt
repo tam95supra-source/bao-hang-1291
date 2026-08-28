@@ -32,6 +32,8 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -43,6 +45,7 @@ import vn.pickpack1291.baohang.BaoHangApplication
 import vn.pickpack1291.baohang.BuildConfig
 import vn.pickpack1291.baohang.R
 import vn.pickpack1291.baohang.data.IssueBoard
+import vn.pickpack1291.baohang.data.IssueDelta
 import vn.pickpack1291.baohang.data.IssueStatus
 import vn.pickpack1291.baohang.data.OperationalConfig
 import vn.pickpack1291.baohang.data.SkuItem
@@ -51,6 +54,7 @@ import vn.pickpack1291.baohang.data.UserProfile
 import vn.pickpack1291.baohang.data.UserRole
 import vn.pickpack1291.baohang.importer.XlsxImporter
 import vn.pickpack1291.baohang.realtime.RealtimeClient
+import vn.pickpack1291.baohang.realtime.RealtimeSignalBus
 import vn.pickpack1291.baohang.update.AppUpdater
 import java.time.Instant
 import java.time.LocalDate
@@ -66,6 +70,7 @@ class MainActivity : AppCompatActivity() {
     private var currentScreen = ""
     private var inventSelectedTab = 0
     private var inventRefresh: (() -> Unit)? = null
+    private var inventDeltaRefresh: ((RealtimeSignalBus.Signal) -> Unit)? = null
     private var pickerRefresh: (() -> Unit)? = null
 
     private data class PendingPickerReport(val item: SkuItem, val reportedAt: String)
@@ -78,10 +83,10 @@ class MainActivity : AppCompatActivity() {
     private val realtime by lazy {
         RealtimeClient(
             diagnostics = app.diagnostics,
-            onIssueChanged = {
+            onIssueChanged = { signal ->
                 runOnUiThread {
                     when (currentScreen) {
-                        SCREEN_INVENT -> inventRefresh?.invoke() ?: showInventBoard()
+                        SCREEN_INVENT -> inventDeltaRefresh?.invoke(signal) ?: inventRefresh?.invoke() ?: showInventBoard()
                         SCREEN_PICKER -> {
                             pickerRefresh?.invoke()
                             lifecycleScope.launch { checkPendingAlerts() }
@@ -146,12 +151,46 @@ class MainActivity : AppCompatActivity() {
                     startActivity(Intent(this, LoginActivity::class.java)); finish()
                 }.show()
         }
+        val startupStartedMs = SystemClock.elapsedRealtime()
+        val cachedRole = app.session.effectiveRole
+        renderForRole()
+        app.diagnostics.info(
+            "startup_cached_render",
+            mapOf(
+                "elapsed_ms" to (SystemClock.elapsedRealtime() - startupStartedMs),
+                "role" to cachedRole.wire
+            )
+        )
+        ensureOverlayPermissionForPicker()
+
         lifecycleScope.launch {
+            val beforeRole = app.session.effectiveRole
             runCatching { app.repository.refreshProfile() }
-                .onFailure { app.diagnostics.warn("profile_refresh_fallback", mapOf("error" to it.message.orEmpty())) }
-            renderForRole()
-            ensureOverlayPermissionForPicker()
-            checkPendingAlerts()
+                .onSuccess { profile ->
+                    val afterRole = app.session.effectiveRole
+                    app.diagnostics.info(
+                        "startup_profile_refresh",
+                        mapOf(
+                            "elapsed_ms" to (SystemClock.elapsedRealtime() - startupStartedMs),
+                            "role_changed" to (beforeRole != afterRole),
+                            "active" to profile.active
+                        )
+                    )
+                    if (beforeRole != afterRole && !isFinishing && !isDestroyed) renderForRole()
+                }
+                .onFailure {
+                    app.diagnostics.warn(
+                        "profile_refresh_fallback",
+                        mapOf(
+                            "elapsed_ms" to (SystemClock.elapsedRealtime() - startupStartedMs),
+                            "error" to it.message.orEmpty()
+                        )
+                    )
+                }
+        }
+        lifecycleScope.launch {
+            runCatching { checkPendingAlerts() }
+                .onFailure { app.diagnostics.warn("pending_alert_startup_failed", mapOf("error" to it.message.orEmpty())) }
         }
         AppUpdater(this, app.diagnostics).check()
         lifecycleScope.launch(Dispatchers.IO) {
@@ -206,7 +245,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun page(title: String, screen: String): LinearLayout {
         currentScreen = screen
-        if (screen != SCREEN_INVENT) inventRefresh = null
+        if (screen != SCREEN_INVENT) {
+            inventRefresh = null
+            inventDeltaRefresh = null
+        }
         if (screen != SCREEN_PICKER) pickerRefresh = null
         container.removeAllViews()
         updateBackButton()
@@ -321,7 +363,13 @@ class MainActivity : AppCompatActivity() {
             claimed = claimed.filterNot { it.id == issueId }
             recent = listOf(optimistic) + recent.filterNot { it.id == issueId }
         }
-        return IssueBoard(open = open, claimed = claimed, recent = recent, withdrawn = source.withdrawn)
+        return IssueBoard(
+            open = open,
+            claimed = claimed,
+            recent = recent,
+            withdrawn = source.withdrawn,
+            realtimeSeq = source.realtimeSeq
+        )
     }
 
     private fun showInventBoard() {
@@ -340,18 +388,24 @@ class MainActivity : AppCompatActivity() {
         }
         root.addView(tabs, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(66)))
 
-        val listScroll = ScrollView(this).apply { isFillViewport = true }
-        val boardContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.TOP
+        val emptyBoard = infoBox("Không có SKU trong nhóm này.").apply { visibility = View.GONE }
+        root.addView(emptyBoard)
+        val recycler = RecyclerView(this).apply {
+            layoutManager = LinearLayoutManager(this@MainActivity)
+            setHasFixedSize(false)
+            itemAnimator = null
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
         }
-        listScroll.addView(boardContainer, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        root.addView(listScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        root.addView(recycler, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        lateinit var issueAdapter: IssueBoardAdapter
 
         fun effectiveBoard(): IssueBoard? = board?.let(::applyPendingInventActions)
 
         fun updateTabs() {
-            val counts = effectiveBoard()?.let { listOf(it.claimedCount, it.availableCount, it.skippedCount, it.withdrawnCount) } ?: listOf(0, 0, 0, 0)
+            val data = effectiveBoard()
+            val counts = data?.let {
+                listOf(it.claimed.size, it.available.size, it.skipped.size, it.withdrawn.size)
+            } ?: listOf(0, 0, 0, 0)
             tabButtons.forEachIndexed { index, tab ->
                 val active = index == selected
                 tab.setBackgroundResource(if (active) R.drawable.bg_button_primary else R.drawable.bg_button_secondary)
@@ -379,13 +433,43 @@ class MainActivity : AppCompatActivity() {
                 3 -> raw.sortedByDescending { it.withdrawnAt.ifBlank { it.updatedAt } }
                 else -> raw
             }
-            boardContainer.removeAllViews()
-            if (ordered.isEmpty()) boardContainer.addView(infoBox("Không có SKU trong nhóm này."))
-            ordered.forEach { issue ->
-                boardContainer.addView(issueCard(issue, selected, { inventRefresh?.invoke() }, { draw() }))
-            }
+            emptyBoard.visibility = if (ordered.isEmpty()) View.VISIBLE else View.GONE
+            recycler.visibility = if (ordered.isEmpty()) View.GONE else View.VISIBLE
+            issueAdapter.submitList(ordered)
             updateTabs()
         }
+
+        fun applyDelta(source: IssueBoard, delta: IssueDelta): IssueBoard {
+            var open = source.open
+            var claimed = source.claimed
+            var recent = source.recent
+            delta.events.forEach { event ->
+                val id = event.entityId
+                open = open.filterNot { it.id == id }
+                claimed = claimed.filterNot { it.id == id }
+                recent = recent.filterNot { it.id == id }
+                val issue = event.issue
+                if (event.visible && issue != null) {
+                    when {
+                        issue.status.isOpenBucket -> claimed = claimed + issue
+                        issue.status == IssueStatus.AVAILABLE || issue.status == IssueStatus.SKIP_ALLOWED ->
+                            recent = listOf(issue) + recent
+                    }
+                }
+            }
+            return IssueBoard(
+                open = open,
+                claimed = claimed,
+                recent = recent,
+                withdrawn = source.withdrawn,
+                realtimeSeq = delta.latestSeq
+            )
+        }
+
+        issueAdapter = IssueBoardAdapter { issue ->
+            issueCard(issue, selected, { inventRefresh?.invoke() }, { draw() })
+        }
+        recycler.adapter = issueAdapter
 
         val labels = listOf("Đang\nxử lý", "Đã có\nhàng", "Đã bỏ\nqua", "Picker\nthu hồi")
         labels.forEachIndexed { index, label ->
@@ -430,11 +514,58 @@ class MainActivity : AppCompatActivity() {
         }
 
         updateTabs()
+        var deltaJob: Job? = null
+        var pendingSeq = 0L
         inventRefresh = {
             lifecycleScope.launch {
                 runCatching { app.repository.loadIssueBoard() }
-                    .onSuccess { board = it; draw() }
+                    .onSuccess { board = it; pendingSeq = 0L; draw() }
                     .onFailure { toast("Không tải được dữ liệu: ${it.message}"); app.diagnostics.error("issue_board_load_failed", it) }
+            }
+        }
+        inventDeltaRefresh = delta@ { signal ->
+            val current = board?.realtimeSeq ?: app.repository.cachedIssueRealtimeSeq()
+            if (signal.seq > 0L && signal.seq <= current) return@delta
+            pendingSeq = maxOf(pendingSeq, signal.seq)
+            if (deltaJob?.isActive == true) return@delta
+            deltaJob = lifecycleScope.launch {
+                while (true) {
+                    val snapshot = board
+                    if (snapshot == null) {
+                        inventRefresh?.invoke()
+                        break
+                    }
+                    val deltaResult = runCatching { app.repository.loadIssueDelta(snapshot.realtimeSeq) }
+                    if (deltaResult.isFailure) {
+                        val error = deltaResult.exceptionOrNull()
+                        app.diagnostics.warn(
+                            "issue_delta_failed",
+                            mapOf("after_seq" to snapshot.realtimeSeq, "error" to error?.message.orEmpty())
+                        )
+                        inventRefresh?.invoke()
+                        break
+                    }
+                    val delta = deltaResult.getOrThrow()
+                    if (delta.requiresFullReconcile) {
+                        app.diagnostics.warn("issue_delta_gap", mapOf("after_seq" to snapshot.realtimeSeq, "server_seq" to delta.serverSeq))
+                        inventRefresh?.invoke()
+                        break
+                    }
+                    board = applyDelta(snapshot, delta)
+                    draw()
+                    if (delta.events.any { it.withdrawnChanged }) {
+                        inventRefresh?.invoke()
+                        break
+                    }
+                    if (delta.hasMore) continue
+                    val applied = board?.realtimeSeq ?: delta.latestSeq
+                    if (pendingSeq > applied || pendingSeq == 0L && signal.seq == 0L && delta.latestSeq < delta.serverSeq) {
+                        pendingSeq = 0L
+                        continue
+                    }
+                    pendingSeq = 0L
+                    break
+                }
             }
         }
         inventRefresh?.invoke()

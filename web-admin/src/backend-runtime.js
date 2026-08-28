@@ -43,6 +43,7 @@ let realtimeToken = ''
 const realtimeSnapshotMarkers = new Map()
 const ISSUE_SIGNAL_ACTIONS = new Set(['report-shortage', 'claim-issue', 'reassign-issue', 'update-issue', 'restore-skipped', 'withdraw-shortage'])
 const PICKER_ALERT_ACTIONS = new Set(['update-issue', 'restore-skipped'])
+const FULL_WORKER_ACTIONS = new Set(['update-issue', 'restore-skipped', 'withdraw-shortage'])
 const originalFetch = globalThis.fetch.bind(globalThis)
 
 function jsonResponse(value, status = 200) {
@@ -137,6 +138,7 @@ function mapRpc(action, body, init) {
     case 'issue-board': return ['api_issue_board_rpc', base()]
     case 'withdrawn-board': return ['api_withdrawn_board_rpc', base()]
     case 'issue-detail': return ['api_issue_detail_rpc', base({ p_issue_id: b.issue_id })]
+    case 'issue-delta': return ['api_issue_delta_rpc', base({ p_after_seq: Number(b.after_seq || 0), p_limit: Number(b.limit || 200) })]
     case 'picker-my-issues':
     case 'my-issues': return ['api_picker_my_issues_rpc', base()]
     case 'claim-issue': return ['api_claim_issue_rpc', base({ p_issue_id: b.issue_id, p_client_request_id: b.client_request_id || crypto.randomUUID() })]
@@ -197,11 +199,20 @@ async function neonRpc(action, body, init) {
     try {
       const payload = text ? JSON.parse(text) : {}
       const issue = payload?.issue || payload
-      await emitIssueRealtimeSignal(issue, `web:${action}`)
+      if (issue?.id) {
+        void emitIssueRealtimeSignal(issue, `web:${action}`)
+          .catch((error) => console.warn('issue realtime signal deferred', action, error?.message || error))
+        void worker('realtime-kick', {
+          topic: 'issues',
+          entity_id: String(issue.id),
+          entity_version: Number(issue.issue_version || issue.issueVersion || 0),
+          reason: `web:${action}`,
+        }, init).catch(() => {})
+      }
     } catch (error) {
-      console.warn('issue realtime signal deferred', action, error?.message || error)
+      console.warn('issue realtime signal parse deferred', action, error?.message || error)
     }
-    if (PICKER_ALERT_ACTIONS.has(action)) {
+    if (FULL_WORKER_ACTIONS.has(action)) {
       void worker('worker-kick', { reason: `web:${action}` }, init).catch(() => {})
     }
   }

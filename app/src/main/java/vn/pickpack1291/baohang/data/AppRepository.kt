@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.tasks.await
 import org.json.JSONArray
 import org.json.JSONObject
@@ -32,7 +33,10 @@ class AppRepository(
         val auth = api.signIn(employeeCode.trim(), password)
         session.save(auth)
         diagnostics.info("session_saved", mapOf("employee_code" to auth.profile.employeeCode, "role" to auth.profile.role.wire))
-        registerCurrentDevice()
+        scope.launch {
+            runCatching { registerCurrentDevice() }
+                .onFailure { diagnostics.warn("device_register_deferred", mapOf("error" to it.message.orEmpty())) }
+        }
         if (database.outboxCount() > 0) SyncScheduler.enqueueOutbox(context)
         if (catalogNeedsRefresh()) SyncScheduler.enqueueCatalog(context)
         return auth.profile
@@ -40,6 +44,7 @@ class AppRepository(
 
     fun logout() {
         diagnostics.info("logout", mapOf("employee_code" to (session.profile?.employeeCode ?: "")))
+        scope.launch { runCatching { FirebaseMessaging.getInstance().unsubscribeFromTopic(ISSUE_OPERATOR_TOPIC).await() } }
         session.clear()
     }
 
@@ -61,10 +66,10 @@ class AppRepository(
     suspend fun searchSkuDigitsOnline(query: String) = api.searchSkuDigits(query)
     suspend fun withdrawShortage(issueId: String) = api.withdrawShortage(issueId)
 
-    suspend fun reportShortage(sku: String): ReportResult {
+    suspend fun reportShortage(sku: String): ReportResult = withContext(Dispatchers.IO) {
         val requestId = UUID.randomUUID().toString()
         diagnostics.info("shortage_submit", mapOf("sku" to sku, "request_id" to requestId))
-        return try {
+        try {
             val result = api.reportShortage(sku, requestId)
             database.upsertIssues(listOf(result.issue))
             diagnostics.info("shortage_submit_success", mapOf("sku" to sku, "issue_id" to result.issue.id, "report_count" to result.issue.reportCount, "aggregated" to result.wasAlreadyReported))
@@ -76,32 +81,53 @@ class AppRepository(
         }
     }
 
-    suspend fun loadMyIssues(): List<StockIssue> = try {
-        api.myIssues().also(database::replaceIssues)
-    } catch (_: Exception) { database.cachedIssues(100) }
-
-    suspend fun loadActiveIssues(): List<StockIssue> = try {
-        api.activeIssues().also(database::replaceIssues)
-    } catch (_: Exception) { database.cachedIssues(200).filter { it.status.isOpenBucket } }
-
-    suspend fun loadIssueBoard(): IssueBoard = api.issueBoard().also {
-        database.replaceIssues(it.open + it.claimed + it.recent + it.withdrawn)
+    suspend fun loadMyIssues(): List<StockIssue> = withContext(Dispatchers.IO) {
+        try { api.myIssues().also(database::replaceIssues) }
+        catch (_: Exception) { database.cachedIssues(100) }
     }
 
-    suspend fun claimIssue(issueId: String): StockIssue = api.claimIssue(issueId).also {
-        database.upsertIssues(listOf(it))
-        diagnostics.info("issue_claim", mapOf("issue_id" to issueId, "sku" to it.sku, "version" to it.issueVersion))
+    suspend fun loadActiveIssues(): List<StockIssue> = withContext(Dispatchers.IO) {
+        try { api.activeIssues().also(database::replaceIssues) }
+        catch (_: Exception) { database.cachedIssues(200).filter { it.status.isOpenBucket } }
+    }
+
+    suspend fun loadIssueBoard(): IssueBoard = withContext(Dispatchers.IO) {
+        api.issueBoard().also {
+            database.replaceIssues(it.open + it.claimed + it.recent + it.withdrawn)
+            database.setMetadata("issue_realtime_seq", it.realtimeSeq.toString())
+        }
+    }
+
+    suspend fun loadIssueDelta(afterSeq: Long): IssueDelta = withContext(Dispatchers.IO) {
+        api.issueDelta(afterSeq).also { delta ->
+            delta.events.forEach { event ->
+                event.issue?.takeIf { event.visible }?.let { database.upsertIssues(listOf(it)) }
+                    ?: database.removeIssue(event.entityId)
+            }
+            database.setMetadata("issue_realtime_seq", delta.latestSeq.toString())
+        }
+    }
+
+    fun cachedIssueRealtimeSeq(): Long = database.metadata("issue_realtime_seq")?.toLongOrNull() ?: 0L
+
+    suspend fun claimIssue(issueId: String): StockIssue = withContext(Dispatchers.IO) {
+        api.claimIssue(issueId).also {
+            database.upsertIssues(listOf(it))
+            diagnostics.info("issue_claim", mapOf("issue_id" to issueId, "sku" to it.sku, "version" to it.issueVersion))
+        }
     }
 
     suspend fun reassignIssue(issueId: String, newAssigneeId: String, reason: String): StockIssue =
-        api.reassignIssue(issueId, newAssigneeId, reason).also {
-            database.upsertIssues(listOf(it))
-            diagnostics.info("issue_reassign", mapOf("issue_id" to issueId, "new_assignee" to newAssigneeId, "version" to it.issueVersion))
+        withContext(Dispatchers.IO) {
+            api.reassignIssue(issueId, newAssigneeId, reason).also {
+                database.upsertIssues(listOf(it))
+                diagnostics.info("issue_reassign", mapOf("issue_id" to issueId, "new_assignee" to newAssigneeId, "version" to it.issueVersion))
+            }
         }
 
-    suspend fun updateIssue(issueId: String, action: String): StockIssue {
+    suspend fun updateIssue(issueId: String, action: String): StockIssue = withContext(Dispatchers.IO) {
         diagnostics.info("issue_update_start", mapOf("issue_id" to issueId, "action" to action))
-        return api.updateIssue(issueId, action).also {
+        api.updateIssue(issueId, action).also {
             database.upsertIssues(listOf(it))
             diagnostics.info("issue_update_success", mapOf("issue_id" to issueId, "sku" to it.sku, "status" to it.status.wire, "version" to it.issueVersion))
         }
@@ -190,16 +216,29 @@ class AppRepository(
     fun outboxCount(): Int = database.outboxCount()
 
     suspend fun registerCurrentDevice() {
-        val token = FirebaseMessaging.getInstance().token.await()
+        val messaging = FirebaseMessaging.getInstance()
+        val token = messaging.token.await()
         api.registerDevice(token, "${Build.MANUFACTURER} ${Build.MODEL}", "${BuildConfig.VERSION_NAME} [${BuildConfig.OTA_CHANNEL.uppercase()}]")
+        if (session.effectiveRole.canProcessIssues) messaging.subscribeToTopic(ISSUE_OPERATOR_TOPIC).await()
+        else messaging.unsubscribeFromTopic(ISSUE_OPERATOR_TOPIC).await()
         session.markDeviceRegistered()
-        diagnostics.info("device_registered", mapOf("device" to "${Build.MANUFACTURER} ${Build.MODEL}", "version" to BuildConfig.VERSION_NAME))
+        diagnostics.info(
+            "device_registered",
+            mapOf(
+                "device" to "${Build.MANUFACTURER} ${Build.MODEL}",
+                "version" to BuildConfig.VERSION_NAME,
+                "issue_topic" to session.effectiveRole.canProcessIssues
+            )
+        )
     }
 
     fun registerDeviceAsync(token: String) {
         scope.launch {
             runCatching {
                 api.registerDevice(token, "${Build.MANUFACTURER} ${Build.MODEL}", "${BuildConfig.VERSION_NAME} [${BuildConfig.OTA_CHANNEL.uppercase()}]")
+                val messaging = FirebaseMessaging.getInstance()
+                if (session.effectiveRole.canProcessIssues) messaging.subscribeToTopic(ISSUE_OPERATOR_TOPIC).await()
+                else messaging.unsubscribeFromTopic(ISSUE_OPERATOR_TOPIC).await()
                 session.markDeviceRegistered()
                 diagnostics.info("fcm_token_registered", mapOf("version" to BuildConfig.VERSION_NAME))
             }.onFailure { diagnostics.error("fcm_token_register_failed", it) }
@@ -237,4 +276,8 @@ class AppRepository(
     suspend fun syncGoogleSheet() = api.syncGoogleSheet()
     suspend fun reportsSummary() = api.reportsSummary()
     suspend fun issueHistory(limit: Int = 200): JSONArray = api.issueHistory(limit)
+
+    private companion object {
+        const val ISSUE_OPERATOR_TOPIC = "bao-hang-1291-issues-operators"
+    }
 }

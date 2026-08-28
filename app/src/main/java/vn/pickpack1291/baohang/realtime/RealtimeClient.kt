@@ -26,7 +26,7 @@ import java.util.concurrent.TimeUnit
  */
 class RealtimeClient(
     private val diagnostics: DiagnosticsLogger,
-    private val onIssueChanged: () -> Unit,
+    private val onIssueChanged: (RealtimeSignalBus.Signal) -> Unit,
     private val onCatalogChanged: () -> Unit,
     private val onStaffChanged: () -> Unit,
     private val onConfigChanged: () -> Unit,
@@ -47,10 +47,10 @@ class RealtimeClient(
     private var firestoreOnline: Boolean? = null
     private var markerWatchEnabled = false
 
-    private val listener: (RealtimeSignalBus.Topic) -> Unit = listener@ { topic ->
+    private val listener: (RealtimeSignalBus.Signal) -> Unit = listener@ { signal ->
         if (!running) return@listener
-        when (topic) {
-            RealtimeSignalBus.Topic.ISSUES -> onIssueChanged()
+        when (signal.topic) {
+            RealtimeSignalBus.Topic.ISSUES -> onIssueChanged(signal)
             RealtimeSignalBus.Topic.CATALOG -> onCatalogChanged()
             RealtimeSignalBus.Topic.STAFF -> onStaffChanged()
             RealtimeSignalBus.Topic.CONFIG -> onConfigChanged()
@@ -80,7 +80,7 @@ class RealtimeClient(
         onStatus(Status.CONNECTING)
         diagnostics.info(
             "realtime_foreground_started",
-            mapOf("role" to role.name, "firestore_interval_seconds" to 6, "scope" to "operator_only")
+            mapOf("role" to role.name, "firestore_fallback_interval_seconds" to 60, "primary" to "FCM", "scope" to "operator_only")
         )
         pollJob = scope.launch {
             while (isActive && running && markerWatchEnabled) {
@@ -140,7 +140,18 @@ class RealtimeClient(
                         if (previous == null) "realtime_firestore_issue_initial_refresh" else "realtime_firestore_issue_changed",
                         mapOf("marker" to marker.take(120))
                     )
-                    onIssueChanged()
+                    val fields = json.optJSONObject("fields")
+                    val entityId = fields?.optJSONObject("entity_id")?.optString("stringValue").orEmpty()
+                    val entityVersion = fields?.optJSONObject("entity_version")?.optString("integerValue")?.toLongOrNull() ?: 0L
+                    val seq = fields?.optJSONObject("event_id")?.optString("integerValue")?.toLongOrNull() ?: 0L
+                    onIssueChanged(
+                        RealtimeSignalBus.Signal(
+                            RealtimeSignalBus.Topic.ISSUES,
+                            entityId = entityId,
+                            entityVersion = entityVersion,
+                            seq = seq
+                        )
+                    )
                 }
             }
         }.onFailure { error ->
@@ -161,7 +172,7 @@ class RealtimeClient(
     }
 
     companion object {
-        private const val FIRESTORE_POLL_MS = 6_000L
+        private const val FIRESTORE_POLL_MS = 60_000L
         private const val FIRESTORE_ISSUES_DOC =
             "https://firestore.googleapis.com/v1/projects/bao-hang-1291/databases/(default)/documents/realtime/issues"
     }
