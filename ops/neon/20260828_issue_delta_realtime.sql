@@ -257,6 +257,7 @@ DECLARE
   ok boolean;
   err text;
   updated_count integer := 0;
+  n integer;
 BEGIN
   PERFORM public.worker_require_admin();
   FOR item IN SELECT value FROM jsonb_array_elements(coalesce(p_results,'[]'::jsonb))
@@ -274,7 +275,8 @@ BEGIN
     SET published_at=CASE WHEN ok THEN coalesce(published_at,now()) ELSE published_at END,
         last_error=CASE WHEN ok THEN '' ELSE err END
     WHERE id=ANY(ids);
-    GET DIAGNOSTICS updated_count = updated_count + ROW_COUNT;
+    GET DIAGNOSTICS n = ROW_COUNT;
+    updated_count := updated_count + n;
   END LOOP;
   RETURN jsonb_build_object('updated',updated_count);
 END
