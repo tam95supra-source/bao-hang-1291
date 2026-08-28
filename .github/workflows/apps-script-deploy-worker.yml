@@ -2,9 +2,10 @@ name: Apps Script realtime worker deploy
 
 on:
   push:
-    branches: [main]
+    branches: [main, perf/candidate-20260828]
     paths:
       - 'ops/apps-script-deploy-worker.request'
+      - 'ops/apps-script-deploy-worker.candidate-request'
 
 permissions:
   contents: write
@@ -37,7 +38,16 @@ jobs:
           node ops/apps_script_deploy_worker.mjs
           git diff --check
 
+      - name: Verify staging source is canonical
+        if: github.ref != 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code -- google-apps-script/DEPLOY_NEON.gs
+          echo "SOURCE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
       - name: Commit canonical worker patch
+        if: github.ref == 'refs/heads/main'
         shell: bash
         run: |
           set -euo pipefail
