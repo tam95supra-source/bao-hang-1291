@@ -240,9 +240,10 @@ class ApiClient(
 
     suspend fun registerDevice(token: String, deviceName: String, appVersion: String) {
         invoke(
-            "register-device",
+            "register-device-v2",
             JSONObject().put("fcm_token", token).put("device_name", deviceName)
                 .put("app_version", appVersion).put("platform", "android")
+                .put("realtime_topic_capable", true)
         )
     }
 
@@ -397,6 +398,12 @@ class ApiClient(
                 .put("p_device_name", payload.optString("device_name"))
                 .put("p_app_version", payload.optString("app_version"))
                 .put("p_platform", payload.optString("platform", "android"))
+            "register-device-v2" -> "api_register_device_v2_rpc" to base()
+                .put("p_fcm_token", payload.getString("fcm_token"))
+                .put("p_device_name", payload.optString("device_name"))
+                .put("p_app_version", payload.optString("app_version"))
+                .put("p_platform", payload.optString("platform", "android"))
+                .put("p_realtime_topic_capable", payload.optBoolean("realtime_topic_capable", true))
             "sync-catalog" -> "api_sync_catalog_rpc" to base()
                 .putNullable("p_after_sku", payload.optNullableString("after_sku"))
                 .putNullable("p_updated_since", payload.optNullableString("updated_since"))
@@ -470,12 +477,32 @@ class ApiClient(
     private fun deferIssueTransport(issue: StockIssue, reason: String) {
         signalScope.launch {
             emitIssueRealtimeBestEffort(issue, reason)
-            kickWorkerBestEffort(reason)
+            kickRealtimeBestEffort(issue, reason)
+            if (reason == "update_issue" || reason == "restore_skipped") {
+                kickWorkerBestEffort(reason)
+            }
         }
     }
 
     private fun deferWorkerKick(reason: String) {
         signalScope.launch { kickWorkerBestEffort(reason) }
+    }
+
+    private suspend fun kickRealtimeBestEffort(issue: StockIssue, reason: String) = withContext(Dispatchers.IO) {
+        if (workerUrl.isBlank() || sessionStore.accessToken.isBlank()) return@withContext
+        runCatching {
+            refreshSessionIfNeeded()
+            val body = JSONObject()
+                .put("action", "realtime-kick")
+                .put("id_token", sessionStore.accessToken)
+                .put("topic", "issues")
+                .put("entity_id", issue.id)
+                .put("entity_version", issue.issueVersion)
+                .put("reason", reason)
+            requestJson("POST", workerUrl, body, token = null, eventName = "realtime_kick_$reason", connectTimeout = 4_000, readTimeout = 8_000)
+        }.onFailure {
+            diagnostics.warn("realtime_kick_deferred", mapOf("reason" to reason, "error" to (it.message ?: it.javaClass.simpleName).take(240)))
+        }
     }
 
     private suspend fun emitIssueRealtimeBestEffort(issue: StockIssue, reason: String) = withContext(Dispatchers.IO) {
