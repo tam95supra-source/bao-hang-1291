@@ -99,6 +99,27 @@ class StockMessagingService : FirebaseMessagingService() {
                 "critical" to data["critical"].orEmpty()
             )
         )
+
+        // AVAILABLE / SKIP_ALLOWED is the canonical Invent confirmation sent to
+        // Picker devices. Forward it to the in-process realtime bus so an open
+        // Picker screen patches the exact card instead of waiting for a reload.
+        val publishedToForeground = RealtimeSignalBus.publish(
+            "issues",
+            entityId = issueId,
+            entityVersion = incomingVersion,
+            seq = 0L
+        )
+        if (!publishedToForeground) RealtimeInvalidationStore.markPending(this, "issues")
+        app.diagnostics.info(
+            "picker_status_realtime_signal",
+            mapOf(
+                "issue_id" to issueId,
+                "issue_version" to incomingVersion,
+                "status" to status,
+                "published_to_foreground" to publishedToForeground,
+                "persisted_for_resume" to !publishedToForeground
+            )
+        )
         if (eventId.isNotBlank() && app.session.isLoggedIn) {
             scope.launch {
                 runCatching { app.repository.markAlertReceived(eventId) }
