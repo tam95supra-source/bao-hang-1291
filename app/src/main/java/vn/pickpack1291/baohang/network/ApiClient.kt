@@ -1,7 +1,10 @@
 package vn.pickpack1291.baohang.network
 
 import android.util.Base64
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -35,6 +38,7 @@ class ApiClient(
     private val neonApi = BuildConfig.NEON_DATA_API.trimEnd('/')
     private val firebaseWebApiKey = BuildConfig.FIREBASE_WEB_API_KEY.trim()
     private val workerUrl = BuildConfig.APPS_SCRIPT_WORKER_URL.trim()
+    private val signalScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     val isConfigured: Boolean
         get() = neonApi.startsWith("https://") && neonApi.contains("ap-southeast-1") &&
@@ -101,15 +105,14 @@ class ApiClient(
 
     suspend fun withdrawShortage(issueId: String): JSONObject {
         val result = invoke("withdraw-shortage", JSONObject().put("issue_id", issueId))
-        kickWorkerBestEffort("withdraw_shortage")
+        deferWorkerKick("withdraw_shortage")
         return result
     }
 
     suspend fun reportShortage(sku: String, clientRequestId: String): ReportResult {
         val json = invoke("report-shortage", JSONObject().put("sku", sku).put("client_request_id", clientRequestId))
         val issue = StockIssue.fromJson(json.getJSONObject("issue"))
-        emitIssueRealtimeBestEffort(issue, "report_shortage")
-        kickWorkerBestEffort("report_shortage")
+        deferIssueTransport(issue, "report_shortage")
         return ReportResult(
             issue,
             json.optBoolean("already_reported", false),
@@ -150,8 +153,7 @@ class ApiClient(
         val issue = StockIssue.fromJson(
             invoke("claim-issue", JSONObject().put("issue_id", issueId).put("client_request_id", UUID.randomUUID().toString())).getJSONObject("issue")
         )
-        emitIssueRealtimeBestEffort(issue, "claim_issue")
-        kickWorkerBestEffort("claim_issue")
+        deferIssueTransport(issue, "claim_issue")
         return issue
     }
 
@@ -166,8 +168,7 @@ class ApiClient(
                     .put("client_request_id", UUID.randomUUID().toString())
             ).getJSONObject("issue")
         )
-        emitIssueRealtimeBestEffort(issue, "reassign_issue")
-        kickWorkerBestEffort("reassign_issue")
+        deferIssueTransport(issue, "reassign_issue")
         return issue
     }
 
@@ -181,8 +182,7 @@ class ApiClient(
                     .put("client_request_id", UUID.randomUUID().toString())
             ).getJSONObject("issue")
         )
-        emitIssueRealtimeBestEffort(issue, "update_issue")
-        kickWorkerBestEffort("update_issue")
+        deferIssueTransport(issue, "update_issue")
         return issue
     }
 
@@ -195,8 +195,7 @@ class ApiClient(
                     .put("reason", "Đã tìm thấy hàng sau khi cho phép bỏ qua")
             ).getJSONObject("issue")
         )
-        emitIssueRealtimeBestEffort(issue, "restore_skipped")
-        kickWorkerBestEffort("restore_skipped")
+        deferIssueTransport(issue, "restore_skipped")
         return issue
     }
 
@@ -433,6 +432,17 @@ class ApiClient(
             throw ApiException(500, result.optString("error", "Worker Google trả lỗi"), "WORKER_ERROR")
         }
         return result
+    }
+
+    private fun deferIssueTransport(issue: StockIssue, reason: String) {
+        signalScope.launch {
+            emitIssueRealtimeBestEffort(issue, reason)
+            kickWorkerBestEffort(reason)
+        }
+    }
+
+    private fun deferWorkerKick(reason: String) {
+        signalScope.launch { kickWorkerBestEffort(reason) }
     }
 
     private suspend fun emitIssueRealtimeBestEffort(issue: StockIssue, reason: String) = withContext(Dispatchers.IO) {
