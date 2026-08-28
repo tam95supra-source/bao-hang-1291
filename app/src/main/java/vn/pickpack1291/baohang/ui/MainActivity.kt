@@ -32,6 +32,8 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -51,6 +53,7 @@ import vn.pickpack1291.baohang.data.UserProfile
 import vn.pickpack1291.baohang.data.UserRole
 import vn.pickpack1291.baohang.importer.XlsxImporter
 import vn.pickpack1291.baohang.realtime.RealtimeClient
+import vn.pickpack1291.baohang.realtime.RealtimeSignalBus
 import vn.pickpack1291.baohang.update.AppUpdater
 import java.time.Instant
 import java.time.LocalDate
@@ -66,6 +69,7 @@ class MainActivity : AppCompatActivity() {
     private var currentScreen = ""
     private var inventSelectedTab = 0
     private var inventRefresh: (() -> Unit)? = null
+    private var inventDeltaRefresh: ((RealtimeSignalBus.Signal) -> Unit)? = null
     private var pickerRefresh: (() -> Unit)? = null
 
     private data class PendingPickerReport(val item: SkuItem, val reportedAt: String)
@@ -78,10 +82,10 @@ class MainActivity : AppCompatActivity() {
     private val realtime by lazy {
         RealtimeClient(
             diagnostics = app.diagnostics,
-            onIssueChanged = {
+            onIssueChanged = { signal ->
                 runOnUiThread {
                     when (currentScreen) {
-                        SCREEN_INVENT -> inventRefresh?.invoke() ?: showInventBoard()
+                        SCREEN_INVENT -> inventDeltaRefresh?.invoke(signal) ?: inventRefresh?.invoke() ?: showInventBoard()
                         SCREEN_PICKER -> {
                             pickerRefresh?.invoke()
                             lifecycleScope.launch { checkPendingAlerts() }
@@ -206,7 +210,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun page(title: String, screen: String): LinearLayout {
         currentScreen = screen
-        if (screen != SCREEN_INVENT) inventRefresh = null
+        if (screen != SCREEN_INVENT) {
+            inventRefresh = null
+            inventDeltaRefresh = null
+        }
         if (screen != SCREEN_PICKER) pickerRefresh = null
         container.removeAllViews()
         updateBackButton()
