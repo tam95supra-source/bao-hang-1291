@@ -3,24 +3,30 @@ package vn.pickpack1291.baohang.realtime
 import java.util.concurrent.CopyOnWriteArraySet
 
 /**
- * Lightweight in-process invalidation bus fed by Firebase Cloud Messaging.
- * Business data never travels through this bus; listeners refetch canonical
- * state from Neon after receiving a topic hint.
+ * In-process realtime invalidation bus. Payload is marker-only; canonical
+ * business data stays in Neon and is reconciled by sequence/version.
  */
 object RealtimeSignalBus {
     enum class Topic { ISSUES, CATALOG, STAFF, CONFIG }
 
-    private val listeners = CopyOnWriteArraySet<(Topic) -> Unit>()
+    data class Signal(
+        val topic: Topic,
+        val entityId: String = "",
+        val entityVersion: Long = 0L,
+        val seq: Long = 0L
+    )
 
-    fun subscribe(listener: (Topic) -> Unit) {
-        listeners += listener
-    }
+    private val listeners = CopyOnWriteArraySet<(Signal) -> Unit>()
 
-    fun unsubscribe(listener: (Topic) -> Unit) {
-        listeners -= listener
-    }
+    fun subscribe(listener: (Signal) -> Unit) { listeners += listener }
+    fun unsubscribe(listener: (Signal) -> Unit) { listeners -= listener }
 
-    fun publish(rawTopic: String): Boolean {
+    fun publish(
+        rawTopic: String,
+        entityId: String = "",
+        entityVersion: Long = 0L,
+        seq: Long = 0L
+    ): Boolean {
         val topic = when (rawTopic.trim().lowercase()) {
             "issues" -> Topic.ISSUES
             "catalog" -> Topic.CATALOG
@@ -28,8 +34,9 @@ object RealtimeSignalBus {
             "config" -> Topic.CONFIG
             else -> return false
         }
+        val signal = Signal(topic, entityId, entityVersion, seq)
         val current = listeners.toList()
-        current.forEach { listener -> runCatching { listener(topic) } }
+        current.forEach { listener -> runCatching { listener(signal) } }
         return current.isNotEmpty()
     }
 }
