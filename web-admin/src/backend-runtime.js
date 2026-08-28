@@ -137,6 +137,7 @@ function mapRpc(action, body, init) {
     case 'issue-board': return ['api_issue_board_rpc', base()]
     case 'withdrawn-board': return ['api_withdrawn_board_rpc', base()]
     case 'issue-detail': return ['api_issue_detail_rpc', base({ p_issue_id: b.issue_id })]
+    case 'issue-delta': return ['api_issue_delta_rpc', base({ p_after_seq: Number(b.after_seq || 0), p_limit: Number(b.limit || 200) })]
     case 'picker-my-issues':
     case 'my-issues': return ['api_picker_my_issues_rpc', base()]
     case 'claim-issue': return ['api_claim_issue_rpc', base({ p_issue_id: b.issue_id, p_client_request_id: b.client_request_id || crypto.randomUUID() })]
@@ -197,9 +198,10 @@ async function neonRpc(action, body, init) {
     try {
       const payload = text ? JSON.parse(text) : {}
       const issue = payload?.issue || payload
-      await emitIssueRealtimeSignal(issue, `web:${action}`)
+      void emitIssueRealtimeSignal(issue, `web:${action}`)
+        .catch((error) => console.warn('issue realtime signal deferred', action, error?.message || error))
     } catch (error) {
-      console.warn('issue realtime signal deferred', action, error?.message || error)
+      console.warn('issue realtime signal parse deferred', action, error?.message || error)
     }
     if (PICKER_ALERT_ACTIONS.has(action)) {
       void worker('worker-kick', { reason: `web:${action}` }, init).catch(() => {})
