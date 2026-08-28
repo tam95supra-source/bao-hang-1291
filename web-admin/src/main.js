@@ -31,6 +31,7 @@ const state = {
   issueChannel: null,
   catalogChannel: null,
   staffChannel: null,
+  configChannel: null,
   realtimeStatus: 'OFFLINE',
   fallbackTimer: null,
   refreshTimer: null,
@@ -74,10 +75,11 @@ async function stopRealtime() {
   state.fallbackTimer = null;
   clearTimeout(state.refreshTimer);
   state.refreshTimer = null;
-  const channels = [state.issueChannel, state.catalogChannel, state.staffChannel].filter(Boolean);
+  const channels = [state.issueChannel, state.catalogChannel, state.staffChannel, state.configChannel].filter(Boolean);
   state.issueChannel = null;
   state.catalogChannel = null;
   state.staffChannel = null;
+  state.configChannel = null;
   for (const channel of channels) await realtimeClient.removeChannel(channel).catch(() => {});
   state.realtimeStatus = 'OFFLINE';
 }
@@ -350,6 +352,14 @@ async function startRealtime() {
       .subscribe(subscribeStatus);
     state.staffChannel = realtimeClient.channel('site:1291:staff', { config: { private: true } })
       .on('broadcast', { event: 'staff_changed' }, () => { showRealtimeNotice('Danh sách nhân sự vừa cập nhật'); scheduleLiveRefresh('staff'); }).subscribe(subscribeStatus);
+  }
+  if (['ADMIN','ADMIN_INVENT'].includes(actualRole())) {
+    state.configChannel = realtimeClient.channel('site:1291:config', { config: { private: true } })
+      .on('broadcast', { event: 'config_changed' }, () => {
+        showRealtimeNotice('Cấu hình vừa cập nhật');
+        if (['config','sla'].includes(state.activeTab)) void renderTab();
+      })
+      .subscribe(subscribeStatus);
   }
   setTimeout(() => { if (state.realtimeStatus !== 'ONLINE') ensureFallbackPolling(); }, 6000);
 }
