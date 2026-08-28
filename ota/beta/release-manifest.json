@@ -1,11 +1,11 @@
 {
   "channel": "beta",
-  "versionCode": 25,
-  "versionName": "1.6.16",
-  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.16/bao-hang-1291-beta-1.6.16.apk",
-  "sha256": "f18f7d5767c1fc6b6bd3d5c2fa4a35f6af3148845d13f42cdf945a65df7c846d",
+  "versionCode": 26,
+  "versionName": "1.6.17",
+  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.17/bao-hang-1291-beta-1.6.17.apk",
+  "sha256": "11e6080236d955749f798af29d36981cb0464c6b84fd660a393a7e0149979d2f",
   "mandatory": true,
-  "releaseNotes": "Beta 1.6.16: tối ưu incremental realtime UI, cache-first startup, Web lazy-load, realtime delta/version, worker coalescing/batch, Sheet bulk sync và free-tier quota guard.",
+  "releaseNotes": "Beta 1.6.17: sửa gửi log chẩn đoán bị báo Worker Google lỗi dù server đã nhận; Picker nhận xác nhận từ Invent bằng realtime card update (đổi trạng thái/màu/thời gian trên đúng SKU), không reload toàn màn hình.",
   "signerSha256": "2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0",
-  "sourceSha": "f78a2629a08dfcd9694455252cfb35677388f0f0"
+  "sourceSha": "4f08066b524f32b525b0ce68a1aba4b56f4e3f99"
 }
