@@ -144,7 +144,7 @@ function ensureShell() {
   let shell = $('#fastEvents');
   if (shell) return shell;
   content.innerHTML = `<section id="fastEvents" class="fast-events">
-    <div class="fast-page-head"><div><p class="eyebrow">BÁO HÀNG</p><h2>Xử lý báo thiếu</h2><p class="fast-subtitle">Realtime · cập nhật đúng dòng, không tải lại màn hình.</p></div><button class="secondary" id="fastRefresh">Làm mới</button></div>
+    <div class="fast-page-head"><div><p class="eyebrow">XỬ LÝ BÁO THIẾU</p><h2>Xử lý báo thiếu</h2><p class="fast-subtitle">Realtime · cập nhật đúng dòng, không tải lại màn hình.</p></div><button class="secondary" id="fastRefresh">Làm mới</button></div>
     <div class="fast-buckets" role="tablist">
       <button data-fast-bucket="claimed" class="active">Đang xử lý <b data-fast-count="claimed">0</b></button>
       <button data-fast-bucket="open">Chờ nhận <b data-fast-count="open">0</b></button>
@@ -152,7 +152,7 @@ function ensureShell() {
       <button data-fast-bucket="withdrawn">Đã thu hồi <b data-fast-count="withdrawn">—</b></button>
     </div>
     <div class="fast-workspace">
-      <div class="fast-list" id="fastList" aria-live="polite"><div class="fast-empty-row">Đang tải báo thiếu…</div></div>
+      <div class="fast-list" id="fastList" aria-live="polite"><div class="fast-empty-row">Đang tải yêu cầu báo thiếu…</div></div>
       <aside class="fast-detail" id="fastDetail"><div class="fast-empty"><strong>Chọn một SKU</strong><span>Chi tiết và thao tác sẽ hiển thị tại đây.</span></div></aside>
     </div>
   </section>`;
@@ -277,7 +277,7 @@ async function handleDetailAction(event) {
   try {
     if (action === 'skip') {
       if (!confirm(`Xác nhận không tìm thấy SKU ${sku} và CHO PHÉP BỎ QUA?`)) return;
-      if (!confirm(`XÁC NHẬN LẦN 2\nCho phép bỏ qua SKU ${sku}?`)) return;
+      if (!confirm(`XÁC NHẬN LẦN CUỐI\nCho phép bỏ qua SKU ${sku}?`)) return;
     }
     if (action === 'available' && !confirm(`Xác nhận SKU ${sku} đã có hàng/châm bù?`)) return;
     if (action === 'found' && !confirm(`SKU ${sku} trước đó đã được cho phép bỏ qua. Xác nhận hiện đã tìm thấy hàng và báo lại cho người lấy hàng?`)) return;
@@ -285,7 +285,7 @@ async function handleDetailAction(event) {
     if (action === 'claim') await api('claim-issue', { issue_id: id, client_request_id: crypto.randomUUID() });
     if (action === 'available') await api('update-issue', { issue_id: id, action: 'AVAILABLE', client_request_id: crypto.randomUUID() });
     if (action === 'skip') await api('update-issue', { issue_id: id, action: 'NOT_FOUND', client_request_id: crypto.randomUUID() });
-    if (action === 'found') await api('restore-skipped', { issue_id: id, reason: 'Đã tìm thấy hàng sau khi trước đó cho phép bỏ qua' });
+    if (action === 'found') await api('restore-skipped', { issue_id: id, reason: 'Đã tìm thấy hàng sau khi đã cho phép bỏ qua' });
     if (action === 'reassign') {
       const result = await api('list-users');
       const users = (result.users || []).filter((u) => ['INVENT','ADMIN_INVENT'].includes(u.role) && u.active);
