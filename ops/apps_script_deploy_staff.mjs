@@ -71,20 +71,66 @@ async function readRetry(label, fn, attempts = 3) {
   throw last;
 }
 
-async function accessToken() {
+async function userRefreshAccessToken() {
   const body = new URLSearchParams({
     client_id: req('GOOGLE_OAUTH_CLIENT_ID'),
     client_secret: req('GOOGLE_OAUTH_CLIENT_SECRET'),
     refresh_token: req('GOOGLE_OAUTH_REFRESH_TOKEN'),
     grant_type: 'refresh_token'
   });
-  const d = await jsonFetch('https://oauth2.googleapis.com/token', {
+  const data = await jsonFetch('https://oauth2.googleapis.com/token', {
     method:'POST',
     headers:{'content-type':'application/x-www-form-urlencoded'},
     body
   });
-  if (!d.access_token) throw new Error('ACCESS_TOKEN_MISSING');
-  return d.access_token;
+  if (!data.access_token) throw new Error('USER_REFRESH_ACCESS_TOKEN_MISSING');
+  return data.access_token;
+}
+
+async function serviceAccountScriptAccessToken() {
+  const sa = JSON.parse(String(process.env.FIREBASE_SERVICE_ACCOUNT || '{}'));
+  if (sa.project_id !== 'bao-hang-1291' || !sa.client_email || !sa.private_key) {
+    throw new Error('SERVICE_ACCOUNT_SCOPE_MISSING');
+  }
+  const enc = (value) => Buffer.from(typeof value === 'string' ? value : JSON.stringify(value)).toString('base64url');
+  const now = Math.floor(Date.now() / 1000);
+  const header = enc({alg:'RS256',typ:'JWT'});
+  const claim = enc({
+    iss:sa.client_email,
+    scope:'https://www.googleapis.com/auth/script.projects https://www.googleapis.com/auth/script.deployments',
+    aud:'https://oauth2.googleapis.com/token',
+    iat:now,
+    exp:now+900
+  });
+  const unsigned = `${header}.${claim}`;
+  const signature = crypto.sign('RSA-SHA256', Buffer.from(unsigned), sa.private_key).toString('base64url');
+  const data = await jsonFetch('https://oauth2.googleapis.com/token', {
+    method:'POST',
+    headers:{'content-type':'application/x-www-form-urlencoded'},
+    body:new URLSearchParams({
+      grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion:`${unsigned}.${signature}`
+    })
+  });
+  if (!data.access_token) throw new Error('SERVICE_ACCOUNT_ACCESS_TOKEN_MISSING');
+  return data.access_token;
+}
+
+async function accessToken() {
+  try {
+    const token = await userRefreshAccessToken();
+    console.log('APPS_SCRIPT_AUTH_MODE=USER_REFRESH');
+    return token;
+  } catch (userError) {
+    console.log('APPS_SCRIPT_AUTH_USER_REFRESH=UNAVAILABLE');
+    try {
+      const token = await serviceAccountScriptAccessToken();
+      console.log('APPS_SCRIPT_AUTH_MODE=SERVICE_ACCOUNT');
+      return token;
+    } catch (serviceError) {
+      throw new Error(`APPS_SCRIPT_AUTH_UNAVAILABLE user=${String(userError?.message || userError).slice(0,160)} service_account=${String(serviceError?.message || serviceError).slice(0,160)}`);
+    }
+  }
 }
 
 const authHeaders = (token) => ({Authorization:`Bearer ${token}`,'content-type':'application/json'});
