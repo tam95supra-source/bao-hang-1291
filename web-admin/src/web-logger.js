@@ -108,8 +108,8 @@ async function addEvent(event, options = {}) {
     detail: redact(event.detail || {}),
     ...pageContext(),
   };
-  rememberHistory(item);
   if (!options.allowDuplicate && duplicateRecently(item)) return;
+  rememberHistory(item);
 
   const db = await openDb();
   if (!db) {
