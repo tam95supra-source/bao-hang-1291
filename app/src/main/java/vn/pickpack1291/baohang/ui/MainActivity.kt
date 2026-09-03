@@ -2,6 +2,8 @@ package vn.pickpack1291.baohang.ui
 
 import android.app.AlertDialog
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -22,6 +24,7 @@ import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -39,6 +42,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
 import org.json.JSONArray
 import org.json.JSONObject
 import vn.pickpack1291.baohang.BaoHangApplication
@@ -136,6 +141,10 @@ class MainActivity : AppCompatActivity() {
         ViewCompat.requestApplyInsets(rootMain)
         container = findViewById(R.id.contentContainer)
         findViewById<TextView>(R.id.btnBack).setOnClickListener { navigateBack() }
+        findViewById<TextView>(R.id.tvHeaderTitle).apply {
+            contentDescription = "Báo hàng 1291; chạm để hiện QR tải APK mới nhất"
+            setOnClickListener { showLatestApkQr() }
+        }
         findViewById<TextView>(R.id.btnLog).setOnClickListener { showDiagnosticsDialog() }
         findViewById<TextView>(R.id.tvAppVersion).apply {
             text = "v${BuildConfig.VERSION_NAME} • ${BuildConfig.OTA_CHANNEL.uppercase()}"
@@ -1346,6 +1355,90 @@ class MainActivity : AppCompatActivity() {
         }.show()
     }
 
+    private fun showLatestApkQr() {
+        val content = page("Tải APK mới nhất", SCREEN_DOWNLOAD)
+        val status = infoBox("Đang lấy bản mới nhất từ GitHub…")
+        content.addView(status)
+
+        val qrView = ImageView(this).apply {
+            visibility = View.GONE
+            contentDescription = "QR tải APK mới nhất"
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            setBackgroundColor(Color.WHITE)
+        }
+        content.addView(
+            qrView,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(330)).apply {
+                setMargins(0, dp(10), 0, dp(8))
+            }
+        )
+
+        val directLink = text("", 11, false).apply {
+            visibility = View.GONE
+            gravity = Gravity.CENTER
+            setTextIsSelectable(true)
+            setPadding(dp(4), dp(4), dp(4), dp(10))
+        }
+        content.addView(directLink)
+
+        var apkUrl = ""
+        val downloadButton = button("Tải APK trực tiếp từ GitHub", ButtonTone.PRIMARY) {
+            if (apkUrl.isBlank()) return@button
+            runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(apkUrl))) }
+                .onFailure { toast("Không mở được link GitHub") }
+        }.apply { isEnabled = false }
+        content.addView(downloadButton)
+
+        lifecycleScope.launch {
+            val release = runCatching { AppUpdater(this@MainActivity, app.diagnostics).latestRelease() }
+                .getOrElse { error ->
+                    if (currentScreen == SCREEN_DOWNLOAD) {
+                        status.text = "Không lấy được bản APK mới nhất: ${error.message ?: "Lỗi kết nối"}"
+                    }
+                    return@launch
+                }
+            if (currentScreen != SCREEN_DOWNLOAD) return@launch
+
+            val installedChannel = BuildConfig.OTA_CHANNEL.trim().lowercase()
+            if (release.channel != installedChannel) {
+                status.text = "Kênh APK không khớp; đã hủy hiển thị QR."
+                return@launch
+            }
+
+            val qrSize = minOf(resources.displayMetrics.widthPixels - dp(56), dp(310)).coerceAtLeast(dp(220))
+            val bitmap = runCatching {
+                withContext(Dispatchers.Default) { createQrBitmap(release.apkUrl, qrSize) }
+            }.getOrElse { error ->
+                status.text = "Không tạo được QR: ${error.message ?: "Lỗi QR"}"
+                return@launch
+            }
+            if (currentScreen != SCREEN_DOWNLOAD) return@launch
+
+            apkUrl = release.apkUrl
+            status.text = "${release.channel.uppercase()} • v${release.versionName}\nQuét QR để tải trực tiếp APK mới nhất từ GitHub."
+            qrView.setImageBitmap(bitmap)
+            qrView.visibility = View.VISIBLE
+            directLink.text = release.apkUrl
+            directLink.visibility = View.VISIBLE
+            downloadButton.isEnabled = true
+        }
+    }
+
+    private fun createQrBitmap(value: String, size: Int): Bitmap {
+        val matrix = QRCodeWriter().encode(value, BarcodeFormat.QR_CODE, size, size)
+        val pixels = IntArray(size * size)
+        for (y in 0 until size) {
+            val offset = y * size
+            for (x in 0 until size) {
+                pixels[offset + x] = if (matrix[x, y]) Color.BLACK else Color.WHITE
+            }
+        }
+        return Bitmap.createBitmap(size, size, Bitmap.Config.RGB_565).apply {
+            setPixels(pixels, 0, size, 0, 0, size, size)
+        }
+    }
+
     private fun showServiceMetrics() {
         val content = page("Dung lượng & dịch vụ", SCREEN_SERVICES)
         val body = infoBox("Đang đọc số liệu hệ thống…")
@@ -1527,6 +1620,7 @@ class MainActivity : AppCompatActivity() {
         private const val SCREEN_PICKER = "picker"
         private const val SCREEN_CATALOG = "catalog"
         private const val SCREEN_SERVICES = "services"
+        private const val SCREEN_DOWNLOAD = "download"
         private const val SCREEN_REPORTS = "reports"
         private const val SCREEN_SLA = "sla"
         private const val SCREEN_CONFIG = "config"
