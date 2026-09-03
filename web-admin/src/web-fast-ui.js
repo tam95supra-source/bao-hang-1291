@@ -28,6 +28,14 @@ const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (v) => String(v ?? '').replace(/[&<>'"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' }[c]));
 
+function routeToken() {
+  return typeof globalThis.__BH_ROUTE_TOKEN__ === 'function' ? globalThis.__BH_ROUTE_TOKEN__() : null;
+}
+function routeActive(token = null) {
+  if (typeof globalThis.__BH_ROUTE_ACTIVE__ === 'function') return globalThis.__BH_ROUTE_ACTIVE__('events', token);
+  return Boolean($('.tabs button[data-tab="events"].active'));
+}
+
 function session() {
   try {
     const value = JSON.parse(sessionStorage.getItem(SESSION_KEY) || 'null');
@@ -130,6 +138,7 @@ function cardMarkup(issue) {
 }
 
 function ensureShell() {
+  if (!routeActive()) return null;
   const content = $('#content');
   if (!content) return null;
   let shell = $('#fastEvents');
@@ -143,7 +152,7 @@ function ensureShell() {
       <button data-fast-bucket="withdrawn">Đã thu hồi <b data-fast-count="withdrawn">—</b></button>
     </div>
     <div class="fast-workspace">
-      <div class="fast-list" id="fastList" aria-live="polite"></div>
+      <div class="fast-list" id="fastList" aria-live="polite"><div class="fast-empty-row">Đang tải báo thiếu…</div></div>
       <aside class="fast-detail" id="fastDetail"><div class="fast-empty"><strong>Chọn một SKU</strong><span>Chi tiết và thao tác sẽ hiển thị tại đây.</span></div></aside>
     </div>
   </section>`;
@@ -300,7 +309,7 @@ function updateCounts() {
 }
 
 function reconcile() {
-  ensureShell();
+  if (!routeActive() || !ensureShell()) return;
   updateCounts();
   const rows = rowsForBucket();
   if (state.selectedId && !rows.some((r) => String(r.id) === String(state.selectedId))) state.selectedId = '';
@@ -311,16 +320,18 @@ function reconcile() {
 }
 
 async function loadWithdrawn() {
-  if (state.withdrawnLoading) return;
+  if (!routeActive() || state.withdrawnLoading) return;
+  const token = routeToken();
   state.withdrawnLoading = true;
   try {
     const data = await api('withdrawn-board');
+    if (!routeActive(token)) return;
     state.board = { ...(state.board || {}), withdrawn: data.withdrawn || [] };
     state.withdrawnLoaded = true;
     if (state.bucket === 'withdrawn') reconcile();
     else updateCounts();
   } catch (error) {
-    if (state.bucket === 'withdrawn') {
+    if (routeActive(token) && state.bucket === 'withdrawn') {
       const list = $('#fastList');
       if (list) list.innerHTML = `<div class="message" data-type="error">${esc(error?.message || String(error))}</div>`;
     }
@@ -330,30 +341,34 @@ async function loadWithdrawn() {
 }
 
 async function loadBoard(force = false) {
+  if (!routeActive()) return;
   if (!force && state.board && Date.now() - state.boardAt < 5000) {
     ensureShell();
     reconcile();
     return;
   }
   if (state.loading) { state.queued = true; return; }
+  const token = routeToken();
   state.loading = true;
   ensureShell();
   try {
     const main = await api('issue-board');
+    if (!routeActive(token)) return;
     state.board = { ...main, withdrawn: state.board?.withdrawn || [], realtime_seq: Number(main.realtime_seq || 0) };
     state.boardAt = Date.now();
     if (!force && state.bucket === 'claimed' && !(state.board.claimed || []).length && (state.board.open || []).length) state.bucket = 'open';
-    $$('#fastEvents [data-fast-bucket]').forEach((b) => b.classList.toggle('active', b.dataset.fastBucket === state.bucket));
+    $('#fastEvents [data-fast-bucket]').forEach((b) => b.classList.toggle('active', b.dataset.fastBucket === state.bucket));
     reconcile();
     if (state.bucket === 'withdrawn') void loadWithdrawn();
   } catch (error) {
+    if (!routeActive(token)) return;
     const list = $('#fastList');
     if (list && !state.board) list.innerHTML = `<div class="message" data-type="error">${esc(error?.message || String(error))}</div>`;
   } finally {
     state.loading = false;
     if (state.queued) {
       state.queued = false;
-      setTimeout(() => loadBoard(true), 120);
+      if (routeActive()) setTimeout(() => loadBoard(true), 120);
     }
   }
 }
@@ -377,6 +392,11 @@ function addVisibleIssue(issue) {
 }
 
 async function applyIssueSignal(signal = {}) {
+  if (!routeActive()) {
+    state.boardAt = 0;
+    return;
+  }
+  const token = routeToken();
   const incomingSeq = Number(signal.event_id || signal.realtime_event_id || 0);
   state.pendingSeq = Math.max(state.pendingSeq, incomingSeq);
   if (state.deltaBusy) return;
@@ -401,6 +421,7 @@ async function applyIssueSignal(signal = {}) {
         state.withdrawnLoaded = false;
         if (state.bucket === 'withdrawn') await loadWithdrawn();
       }
+      if (!routeActive(token)) return;
       reconcile();
       if (delta.has_more) continue;
       if (state.pendingSeq > state.board.realtime_seq) {
@@ -419,8 +440,9 @@ async function applyIssueSignal(signal = {}) {
 }
 
 async function renderFastEvents() {
+  if (!routeActive()) return;
   applyRoleState();
-  ensureShell();
+  if (!ensureShell()) return;
   await loadBoard(false);
 }
 
@@ -439,6 +461,7 @@ function enhanceStaticUi() {
 }
 
 globalThis.__BH_FAST_ISSUE_SIGNAL__ = applyIssueSignal;
+globalThis.__BH_FAST_REFRESH__ = () => routeActive() ? loadBoard(true) : Promise.resolve();
 globalThis.__BH_FAST_ENHANCE__ = enhanceStaticUi;
 globalThis.__BH_FAST_INSTALL__ = installRenderer;
 enhanceStaticUi();
