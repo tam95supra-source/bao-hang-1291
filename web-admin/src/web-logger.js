@@ -2,7 +2,7 @@ const DB_NAME = 'bao-hang-1291-web-diagnostics';
 const STORE = 'events';
 const MAX_EVENTS = 500;
 const MAX_BATCH = 120;
-const FLUSH_INTERVAL_MS = 30000;
+const FLUSH_INTERVAL_MS = 15 * 60 * 1000;
 const SLOW_REQUEST_MS = 3000;
 const WORKER_URL = (globalThis.__BAO_HANG_WORKER_URL__ || '').trim();
 const SESSION_ID_KEY = 'bao-hang-1291-web-log-session-id';
@@ -90,6 +90,7 @@ async function addEvent(event) {
     tx.onerror = resolve;
   });
   void trimDb();
+  if (event.level === 'error') setTimeout(() => void flush(), 1000);
 }
 
 async function trimDb() {
