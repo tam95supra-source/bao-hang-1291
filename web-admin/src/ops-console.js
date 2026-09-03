@@ -276,11 +276,11 @@ async function renderUsersView() {
       <section class="ops-status-strip">
         <span><i class="dot ${last?.status === 'FAILED' ? 'warn' : 'good'}"></i>DỮ LIỆU THEO NGÀY: <b>${last ? `${last.status} · ${formatTime(last.finished_at)}` : 'chưa đồng bộ'}</b></span>
         <span><i class="dot good"></i>Đồng bộ nguồn: <b>${auto ? `dự phòng mỗi ${interval} phút` : 'theo sự kiện'}</b></span>
-        <span><i class="dot good"></i>Thay đổi trong service: <b>realtime</b></span>
+        <span><i class="dot good"></i>Thay đổi trong hệ thống: <b>realtime</b></span>
         <span>Google Sheet: <b>${gsheetCount}</b> · Tạo thêm: <b>${manualCount}</b></span>
       </section>
       ${effectiveRole() === 'ADMIN' ? `<article class="ops-panel ops-staff-source">
-        <div class="ops-panel-title"><div><h3>Nguồn Google Sheet nhân sự</h3><p>Chỉ chuyển nguồn sau khi hệ thống kiểm tra đúng cấu trúc 8 cột hiện hành. Lịch sử báo hàng không bị xóa.</p></div><span id="opsStaffSourceState" class="ops-source-label">ĐANG KIỂM TRA</span></div>
+        <div class="ops-panel-title"><div><h3>Nguồn danh sách nhân sự</h3><p>Chỉ thay nguồn sau khi hệ thống xác nhận Google Sheet có đúng cấu trúc 8 cột đang sử dụng. Lịch sử báo thiếu đã phát sinh vẫn được giữ nguyên.</p></div><span id="opsStaffSourceState" class="ops-source-label">ĐANG KIỂM TRA</span></div>
         <form id="opsStaffSourceForm" class="ops-form-grid">
           <label class="span">Link Google Sheet<input id="opsStaffSheetUrl" name="sheet_url" type="url" required placeholder="https://docs.google.com/spreadsheets/d/.../edit" autocomplete="off"></label>
           <label>Tên tab<input id="opsStaffSheetName" name="sheet_name" required autocomplete="off"></label>
@@ -288,10 +288,10 @@ async function renderUsersView() {
         </form>
       </article>` : ''}
       <article class="ops-panel ops-users-panel">
-        <div class="ops-panel-title"><div><h3>Danh sách tài khoản</h3><p>Chỉ tài khoản “Tạo thêm” mới có nút Sửa/Xóa. Nhân sự Google Sheet được khóa theo nguồn.</p></div><label class="ops-search">Tìm<input id="opsUserSearch" placeholder="Mã nhân viên hoặc họ tên" value="${escapeHtml(ui.userSearch)}"></label></div>
+        <div class="ops-panel-title"><div><h3>Danh sách tài khoản</h3><p>Chỉ tài khoản tạo thủ công mới được sửa hoặc xóa tại đây. Tài khoản lấy từ Google Sheet được quản lý theo dữ liệu nguồn.</p></div><label class="ops-search">Tìm<input id="opsUserSearch" placeholder="Mã nhân viên hoặc họ tên" value="${escapeHtml(ui.userSearch)}"></label></div>
         <div class="table-wrap"><table class="ops-users-table"><thead><tr><th>Mã nhân viên</th><th>Họ tên</th><th>Quyền</th><th>Nguồn</th><th>Trạng thái</th><th class="ops-action-col">Thao tác</th></tr></thead><tbody id="opsUserRows"></tbody></table></div>
       </article>
-      <article class="ops-panel ops-create-user"><div class="ops-panel-title"><div><h3>Thêm tài khoản ngoài Google Sheet</h3><p>Chỉ cần mã nhân viên, họ tên, quyền và mật khẩu. Không yêu cầu nhà thầu.</p></div></div>
+      <article class="ops-panel ops-create-user"><div class="ops-panel-title"><div><h3>Tạo tài khoản thủ công</h3><p>Nhập mã nhân viên, họ tên, quyền và mật khẩu. Tài khoản này không phụ thuộc danh sách Google Sheet.</p></div></div>
         <form id="opsCreateUser" class="ops-form-grid">
           <label>Mã nhân viên<input name="employee_code" required autocomplete="off"></label>
           <label>Họ tên<input name="full_name" required autocomplete="off"></label>
@@ -412,7 +412,7 @@ function openDeleteUser(user, after) {
     title: 'Xóa tài khoản tạo thêm',
     confirmText: 'Xóa tài khoản',
     danger: true,
-    body: `<div class="ops-warning-box"><b>${escapeHtml(user.employee_code)} · ${escapeHtml(user.full_name)}</b><p>Tài khoản sẽ bị khóa ngay và không đăng nhập/ghi nghiệp vụ được nữa. Lịch sử ticket, audit và báo cáo cũ vẫn được giữ để không làm mất dấu vận hành.</p></div><div class="ops-modal-error" hidden></div>`,
+    body: `<div class="ops-warning-box"><b>${escapeHtml(user.employee_code)} · ${escapeHtml(user.full_name)}</b><p>Tài khoản sẽ ngừng đăng nhập và không thể tạo thao tác nghiệp vụ mới. Toàn bộ lịch sử báo thiếu và lịch sử thao tác đã có vẫn được giữ.</p></div><div class="ops-modal-error" hidden></div>`,
     onConfirm: async () => {
       await opsApi('delete-user', { id: user.id });
       toast('Đã xóa tài khoản; lịch sử được giữ nguyên.');
@@ -425,16 +425,16 @@ async function renderTimingView() {
   const content = $('#content');
   if (!content || !isManager()) return;
   content.dataset.opsRender = 'timing';
-  content.innerHTML = `${pageHeading('Thời gian nghiệp vụ', 'Mỗi nhóm thời gian được tách riêng theo đúng bước xử lý báo hàng.')}<div class="ops-loading">Đang tải cấu hình…</div>`;
+  content.innerHTML = `${pageHeading('Thời gian nghiệp vụ', 'Các mốc thời gian được chia theo từng bước của quy trình xử lý báo thiếu.')}<div class="ops-loading">Đang tải cấu hình…</div>`;
   try {
     const config = await webApi('get-operational-config');
     if ($('#content') !== content || content.dataset.opsRender !== 'timing') return;
-    content.innerHTML = `${pageHeading('Thời gian nghiệp vụ', 'Mỗi nhóm thời gian được tách riêng theo đúng bước xử lý báo hàng.')}
+    content.innerHTML = `${pageHeading('Thời gian nghiệp vụ', 'Các mốc thời gian được chia theo từng bước của quy trình xử lý báo thiếu.')}
       <form id="opsTimingForm">
         <div class="ops-settings-grid">
           <article class="ops-setting-card"><span class="ops-step">01</span><h3>Tiếp nhận báo thiếu</h3><p>Thời gian từ lúc người lấy hàng báo thiếu đến khi người xử lý nhận yêu cầu, kèm khoảng nhắc lại nếu chưa có người nhận.</p><label>Thời gian tiếp nhận (phút)<input type="number" name="acknowledge_minutes" min="1" max="480" value="${Number(config.acknowledge_minutes)}"></label><label>Nhắc lại nếu chưa xử lý (phút)<input type="number" name="reminder_minutes" min="1" max="480" value="${Number(config.reminder_minutes)}"></label></article>
           <article class="ops-setting-card"><span class="ops-step">02</span><h3>Xử lý sau khi tiếp nhận</h3><p>Thời gian theo dõi sau khi người xử lý đã nhận yêu cầu và đang tìm hoặc châm bổ sung hàng.</p><label>Thời gian xử lý sau khi nhận (phút)<input type="number" name="replenish_minutes" min="1" max="480" value="${Number(config.replenish_minutes)}"></label></article>
-          <article class="ops-setting-card"><span class="ops-step">03</span><h3>Tự động cho phép bỏ qua</h3><p>Nếu bật, hệ thống tự cho phép bỏ qua SKU khi yêu cầu đã chờ quá thời gian quy định. Nếu tắt, chỉ người có quyền mới được cho phép bỏ qua.</p><label class="ops-check"><input type="checkbox" name="auto_skip_enabled" ${config.auto_skip_enabled ? 'checked' : ''}> Tự động cho phép bỏ qua SKU</label><label>Tự động bỏ qua sau (phút)<input type="number" name="auto_skip_after_minutes" min="15" max="4320" value="${Number(config.auto_skip_after_minutes)}"></label></article>
+          <article class="ops-setting-card"><span class="ops-step">03</span><h3>Tự động cho phép bỏ qua</h3><p>Nếu bật, hệ thống tự cho phép bỏ qua SKU khi yêu cầu đã chờ quá thời gian quy định. Nếu tắt, chỉ người có quyền mới được cho phép bỏ qua.</p><label class="ops-check"><input type="checkbox" name="auto_skip_enabled" ${config.auto_skip_enabled ? 'checked' : ''}> Tự động cho phép bỏ qua SKU</label><label>Tự động cho phép bỏ qua sau (phút)<input type="number" name="auto_skip_after_minutes" min="15" max="4320" value="${Number(config.auto_skip_after_minutes)}"></label></article>
           <article class="ops-setting-card"><span class="ops-step">04</span><h3>Cảnh báo cho người lấy hàng</h3><p>Khi có hàng hoặc được phép bỏ qua, cảnh báo sẽ nhắc lại tới khi người lấy hàng xác nhận.</p><label>Nhắc người lấy hàng xác nhận (phút)<input type="number" name="picker_ack_reminder_minutes" min="1" max="60" value="${Number(config.picker_ack_reminder_minutes)}"></label><label>Nhắc lại khi đã tìm thấy hàng (phút)<input type="number" name="found_item_reminder_minutes" min="1" max="60" value="${Number(config.found_item_reminder_minutes || 5)}"></label><small>Mặc định 5 phút cho trường hợp SKU đã được cho phép bỏ qua nhưng sau đó tìm thấy hàng.</small></article>
         </div>
         <div class="ops-save-bar"><div><b>Áp dụng đồng bộ</b><span>Thay đổi được phát realtime sang Web/App đang hoạt động.</span></div><button class="primary" type="submit">Lưu thời gian nghiệp vụ</button></div>
@@ -482,7 +482,7 @@ async function renderServerView() {
     const dbPct = dbLimit ? db / dbLimit * 100 : 0;
     const computeGuard = Number(limits.compute_hours_month || 0);
     const risk = dbPct >= 90 || Number(summary.pending_sheet_count || 0) > 100;
-    content.innerHTML = `${pageHeading('Hạ tầng & chi phí', 'Sức khỏe dịch vụ, dung lượng và hàng rào giữ mục tiêu vận hành 0 USD.', `<div class="ops-cost-target ${risk ? 'warn' : 'good'}"><span>CHI PHÍ DỰ KIẾN</span><strong>$0</strong><small>${risk ? 'Có chỉ số cần theo dõi' : 'Đang trong mục tiêu'}</small></div>`)}
+    content.innerHTML = `${pageHeading('Hạ tầng & chi phí', 'Trạng thái dịch vụ, dung lượng và các giới hạn bảo vệ mục tiêu vận hành 0 USD.', `<div class="ops-cost-target ${risk ? 'warn' : 'good'}"><span>CHI PHÍ DỰ KIẾN</span><strong>$0</strong><small>${risk ? 'Có chỉ số cần theo dõi' : 'Đang trong mục tiêu'}</small></div>`)}
       <section class="ops-status-strip">
         <span><i class="dot good"></i>Neon: <b>ACTIVE</b></span>
         <span><i class="dot ${document.body.dataset.ticketRealtime === 'online' ? 'good' : 'warn'}"></i>Cập nhật báo thiếu: <b>${document.body.dataset.ticketRealtime === 'online' ? 'TRỰC TUYẾN' : 'TỰ LÀM MỚI/ĐANG KẾT NỐI'}</b></span>
@@ -495,20 +495,20 @@ async function renderServerView() {
           ${progress('Dung lượng dữ liệu Neon', db, dbLimit)}
           <div class="ops-kv compact"><span>Log chẩn đoán</span><b>Google Drive · không lưu trên service</b><span>Data API</span><b>Production</b></div>
         </article>
-        <article class="ops-panel"><div class="ops-panel-title"><div><h3>Giới hạn Neon Free & Data API</h3><p>Hạn mức guard mà server đang áp dụng; không giả lập số đã dùng nếu không có telemetry.</p></div></div><div class="ops-limit-grid">
+        <article class="ops-panel"><div class="ops-panel-title"><div><h3>Giới hạn Neon Free & Data API</h3><p>Các giới hạn bảo vệ đang áp dụng trên hệ thống. Chỉ hiển thị mức sử dụng khi có số liệu đo thực tế.</p></div></div><div class="ops-limit-grid">
           ${metric('Giới hạn dung lượng DB', formatBytes(dbLimit), `${dbPct.toFixed(1)}% đang dùng`)}
           ${metric('Giới hạn compute', computeGuard ? `${computeGuard} giờ/tháng` : '—', 'mốc bảo vệ cấu hình server')}
           ${metric('Data API', 'BẬT', 'Firebase JWT + RLS/RPC')}
           ${metric('Realtime nghiệp vụ', 'Firestore', 'Firebase control-plane')}
-        </div><p class="ops-note">Các chỉ số sử dụng ở trên được đọc từ Neon production. Quota không có telemetry trực tiếp không được hiển thị thành số “đã dùng”.</p></article>
+        </div><p class="ops-note">Các chỉ số sử dụng được đọc từ Neon Production. Hạn mức nào không có số liệu đo trực tiếp sẽ không hiển thị thành mức “đã dùng”.</p></article>
         <article class="ops-panel"><div class="ops-panel-title"><div><h3>Firebase</h3><p>Auth + Firestore realtime + FCM HTTP v1 + Hosting Web</p></div><span class="ops-service-badge good">SPARK GUARD</span></div><div class="ops-kv"><span>Dự án</span><b>bao-hang-1291</b><span>Hosting</span><b>bao-hang-1291.web.app</b><span>FCM token hoạt động</span><b>${usage.active_device_tokens || 0}</b><span>Chính sách Billing</span><b>Không tự bật</b><span>Chặn deploy</span><b>Chặn nếu Cloud Billing được bật</b></div></article>
         <article class="ops-panel"><div class="ops-panel-title"><div><h3>GitHub & phát hành</h3><p>Public source, CI/CD và OTA</p></div><span class="ops-service-badge good">PUBLIC</span></div><div class="ops-kv"><span>Repo</span><b>tam95supra-source/bao-hang-1291</b><span>Chính sách runner</span><b>Standard / self-hosted</b><span>Runner trả phí</span><b>Không dùng</b><span>Phát hành</span><b>Chỉ chạy khi có yêu cầu Beta/Stable</b></div></article>
-        <article class="ops-panel span-two"><div class="ops-panel-title"><div><h3>Hàng rào mục tiêu $0</h3><p>Hệ thống ưu tiên dừng/giảm tải trước khi chuyển sang phương án có phí.</p></div></div><div class="ops-guard-list">
-          <div class="good"><b>Neon</b><span>Production là backend nghiệp vụ; DB/compute dùng guard Free và không có cơ chế tự nâng gói.</span></div>
-          <div class="good"><b>Firebase</b><span>CI kiểm tra billingEnabled=false trước mỗi lần deploy Hosting.</span></div>
-          <div class="good"><b>GitHub</b><span>Repo public dùng runner chuẩn; không dùng larger runner trả phí.</span></div>
-          <div class="good"><b>Apps Script worker</b><span>Worker nền xử lý SLA, FCM/Firestore, Google Sheet, log và đồng bộ nhân sự từ Neon.</span></div>
-          <div class="${dbPct >= 75 ? 'warn' : 'good'}"><b>Dung lượng DB</b><span>${dbPct.toFixed(1)}% giới hạn guard. Cảnh báo sớm từ 75%, ưu tiên cleanup trước 90%.</span></div>
+        <article class="ops-panel span-two"><div class="ops-panel-title"><div><h3>Giới hạn bảo vệ mục tiêu $0</h3><p>Hệ thống ưu tiên giảm tải hoặc dừng tác vụ không thiết yếu trước khi có nguy cơ phát sinh chi phí.</p></div></div><div class="ops-guard-list">
+          <div class="good"><b>Neon</b><span>Production là backend nghiệp vụ. Database và compute được giữ trong giới hạn Free, không có cơ chế tự nâng gói.</span></div>
+          <div class="good"><b>Firebase</b><span>CI kiểm tra billingEnabled=false trước mỗi lần deploy Firebase Hosting.</span></div>
+          <div class="good"><b>GitHub</b><span>Repo public dùng runner tiêu chuẩn; không dùng runner trả phí.</span></div>
+          <div class="good"><b>Apps Script worker</b><span>Worker nền xử lý SLA, FCM/Firestore, xuất Google Sheet và đồng bộ nhân sự. File log chẩn đoán được lưu trực tiếp trên Google Drive.</span></div>
+          <div class="${dbPct >= 75 ? 'warn' : 'good'}"><b>Dung lượng DB</b><span>${dbPct.toFixed(1)}% giới hạn dung lượng. Cảnh báo từ 75% và ưu tiên dọn dữ liệu trước 90%.</span></div>
         </div></article>
       </div>`;
   } catch (error) {
@@ -543,7 +543,7 @@ async function enhanceRecentIssueCards() {
       if (issue.status !== 'SKIP_ALLOWED') return;
       const actions = document.createElement('div');
       actions.className = 'actions ops-restore-actions';
-      actions.innerHTML = `<button class="success-action" data-restore-skip="${escapeHtml(issue.id)}">ĐÃ TÌM THẤY HÀNG — HỦY BỎ QUA</button>`;
+      actions.innerHTML = `<button class="success-action" data-restore-skip="${escapeHtml(issue.id)}">ĐÃ TÌM THẤY HÀNG</button>`;
       card.appendChild(actions);
       $('[data-restore-skip]', actions).onclick = () => confirmRestoreSkip(issue);
     });
@@ -552,11 +552,11 @@ async function enhanceRecentIssueCards() {
 }
 function confirmRestoreSkip(issue) {
   modal({
-    title: `Hủy bỏ qua SKU ${issue.sku}`,
+    title: `Xác nhận đã tìm thấy hàng · SKU ${issue.sku}`,
     confirmText: 'Xác nhận đã tìm thấy hàng',
-    body: `<div class="ops-restore-summary"><b>SKU ${escapeHtml(issue.sku)} · ${escapeHtml(issue.product_name || '')}</b><p>Hành động này sửa quyết định “được phép bỏ qua” thành “đã có hàng”. Cảnh báo cho phép bỏ qua trước đó sẽ hết hiệu lực ngay.</p><ul><li>Người lấy hàng đã báo SKU này nhận cảnh báo bắt buộc: <b>KHÔNG BỎ QUA — ĐÃ CÓ HÀNG</b>.</li><li>Nhóm Người báo hàng / Admin nhận thông báo trạng thái mới.</li><li>Đợt báo tăng phiên trạng thái và ghi nhật ký riêng; không tạo đợt mới và không xóa lịch sử cho phép bỏ qua.</li></ul></div><label class="ops-modal-reason">Ghi chú lý do<input id="restoreReason" value="Đã tìm thấy hàng sau khi cho phép bỏ qua"></label><div class="ops-modal-error" hidden></div>`,
+    body: `<div class="ops-restore-summary"><b>SKU ${escapeHtml(issue.sku)} · ${escapeHtml(issue.product_name || '')}</b><p>SKU này trước đó đã được cho phép bỏ qua. Khi xác nhận đã tìm thấy hàng, trạng thái sẽ chuyển sang “Đã có hàng” và quyền bỏ qua trước đó hết hiệu lực.</p><ul><li>Người lấy hàng đã báo SKU này sẽ nhận cảnh báo bắt buộc: <b>ĐÃ CÓ HÀNG — QUAY LẠI LẤY HÀNG</b>.</li><li>Người báo hàng và tài khoản quản trị nhận cập nhật trạng thái mới.</li><li>Yêu cầu hiện tại được cập nhật trạng thái và ghi thêm lịch sử; không tạo yêu cầu mới và không xóa lịch sử cũ.</li></ul></div><label class="ops-modal-reason">Ghi chú<input id="restoreReason" value="Đã tìm thấy hàng sau khi cho phép bỏ qua"></label><div class="ops-modal-error" hidden></div>`,
     onConfirm: async (root) => {
-      const done = busy('Đang hủy quyền bỏ qua và gửi cảnh báo…');
+      const done = busy('Đang cập nhật trạng thái và gửi cảnh báo…');
       try {
         const result = await opsApi('restore-skipped', { issue_id: issue.id, reason: $('#restoreReason', root).value.trim() });
         toast(`SKU ${result.issue?.sku || issue.sku} đã chuyển sang ĐÃ CÓ HÀNG.`);
