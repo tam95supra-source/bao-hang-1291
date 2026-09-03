@@ -500,6 +500,22 @@ function staffSourceConfigure_(body) {
   const id=parseStaffSheetId_(body.sheet_url || body.sheet_id || '');
   const tab=String(body.sheet_name || '').trim();
   const candidate=readStaffSource_(id, tab);
+  const current=staffSourceConfig_();
+  const sameSource=current.sheetId===id && current.sheetName===tab;
+
+  if (sameSource) {
+    const result=runStaffSync_('SOURCE_VALIDATE', caller.profile, candidate);
+    if (Number(result.failed || 0) > 0) throw new Error('STAFF_SOURCE_SYNC_PARTIAL:'+Number(result.failed || 0));
+    return Object.assign({
+      ok:true,
+      sheet_id:id,
+      sheet_name:tab,
+      eligible_rows:candidate.staff.length,
+      validation_only:result.status==='NO_CHANGE' && result.changed===false,
+      cleanup:{ok:true,skipped:'SAME_SOURCE_VALIDATION'}
+    }, result);
+  }
+
   const props=PropertiesService.getScriptProperties();
   props.setProperties({STAFF_SOURCE_SHEET_ID:id,STAFF_SOURCE_SHEET_NAME:tab,STAFF_SOURCE_CHANGED_AT:new Date().toISOString()}, false);
   installStaffSourceFallbackTrigger_();
