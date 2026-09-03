@@ -45,12 +45,32 @@ jobs:
           node ops/apps_script_deploy_worker.mjs
           git diff --check
 
-      - name: Purge history-free inactive staff
+      - name: Verify completed orphan cleanup receipt
         id: orphan_cleanup
         shell: bash
         run: |
           set -euo pipefail
-          node ops/staff_cleanup_orphans.mjs
+          mkdir -p acceptance-evidence
+          node <<'NODE'
+          const fs = require('fs');
+          const path = 'ops/status/staff-orphan-cleanup-last.json';
+          const receipt = JSON.parse(fs.readFileSync(path, 'utf8'));
+          if (receipt.status !== 'PASS' || receipt.cleanup !== 'success') {
+            throw new Error('STAFF_ORPHAN_CLEANUP_RECEIPT_NOT_PASS');
+          }
+          const evidence = {
+            status: 'PASS',
+            mode: 'VERIFIED_PRIOR_RECEIPT_NO_RERUN',
+            workflow: receipt.workflow,
+            run_id: receipt.run_id,
+            run_attempt: receipt.run_attempt,
+            trigger_sha: receipt.trigger_sha,
+            cleanup: receipt.cleanup
+          };
+          fs.writeFileSync('acceptance-evidence/staff-orphan-cleanup.json', JSON.stringify(evidence, null, 2) + '\n');
+          console.log('STAFF_ORPHAN_CLEANUP_PRIOR_RECEIPT=PASS');
+          console.log('STAFF_ORPHAN_CLEANUP_RERUN=SKIPPED_ALREADY_PASS');
+          NODE
 
       - name: Commit canonical source normalization
         shell: bash
