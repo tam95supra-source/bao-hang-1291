@@ -1,11 +1,11 @@
 {
   "channel": "beta",
-  "versionCode": 27,
-  "versionName": "1.6.18",
-  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.18/bao-hang-1291-beta-1.6.18.apk",
-  "sha256": "e9a08fd17eadfecab21c7dc2555f092c57802c49d6203fef2e4668294ac18214",
+  "versionCode": 28,
+  "versionName": "1.6.19",
+  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.19/bao-hang-1291-beta-1.6.19.apk",
+  "sha256": "9d91cc7870371d0229178170d56e7ac8fc48356e2018aaf7e8a413cb43be4651",
   "mandatory": true,
-  "releaseNotes": "Beta 1.6.18: bấm BÁO HÀNG 1291 ở đầu ứng dụng để mở QR tải trực tiếp APK mới nhất từ GitHub theo đúng kênh BETA/STABLE; có nút tải trực tiếp trên máy và kiểm tra link GitHub tin cậy.",
+  "releaseNotes": "Beta 1.6.19: sửa kiểm tra cập nhật OTA. Chạm vào phiên bản luôn hiển thị thông tin bản đang cài và bản mới nhất; tự kiểm tra khi mở ứng dụng và định kỳ 5 phút khi ứng dụng đang hoạt động, không còn bị im lặng do giới hạn 6 giờ.",
   "signerSha256": "2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0",
-  "sourceSha": "cb8232a0e7a6010bf8cc935bd87a275d1a6609a3"
+  "sourceSha": "1e7d236f1bf32222ce306590ea440cf51cd6cc20"
 }
