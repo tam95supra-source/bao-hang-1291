@@ -213,26 +213,14 @@ jobs:
         run: |
           set -euo pipefail
           CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"; test -n "$CHROME_BIN"
-          SHELL_HARNESS="$RUNNER_TEMP/web-shell-consistency-e2e.cjs"
-          cp scripts/web-shell-consistency-e2e.cjs "$SHELL_HARNESS"
-          python3 - "$SHELL_HARNESS" <<'PY'
-          import pathlib, sys
-          path = pathlib.Path(sys.argv[1])
-          source = path.read_text(encoding='utf-8')
-          needle = ",r,{timeout:10000})"
-          count = source.count(needle)
-          if count != 2:
-              raise SystemExit(f"WEB_SHELL_ROUTE_ARG_PATCH_COUNT={count}")
-          path.write_text(source.replace(needle, ",route,{timeout:10000})"), encoding='utf-8')
-          print("WEB_SHELL_ROUTE_ARG_HARNESS_PATCH=PASS count=2")
-          PY
-          node --check "$SHELL_HARNESS"
-          NODE_OPTIONS="--require ./scripts/web-shell-cold-goto-shim.cjs" CHROME_BIN="$CHROME_BIN" node "$SHELL_HARNESS" 2>&1 | tee .acceptance-evidence/targeted/shell-consistency.log
+          node --check scripts/web-shell-consistency-e2e.cjs
+          NODE_OPTIONS="--require ./scripts/web-shell-cold-goto-shim.cjs" CHROME_BIN="$CHROME_BIN" node scripts/web-shell-consistency-e2e.cjs 2>&1 | tee .acceptance-evidence/targeted/shell-consistency.log
           grep -F 'WEB_SHELL_RUNTIME_CONSISTENCY=PASS' .acceptance-evidence/targeted/shell-consistency.log >/dev/null
           grep -F 'WEB_SHELL_DIRECT_LOAD=PASS' .acceptance-evidence/targeted/shell-consistency.log >/dev/null
           grep -F 'WEB_SHELL_NAV_STABILITY=PASS' .acceptance-evidence/targeted/shell-consistency.log >/dev/null
           grep -F 'WEB_SHELL_ROLE_MATRIX=PASS' .acceptance-evidence/targeted/shell-consistency.log >/dev/null
           grep -F 'WEB_SHELL_I18N=PASS' .acceptance-evidence/targeted/shell-consistency.log >/dev/null
+          grep -F 'WEB_I18N_ALL_ROUTES=PASS' .acceptance-evidence/targeted/shell-consistency.log >/dev/null
 
       - name: Run production two-session A to B realtime
         shell: bash
