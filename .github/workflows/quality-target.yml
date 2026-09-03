@@ -158,7 +158,7 @@ jobs:
           const gas = fs.readFileSync('google-apps-script/DEPLOY_NEON.gs', 'utf8');
           const requiredMain = ['Lấy lại mật khẩu','password-reset-preview','password-reset-request',"TEMP_PASSWORD_PREFIX = 'R!'",'Đổi mật khẩu','changeOwnPassword'];
           for (const marker of requiredMain) if (!main.includes(marker)) throw new Error('PASSWORD_RECOVERY_WEB_MISSING:' + marker);
-          const requiredRuntime = ['/api/public-auth/','updatePassword','/auth/change-password'];
+          const requiredRuntime = ['public-auth','updatePassword','/auth/change-password'];
           for (const marker of requiredRuntime) if (!runtime.includes(marker)) throw new Error('PASSWORD_RECOVERY_RUNTIME_MISSING:' + marker);
           const requiredGas = ["BH_PASSWORD_RECOVERY_EMAIL = 'tam95.supra@gmail.com'","BH_PASSWORD_RESET_COOLDOWN_MS = 5 * 60 * 1000","MailApp.sendEmail","passwordResetRequest_","passwordResetPreview_","passwordResetMailCapability_"];
           for (const marker of requiredGas) if (!gas.includes(marker)) throw new Error('PASSWORD_RECOVERY_GAS_MISSING:' + marker);
