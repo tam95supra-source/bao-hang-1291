@@ -167,10 +167,10 @@ async function main() {
     }
 
     const mailCapability = await stage('PASSWORD_RESET_MAIL_CAPABILITY', () => gasAction(adminPair.idToken, 'password-reset-mail-capability', {}, 30000), 32000);
-    if (mailCapability.recovery_email !== 'tam95.supra@gmail.com' || Number(mailCapability.remaining_daily_quota || 0) < 1) {
+    if (mailCapability.recovery_email !== 'tam95.supra@gmail.com' || mailCapability.provider !== 'GMAIL_API_OAUTH' || mailCapability.send_scope_verified !== true) {
       throw new Error(`PASSWORD_RESET_MAIL_CAPABILITY_INVALID:${safe(JSON.stringify(mailCapability))}`);
     }
-    console.log(`PASSWORD_RESET_MAIL_CAPABILITY=PASS email=${mailCapability.recovery_email} remaining_quota=${Number(mailCapability.remaining_daily_quota || 0)}`);
+    console.log(`PASSWORD_RESET_MAIL_CAPABILITY=PASS email=${mailCapability.recovery_email} provider=${mailCapability.provider} send_scope_verified=true`);
 
     const sourceStatus = await stage('STAFF_SOURCE_STATUS', () => gasAction(adminPair.idToken, 'staff-source-status', {}, 30000), 32000);
     if (sourceStatus.sheet_id !== '1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78' || sourceStatus.sheet_name !== 'DANH SÁCH NHÂN SỰ' || sourceStatus.fallback_only !== false) {
