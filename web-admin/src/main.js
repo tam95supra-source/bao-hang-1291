@@ -2,7 +2,7 @@ import './style.css';
 // Deployment trigger: active-staff preservation guard verified.
 import { createClient } from './backend-runtime.js';
 import { installI18n, getLocale } from './i18n.js';
-import { installWebLogger } from './web-logger.js';
+import { installWebLogger, flushWebLogs } from './web-logger.js';
 
 let excelModulePromise;
 async function getExcelJS() {
@@ -74,6 +74,7 @@ function readSession() {
 function saveSession(session) {
   state.session = session;
   sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  if (session?.access_token && session?.profile) setTimeout(() => void flushWebLogs(), 1500);
 }
 async function stopRealtime() {
   clearInterval(state.fallbackTimer);
