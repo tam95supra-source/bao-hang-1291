@@ -91,6 +91,16 @@ jobs:
           NODE
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
+          const paths = ['.github/workflows/staff-sync.yml','.github/workflows/staff-sync-exact.yml','.github/workflows/one-time-staff-picker-normalize.yml'];
+          for (const path of paths) {
+            const source = fs.readFileSync(path, 'utf8');
+            if (!source.includes('(retired)') || !source.includes('LEGACY_STAFF_MUTATION_WORKFLOW_RETIRED=PASS')) throw new Error('LEGACY_STAFF_WORKFLOW_ACTIVE:' + path);
+            if (source.includes('ops/staff-sync.request') || source.includes('ops/staff-sync-exact.request') || source.includes('ops/staff-picker-normalize.trigger') || source.includes('full_staff_sync') || source.includes('run_full_staff_sync_compat')) throw new Error('LEGACY_STAFF_MUTATION_PATH_PRESENT:' + path);
+          }
+          console.log('LEGACY_STAFF_MUTATION_WORKFLOWS_RETIRED=PASS');
+          NODE
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
           import path from 'node:path';
           import zlib from 'node:zlib';
 
