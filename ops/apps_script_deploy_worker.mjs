@@ -103,66 +103,105 @@ async function readUntil(label, fn, accept, attempts = 8) {
   throw new Error(`${label}_FAILED:${JSON.stringify(lastValue).slice(0,200)}`);
 }
 
-async function userRefreshAccessToken() {
-  const body = new URLSearchParams({
-    client_id: req('GOOGLE_OAUTH_CLIENT_ID'),
-    client_secret: req('GOOGLE_OAUTH_CLIENT_SECRET'),
-    refresh_token: req('GOOGLE_OAUTH_REFRESH_TOKEN'),
-    grant_type: 'refresh_token'
-  });
-  const data = await jsonFetch('https://oauth2.googleapis.com/token', {
-    method:'POST',
-    headers:{'content-type':'application/x-www-form-urlencoded'},
-    body
-  });
-  if (!data.access_token) throw new Error('USER_REFRESH_ACCESS_TOKEN_MISSING');
-  return data.access_token;
+const envValue = (name) => String(process.env[name] || '').trim();
+
+function oauthCandidate(label, clientId, clientSecret, refreshToken) {
+  const client_id = String(clientId || '').trim();
+  const client_secret = String(clientSecret || '').trim();
+  const refresh_token = String(refreshToken || '').trim();
+  if (!client_id || !client_secret || !refresh_token) return null;
+  return {label, client_id, client_secret, refresh_token};
 }
 
-async function serviceAccountScriptAccessToken() {
-  const sa = JSON.parse(String(process.env.FIREBASE_SERVICE_ACCOUNT || '{}'));
-  if (sa.project_id !== 'bao-hang-1291' || !sa.client_email || !sa.private_key) {
-    throw new Error('SERVICE_ACCOUNT_SCOPE_MISSING');
+function candidatesFromClaspJson(raw, label) {
+  if (!String(raw || '').trim()) return [];
+  let obj;
+  try { obj = JSON.parse(String(raw)); } catch { return []; }
+  const out = [];
+  const add = (suffix, clientId, clientSecret, refreshToken) => {
+    const c = oauthCandidate(`${label}${suffix}`, clientId, clientSecret, refreshToken);
+    if (c) out.push(c);
+  };
+
+  // Legacy clasp: {"tokens":{"default":{"client_id","client_secret","refresh_token"}}}
+  const tokens = obj?.tokens;
+  if (tokens && typeof tokens === 'object') {
+    for (const [name, value] of Object.entries(tokens)) {
+      if (!value || typeof value !== 'object') continue;
+      add(name === 'default' ? '' : '_TOKENSET', value.client_id || value.clientId, value.client_secret || value.clientSecret, value.refresh_token || value.refreshToken);
+    }
   }
-  const enc = (value) => Buffer.from(typeof value === 'string' ? value : JSON.stringify(value)).toString('base64url');
-  const now = Math.floor(Date.now() / 1000);
-  const header = enc({alg:'RS256',typ:'JWT'});
-  const claim = enc({
-    iss:sa.client_email,
-    scope:'https://www.googleapis.com/auth/script.projects https://www.googleapis.com/auth/script.deployments',
-    aud:'https://oauth2.googleapis.com/token',
-    iat:now,
-    exp:now+900
+
+  // Current clasp: token + oauth2ClientSettings.
+  const token = obj?.token && typeof obj.token === 'object' ? obj.token : {};
+  const settings = obj?.oauth2ClientSettings && typeof obj.oauth2ClientSettings === 'object' ? obj.oauth2ClientSettings : {};
+  add('_SETTINGS', settings.clientId || settings.client_id, settings.clientSecret || settings.client_secret, token.refresh_token || token.refreshToken);
+
+  // Authorized-user JSON and a few historical flat variants.
+  add('_FLAT', obj?.client_id || obj?.clientId, obj?.client_secret || obj?.clientSecret, obj?.refresh_token || obj?.refreshToken);
+
+  return out;
+}
+
+function oauthCandidates() {
+  const all = [];
+  const add = (candidate) => { if (candidate) all.push(candidate); };
+
+  add(oauthCandidate(
+    'GOOGLE_OAUTH',
+    envValue('GOOGLE_OAUTH_CLIENT_ID'),
+    envValue('GOOGLE_OAUTH_CLIENT_SECRET'),
+    envValue('GOOGLE_OAUTH_REFRESH_TOKEN')
+  ));
+  add(oauthCandidate(
+    'APPS_SCRIPT_OAUTH_ALT',
+    envValue('APPS_SCRIPT_OAUTH_CLIENT_ID'),
+    envValue('APPS_SCRIPT_OAUTH_CLIENT_SECRET'),
+    envValue('APPS_SCRIPT_OAUTH_REFRESH_TOKEN')
+  ));
+  all.push(...candidatesFromClaspJson(envValue('CLASPRC_JSON'), 'CLASPRC_JSON'));
+  all.push(...candidatesFromClaspJson(envValue('CLASP_TOKEN'), 'CLASP_TOKEN'));
+
+  const seen = new Set();
+  return all.filter((candidate) => {
+    // Deduplicate without logging any credential material.
+    const fingerprint = sha256(`${candidate.client_id}\0${candidate.refresh_token}`);
+    if (seen.has(fingerprint)) return false;
+    seen.add(fingerprint);
+    return true;
   });
-  const unsigned = `${header}.${claim}`;
-  const signature = crypto.sign('RSA-SHA256', Buffer.from(unsigned), sa.private_key).toString('base64url');
+}
+
+async function refreshUserAccessToken(candidate) {
   const data = await jsonFetch('https://oauth2.googleapis.com/token', {
     method:'POST',
     headers:{'content-type':'application/x-www-form-urlencoded'},
     body:new URLSearchParams({
-      grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',
-      assertion:`${unsigned}.${signature}`
+      client_id:candidate.client_id,
+      client_secret:candidate.client_secret,
+      refresh_token:candidate.refresh_token,
+      grant_type:'refresh_token'
     })
   });
-  if (!data.access_token) throw new Error('SERVICE_ACCOUNT_ACCESS_TOKEN_MISSING');
+  if (!data.access_token) throw new Error('ACCESS_TOKEN_MISSING');
   return data.access_token;
 }
 
 async function accessToken() {
-  try {
-    const token = await userRefreshAccessToken();
-    console.log('APPS_SCRIPT_AUTH_MODE=USER_REFRESH');
-    return token;
-  } catch (userError) {
-    console.log(`APPS_SCRIPT_AUTH_USER_REFRESH=UNAVAILABLE reason=${String(userError?.message || userError).replace(/[\r\n]+/g,' ').slice(0,220)}`);
+  const candidates = oauthCandidates();
+  if (!candidates.length) throw new Error('APPS_SCRIPT_USER_OAUTH_REAUTH_REQUIRED:NO_USER_OAUTH_CANDIDATES');
+
+  for (const candidate of candidates) {
     try {
-      const token = await serviceAccountScriptAccessToken();
-      console.log('APPS_SCRIPT_AUTH_MODE=SERVICE_ACCOUNT');
+      const token = await refreshUserAccessToken(candidate);
+      console.log(`APPS_SCRIPT_AUTH_MODE=${candidate.label}`);
       return token;
-    } catch (serviceError) {
-      throw new Error(`APPS_SCRIPT_AUTH_UNAVAILABLE user=${String(userError?.message || userError).slice(0,160)} service_account=${String(serviceError?.message || serviceError).slice(0,160)}`);
+    } catch (_) {
+      // Never print OAuth errors here: provider payloads can contain credential metadata.
+      console.log(`APPS_SCRIPT_AUTH_CANDIDATE_${candidate.label}=UNAVAILABLE`);
     }
   }
+  throw new Error('APPS_SCRIPT_USER_OAUTH_REAUTH_REQUIRED:ALL_USER_REFRESH_TOKENS_UNAVAILABLE');
 }
 
 const authHeaders = (token) => ({Authorization:`Bearer ${token}`,'content-type':'application/json'});
