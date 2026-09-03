@@ -79,7 +79,7 @@ function doPost(e) {
     if (action === 'user-disable') return json_(userDisable_(body));
     if (action === 'staff-sync-now') {
       const caller = requireUser_(String(body.id_token || ''), ['ADMIN','ADMIN_INVENT']);
-      return json_(runStaffSync_('MANUAL', caller.profile));
+      return json_(Object.assign({ok:true}, runStaffSync_('MANUAL', caller.profile)));
     }
     if (action === 'staff-source-status') return json_(staffSourceStatus_(body));
     if (action === 'staff-source-bridge-status') {
