@@ -1,6 +1,8 @@
 const STORAGE_KEY = 'bao-hang-1291-language';
 
 const EN = new Map([
+  ["File log Web và thiết bị được lưu trực tiếp trong thư mục Google Drive của Báo hàng 1291. Hệ thống không lưu bản sao hoặc chỉ mục log mới trên Neon/service. Log tự động chỉ tạo khi có lỗi đáng chú ý và được gộp theo chu kỳ để tránh tạo quá nhiều file.","Web and device diagnostic files are stored directly in the Báo hàng 1291 Google Drive folder. The system stores no duplicate files or new log index on Neon/service. Automatic logs are created only for significant errors and are batched to avoid creating excessive files."],
+  ["Được phép bỏ qua · 24 giờ","Skip allowed · 24 hours"],
   ["Copyright 2026 - SUPRA DC HƯNG YÊN - tamnv2 - Chuyên viên Pick Pack 1291","Copyright 2026 - SUPRA DC HUNG YEN - tamnv2 - Pick Pack Specialist 1291"],
   ["· API cũng bị hạ quyền tương ứng.","· API permissions are reduced accordingly."],
   ["Hiệu suất 24 giờ","24-hour performance"],
