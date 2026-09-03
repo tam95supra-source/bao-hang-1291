@@ -1,8 +1,8 @@
 {
   "workflow": "Staff orphan cleanup",
-  "run_id": 33706508253,
+  "run_id": 33706842570,
   "run_attempt": 1,
-  "trigger_sha": "6aaecf9ce66b71865bdae0e2e6081168fc31b17d",
-  "status": "FAIL",
-  "cleanup": "failure"
+  "trigger_sha": "38735b00dcc9155e9420e8b96126dcb213e9044a",
+  "status": "PASS",
+  "cleanup": "success"
 }
