@@ -54,7 +54,7 @@ function doPost(e) {
     if (body.secret && Array.isArray(body.events)) return json_(sheetWebhook_(body));
     const action = String(body.action || '').trim();
     if (!action) return json_({ok:false,error:'ACTION_REQUIRED'});
-    if (action === 'ping') return json_({ok:true,project:BH_PROJECT,provider:'NEON_FIREBASE_GOOGLE',staff_sheet_id:BH_STAFF_SHEET_ID,staff_sheet_name:BH_STAFF_SHEET_NAME});
+    if (action === 'ping') { const source=staffSourceConfig_(); return json_({ok:true,project:BH_PROJECT,provider:'NEON_FIREBASE_GOOGLE',staff_sheet_id:source.sheetId,staff_sheet_name:source.sheetName}); }
     if (action === 'staff-source-ping' || action === 'staff-source-structure-ping') return json_(staffSourceBridgeReceive_(body));
     if (action === 'bootstrap-config') return json_(bootstrapConfig_(body));
     if (action === 'realtime-kick') {
@@ -80,6 +80,12 @@ function doPost(e) {
     if (action === 'staff-sync-now') {
       const caller = requireUser_(String(body.id_token || ''), ['ADMIN','ADMIN_INVENT']);
       return json_(runStaffSync_('MANUAL', caller.profile));
+    }
+    if (action === 'staff-source-status') return json_(staffSourceStatus_(body));
+    if (action === 'staff-source-configure') return json_(staffSourceConfigure_(body));
+    if (action === 'staff-cleanup-orphans') {
+      requireUser_(String(body.id_token || ''), ['ADMIN']);
+      return json_(cleanupInactiveStaffOrphans_(workerAdminIdToken_(), Math.min(100, Math.max(1, Number(body.limit || 50)))));
     }
     return json_({ok:false,error:'ACTION_NOT_SUPPORTED'});
   } catch (error) {
@@ -390,36 +396,192 @@ function maybeStaffSync_(token) {
   const props = PropertiesService.getScriptProperties();
   const last = Number(props.getProperty('LAST_STAFF_SYNC_AT_MS') || 0);
   let cfg;
-  try { cfg = neonRpc_('api_get_config_rpc', {p_test_role:null}, token); } catch (ignore) { return; }
-  if (!cfg || !cfg.staff_auto_sync_enabled) return;
+  try { cfg = neonRpc_('api_get_config_rpc', {p_test_role:null}, token); } catch (ignore) { return {status:'SKIPPED_CONFIG'}; }
+  if (!cfg || !cfg.staff_auto_sync_enabled) return {status:'DISABLED'};
   const interval = Math.max(15, Number(cfg.staff_sync_interval_minutes || 60));
-  if (Date.now() - last < interval * 60000) return;
+  if (Date.now() - last < interval * 60000) return {status:'NOT_DUE'};
   try {
-    runStaffSync_('AUTO', {role:'ADMIN'});
+    const result = runStaffSync_('AUTO', {role:'ADMIN'});
     props.deleteProperty('LAST_STAFF_SYNC_ERROR');
+    return result;
   } catch (error) {
     props.setProperty('LAST_STAFF_SYNC_ERROR', safeError_(error));
+    return {status:'FAILED',error:safeError_(error)};
   }
 }
 
-function runStaffSync_(triggerSource, callerProfile) {
+function normalizeStaffHeader_(value) {
+  return String(value || '').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/Đ/g,'D').replace(/đ/g,'d').toLowerCase().replace(/\s+/g,' ');
+}
+
+function parseStaffSheetId_(value) {
+  const raw=String(value || '').trim();
+  if (/^[A-Za-z0-9_-]{20,120}$/.test(raw)) return raw;
+  const match=raw.match(/\/spreadsheets\/d\/([A-Za-z0-9_-]{20,120})/);
+  if (!match) throw new Error('STAFF_SOURCE_LINK_INVALID');
+  return match[1];
+}
+
+function staffSourceConfig_() {
+  const props=PropertiesService.getScriptProperties();
+  return {
+    sheetId:String(props.getProperty('STAFF_SOURCE_SHEET_ID') || BH_STAFF_SHEET_ID),
+    sheetName:String(props.getProperty('STAFF_SOURCE_SHEET_NAME') || BH_STAFF_SHEET_NAME)
+  };
+}
+
+function readStaffSource_(sheetId, sheetName) {
+  const id=parseStaffSheetId_(sheetId);
+  const tab=String(sheetName || '').trim();
+  if (!tab || tab.length > 100) throw new Error('STAFF_SOURCE_TAB_INVALID');
+  const ss=SpreadsheetApp.openById(id);
+  if (ss.getId() !== id) throw new Error('STAFF_SOURCE_SHEET_ID_MISMATCH');
+  const sheet=ss.getSheetByName(tab);
+  if (!sheet) throw new Error('STAFF_SOURCE_TAB_NOT_FOUND');
+
+  const expected=['ma nhan vien','ho va ten','so dien thoai','vi tri chinh','nha cung cap','bo phan','site','kho'];
+  const header=sheet.getRange(1,1,1,8).getDisplayValues()[0].map(normalizeStaffHeader_);
+  for (let i=0;i<expected.length;i++) {
+    if (header[i] !== expected[i]) throw new Error('STAFF_SOURCE_STRUCTURE_MISMATCH:C'+(i+1));
+  }
+
+  const lastRow=Math.max(1,sheet.getLastRow());
+  const values=lastRow>=2?sheet.getRange(2,1,lastRow-1,8).getDisplayValues():[];
+  const byCode={};
+  values.forEach(function(row){
+    if (String(row[6] || '').trim() !== '1291' || String(row[7] || '').trim().toUpperCase() !== 'HY1') return;
+    const code=String(row[0] || '').trim();
+    const name=String(row[1] || '').trim();
+    if (!code && !name) return;
+    if (!/^[A-Za-z0-9._-]+$/.test(code) || !name) throw new Error('STAFF_SOURCE_ROW_INVALID:'+code);
+    const key=code.toLowerCase();
+    if (byCode[key]) throw new Error('STAFF_SOURCE_DUPLICATE_CODE:'+code);
+    byCode[key]={
+      employee_code:code,
+      full_name:name,
+      contractor:String(row[4] || '').trim(),
+      source_position:String(row[3] || '').trim(),
+      role:code===BH_PROTECTED_ADMIN_CODE?'ADMIN':'PICKER'
+    };
+  });
+  const staff=Object.keys(byCode).sort().map(function(key){return byCode[key];});
+  if (!staff.length || staff.length > 2000) throw new Error('STAFF_SOURCE_COUNT_GUARD:'+staff.length);
+  const canonical=staff.map(function(x){return [x.employee_code,x.full_name,x.contractor,x.source_position,x.role].join('|');}).join('\n');
+  return {
+    staff:staff,
+    sourceHash:sha256Hex_(canonical),
+    responseBytes:Utilities.newBlob(JSON.stringify(staff)).getBytes().length,
+    sheetId:id,
+    sheetName:tab
+  };
+}
+
+function fetchFilteredStaff_() {
+  const source=staffSourceConfig_();
+  return readStaffSource_(source.sheetId, source.sheetName);
+}
+
+function staffSourceStatus_(body) {
+  requireUser_(String(body.id_token || ''), ['ADMIN','ADMIN_INVENT']);
+  const source=staffSourceConfig_();
+  const props=PropertiesService.getScriptProperties();
+  return {
+    ok:true,
+    sheet_id:source.sheetId,
+    sheet_name:source.sheetName,
+    sheet_url:'https://docs.google.com/spreadsheets/d/'+source.sheetId+'/edit',
+    fallback_only:source.sheetId!==BH_STAFF_SHEET_ID || source.sheetName!==BH_STAFF_SHEET_NAME,
+    last_error:String(props.getProperty('LAST_STAFF_SYNC_ERROR') || '')
+  };
+}
+
+function staffSourceConfigure_(body) {
+  const caller=requireUser_(String(body.id_token || ''), ['ADMIN']);
+  const id=parseStaffSheetId_(body.sheet_url || body.sheet_id || '');
+  const tab=String(body.sheet_name || '').trim();
+  const candidate=readStaffSource_(id, tab);
+  const props=PropertiesService.getScriptProperties();
+  props.setProperties({STAFF_SOURCE_SHEET_ID:id,STAFF_SOURCE_SHEET_NAME:tab,STAFF_SOURCE_CHANGED_AT:new Date().toISOString()}, false);
+  installStaffSourceFallbackTrigger_();
+  const result=runStaffSync_('SOURCE_SWITCH', caller.profile, candidate);
+  const cleanup=cleanupInactiveStaffOrphans_(workerAdminIdToken_(), 25);
+  if (Number(result.failed || 0) > 0) throw new Error('STAFF_SOURCE_SYNC_PARTIAL:'+Number(result.failed || 0));
+  return Object.assign({ok:true,sheet_id:id,sheet_name:tab,eligible_rows:candidate.staff.length,cleanup:cleanup}, result);
+}
+
+function installStaffSourceFallbackTrigger_() {
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (t.getHandlerFunction() === 'staffSourceFallbackTick') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('staffSourceFallbackTick').timeBased().everyHours(1).create();
+}
+
+function staffSourceFallbackTick() {
+  const props=PropertiesService.getScriptProperties();
+  try {
+    const result=runStaffSync_('SOURCE_FALLBACK', {role:'ADMIN'});
+    cleanupInactiveStaffOrphans_(workerAdminIdToken_(), 20);
+    props.deleteProperty('LAST_STAFF_SYNC_ERROR');
+    return result;
+  } catch (error) {
+    props.setProperty('LAST_STAFF_SYNC_ERROR', safeError_(error));
+    return {status:'FAILED',error:safeError_(error)};
+  }
+}
+
+function purgeInactiveStaffProfile_(profile, token) {
+  if (!profile || profile.active !== false || String(profile.source_kind || '') !== 'GSHEET' || profile.protected_account || String(profile.role || '') === 'ADMIN') {
+    return {eligible:false,purged:false,reason:'NOT_CANDIDATE'};
+  }
+  const id=String(profile.id || '');
+  const dry=neonRpc_('worker_profile_purge_if_orphan_rpc',{p_id:id,p_execute:false},token) || {};
+  if (!dry.eligible) return dry;
+  try {
+    firebaseAdminDelete_(id);
+  } catch (error) {
+    if (safeError_(error).indexOf('USER_NOT_FOUND') < 0) throw error;
+  }
+  return neonRpc_('worker_profile_purge_if_orphan_rpc',{p_id:id,p_execute:true},token) || {eligible:true,purged:false,reason:'NO_RESULT'};
+}
+
+function cleanupInactiveStaffOrphans_(token, limit) {
+  const max=Math.min(100,Math.max(1,Number(limit || 25)));
+  const profiles=neonRpc_('worker_profiles_snapshot_rpc', {}, token) || [];
+  const candidates=profiles.filter(function(p){
+    return p && p.active === false && String(p.source_kind || '') === 'GSHEET' && !p.protected_account && String(p.role || '') !== 'ADMIN';
+  }).slice(0,max);
+  let purged=0,retained=0,failed=0;
+  const errors=[];
+  candidates.forEach(function(profile){
+    try {
+      const result=purgeInactiveStaffProfile_(profile,token);
+      result && result.purged ? purged++ : retained++;
+    } catch (error) {
+      failed++;
+      errors.push(String(profile.employee_code || '')+': '+safeError_(error));
+    }
+  });
+  return {ok:failed===0,checked:candidates.length,purged:purged,retained:retained,failed:failed,errors:errors.slice(0,10)};
+}
+
+function runStaffSync_(triggerSource, callerProfile, preloadedSource) {
   assertScope_();
   if (!callerProfile || ['ADMIN','ADMIN_INVENT'].indexOf(String(callerProfile.role)) < 0) throw new Error('FORBIDDEN');
   const token = workerAdminIdToken_();
-  const source = fetchFilteredStaff_();
+  const source = preloadedSource || fetchFilteredStaff_();
   const status = neonRpc_('api_staff_sync_status_rpc', {p_test_role:null,p_limit:20}, token);
   const runs = status && Array.isArray(status.runs) ? status.runs : [];
   const lastGood = runs.find(function(r){ return r.status === 'SUCCEEDED' || r.status === 'NO_CHANGE'; });
   if (lastGood && String(lastGood.source_hash || '') === source.sourceHash) {
     PropertiesService.getScriptProperties().setProperty('LAST_STAFF_SYNC_AT_MS', String(Date.now()));
-    return {status:'NO_CHANGE',changed:false,eligible_rows:source.staff.length,source_bytes:source.responseBytes};
+    return {status:'NO_CHANGE',changed:false,eligible_rows:source.staff.length,source_bytes:source.responseBytes,created:0,updated:0,deactivated:0,failed:0};
   }
-  const runId = String(neonRpc_('worker_staff_run_start_rpc', {p_trigger_source:triggerSource,p_source_sheet_id:BH_STAFF_SHEET_ID}, token));
+  const runId = String(neonRpc_('worker_staff_run_start_rpc', {p_trigger_source:triggerSource,p_source_sheet_id:source.sheetId}, token));
   const profiles = neonRpc_('worker_profiles_snapshot_rpc', {}, token) || [];
   const existing = {};
   profiles.forEach(function(p){ existing[String(p.employee_code).toLowerCase()] = p; });
   const seen = {};
-  let created=0,updated=0,deactivated=0,failed=0;
+  let created=0,updated=0,deactivated=0,failed=0,purged=0;
   const errors=[];
   source.staff.forEach(function(item) {
     const key = item.employee_code.toLowerCase(); seen[key]=true;
@@ -455,41 +617,19 @@ function runStaffSync_(triggerSource, callerProfile) {
         firebaseAdminUpdate_(String(old.id),{disableUser:true});
         neonRpc_('worker_profile_deactivate_rpc',{p_id:String(old.id),p_reason:'STAFF_SOURCE_MISSING'},token);
         deactivated++;
+        try {
+          const purge=purgeInactiveStaffProfile_(Object.assign({},old,{active:false}),token);
+          if (purge && purge.purged) purged++;
+        } catch (cleanupError) {
+          errors.push(code+': cleanup deferred: '+safeError_(cleanupError));
+        }
       } catch (error) { failed++; errors.push(code+': '+safeError_(error)); }
     });
   }
   const finalStatus = failed ? 'PARTIAL' : 'SUCCEEDED';
   const result = neonRpc_('worker_staff_run_finish_rpc',{p_run_id:runId,p_status:finalStatus,p_source_hash:source.sourceHash,p_source_rows:source.staff.length,p_eligible_rows:source.staff.length,p_created:created,p_updated:updated,p_deactivated:deactivated,p_failed:failed,p_error_summary:errors.slice(0,20).join('; ').slice(0,2000),p_source_response_bytes:source.responseBytes},token);
   PropertiesService.getScriptProperties().setProperty('LAST_STAFF_SYNC_AT_MS', String(Date.now()));
-  return {status:finalStatus,changed:true,run_id:runId,created:created,updated:updated,deactivated:deactivated,failed:failed,run:result};
-}
-
-function fetchFilteredStaff_() {
-  const variants = ["select A,B,D,E,F where G = 1291 and H = 'HY1'","select A,B,D,E,F where G = '1291' and H = 'HY1'"];
-  let lastError='';
-  for (let q=0;q<variants.length;q++) {
-    try {
-      const url='https://docs.google.com/spreadsheets/d/'+BH_STAFF_SHEET_ID+'/gviz/tq?tqx=out%3Acsv&sheet='+encodeURIComponent(BH_STAFF_SHEET_NAME)+'&tq='+encodeURIComponent(variants[q]);
-      const res=UrlFetchApp.fetch(url,{headers:{Accept:'text/csv'},followRedirects:true,muteHttpExceptions:true});
-      if(res.getResponseCode()!==200){lastError='Google Sheet HTTP '+res.getResponseCode();continue;}
-      const text=res.getContentText();
-      if(!text||text.length>1000000){lastError='Nguồn nhân sự rỗng hoặc quá lớn';continue;}
-      const rows=Utilities.parseCsv(text);
-      if(rows.length<2){lastError='Query không trả nhân sự';continue;}
-      const byCode={};
-      rows.slice(1).forEach(function(row){
-        const code=String(row[0]||'').trim(),name=String(row[1]||'').trim();
-        if(!code||!name)return;
-        const position=String(row[2]||'').trim(),contractor=String(row[3]||'').trim(),department=String(row[4]||'').trim();
-        byCode[code.toLowerCase()]={employee_code:code,full_name:name,contractor:contractor,source_position:position,role:staffRole_(position,department,code)};
-      });
-      const staff=Object.keys(byCode).sort().map(function(k){return byCode[k];});
-      if(!staff.length){lastError='Không có nhân sự Site 1291 / HY1';continue;}
-      const canonical=staff.map(function(x){return [x.employee_code,x.full_name,x.contractor,x.source_position,x.role].join('|');}).join('\n');
-      return {staff:staff,sourceHash:sha256Hex_(canonical),responseBytes:Utilities.newBlob(text).getBytes().length};
-    } catch(error){lastError=safeError_(error);}
-  }
-  throw new Error(lastError||'Không đọc được nguồn nhân sự');
+  return {status:finalStatus,changed:true,run_id:runId,created:created,updated:updated,deactivated:deactivated,purged:purged,failed:failed,run:result};
 }
 
 function importUsers_(body) {
