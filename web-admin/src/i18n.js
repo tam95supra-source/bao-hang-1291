@@ -723,15 +723,34 @@ export function translateTree(root = document.body) {
   }
 }
 
+function updateSwitcherLabels() {
+  const wrap = document.querySelector('.bh-language-switcher');
+  if (!wrap) return;
+  const english = language === 'en';
+  const label = wrap.querySelector('span');
+  const select = wrap.querySelector('select');
+  if (label) label.textContent = english ? 'Language' : 'Ngôn ngữ';
+  if (select) {
+    select.setAttribute('aria-label', english ? 'Interface language' : 'Ngôn ngữ giao diện');
+    const vi = select.querySelector('option[value="vi"]');
+    const en = select.querySelector('option[value="en"]');
+    if (vi) vi.textContent = english ? 'Vietnamese' : 'Tiếng Việt Nam';
+    if (en) en.textContent = english ? 'English' : 'Tiếng Anh';
+    select.value = language;
+  }
+}
+
 function ensureSwitcher() {
-  if (!document.body || document.querySelector('.bh-language-switcher')) return;
-  const wrap = document.createElement('label');
-  wrap.className = 'bh-language-switcher';
-  wrap.innerHTML = '<span>Ngôn ngữ</span><select aria-label="Ngôn ngữ giao diện"><option value="vi">Tiếng Việt Nam</option><option value="en">Tiếng Anh</option></select>';
-  wrap.querySelector('select').value = language;
-  wrap.querySelector('select').addEventListener('change', (event) => setLanguage(event.target.value));
-  document.body.appendChild(wrap);
-  if (language === 'en') translateTree(wrap);
+  if (!document.body) return;
+  let wrap = document.querySelector('.bh-language-switcher');
+  if (!wrap) {
+    wrap = document.createElement('label');
+    wrap.className = 'bh-language-switcher';
+    wrap.innerHTML = '<span></span><select><option value="vi"></option><option value="en"></option></select>';
+    wrap.querySelector('select').addEventListener('change', (event) => setLanguage(event.target.value));
+    document.body.appendChild(wrap);
+  }
+  updateSwitcherLabels();
 }
 
 export function setLanguage(next) {
@@ -741,8 +760,7 @@ export function setLanguage(next) {
   document.documentElement.lang = language === 'en' ? 'en' : 'vi';
   translateTree(document.body);
   ensureSwitcher();
-  const select = document.querySelector('.bh-language-switcher select');
-  if (select) select.value = language;
+  updateSwitcherLabels();
   window.dispatchEvent(new CustomEvent('bh:languagechange', { detail: { language } }));
 }
 
