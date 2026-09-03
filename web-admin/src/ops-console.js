@@ -467,7 +467,7 @@ async function renderServerView() {
   const content = $('#content');
   if (!content || !isManager()) return;
   content.dataset.opsRender = 'server';
-  content.innerHTML = `${pageHeading('Hạ tầng & chi phí', 'Sức khỏe dịch vụ, dung lượng và hàng rào giữ mục tiêu vận hành 0 USD.')}<div class="ops-loading">Đang kiểm tra dịch vụ…</div>`;
+  content.innerHTML = `${pageHeading('Hạ tầng & chi phí', 'Trạng thái dịch vụ, dung lượng và các giới hạn bảo vệ mục tiêu vận hành 0 USD.')}<div class="ops-loading">Đang kiểm tra dịch vụ…</div>`;
   try {
     const started = performance.now();
     const [service, summary] = await Promise.all([webApi('service-metrics'), webApi('admin-summary')]);
@@ -480,30 +480,29 @@ async function renderServerView() {
     const db = Number(usage.database_bytes || 0);
     const dbLimit = Number(limits.database_bytes || 512 * 1024 * 1024);
     const dbPct = dbLimit ? db / dbLimit * 100 : 0;
-    const logBytes = Number(usage.diagnostic_log_bytes || 0);
     const computeGuard = Number(limits.compute_hours_month || 0);
     const risk = dbPct >= 90 || Number(summary.pending_sheet_count || 0) > 100;
     content.innerHTML = `${pageHeading('Hạ tầng & chi phí', 'Sức khỏe dịch vụ, dung lượng và hàng rào giữ mục tiêu vận hành 0 USD.', `<div class="ops-cost-target ${risk ? 'warn' : 'good'}"><span>CHI PHÍ DỰ KIẾN</span><strong>$0</strong><small>${risk ? 'Có chỉ số cần theo dõi' : 'Đang trong mục tiêu'}</small></div>`)}
       <section class="ops-status-strip">
         <span><i class="dot good"></i>Neon: <b>ACTIVE</b></span>
-        <span><i class="dot ${document.body.dataset.ticketRealtime === 'online' ? 'good' : 'warn'}"></i>Cập nhật báo hàng: <b>${document.body.dataset.ticketRealtime === 'online' ? 'TRỰC TUYẾN' : 'TỰ LÀM MỚI/ĐANG KẾT NỐI'}</b></span>
+        <span><i class="dot ${document.body.dataset.ticketRealtime === 'online' ? 'good' : 'warn'}"></i>Cập nhật báo thiếu: <b>${document.body.dataset.ticketRealtime === 'online' ? 'TRỰC TUYẾN' : 'TỰ LÀM MỚI/ĐANG KẾT NỐI'}</b></span>
         <span><i class="dot ${summary.pending_sheet_count ? 'warn' : 'good'}"></i>Google Sheet: <b>${summary.pending_sheet_count ? `${summary.pending_sheet_count} chờ` : 'OK'}</b></span>
         <span><i class="dot ${latency > 2500 ? 'warn' : 'good'}"></i>API: <b>${latency} ms</b></span>
       </section>
       <div class="ops-server-grid">
         <article class="ops-panel"><div class="ops-panel-title"><div><h3>Neon production</h3><p>PostgreSQL nghiệp vụ + Data API; Firebase JWT được kiểm tra tại RLS/RPC</p></div><span class="ops-service-badge">FREE TARGET</span></div>
-          <div class="ops-kv"><span>Provider</span><b>${escapeHtml(provider)}</b><span>Mã dự án</span><b>tiny-boat-19315489</b><span>Nhánh chính</span><b>production · br-broad-resonance-aznwrpea</b><span>Khu vực</span><b>${escapeHtml(region)}</b><span>Tài khoản hoạt động</span><b>${usage.profiles_active || 0}</b><span>Tổng đợt báo thiếu</span><b>${usage.issues_total || 0}</b><span>Đợt đang xử lý</span><b>${usage.issues_active || 0}</b></div>
+          <div class="ops-kv"><span>Nhà cung cấp</span><b>${escapeHtml(provider)}</b><span>Mã dự án</span><b>tiny-boat-19315489</b><span>Nhánh chính</span><b>production · br-broad-resonance-aznwrpea</b><span>Khu vực</span><b>${escapeHtml(region)}</b><span>Tài khoản hoạt động</span><b>${usage.profiles_active || 0}</b><span>Tổng đợt báo thiếu</span><b>${usage.issues_total || 0}</b><span>Đợt đang xử lý</span><b>${usage.issues_active || 0}</b></div>
           ${progress('Dung lượng dữ liệu Neon', db, dbLimit)}
-          <div class="ops-kv compact"><span>Log chẩn đoán đã ghi nhận</span><b>${usage.diagnostic_logs || 0} bản ghi · ${formatBytes(logBytes)}</b><span>Data API</span><b>Production</b></div>
+          <div class="ops-kv compact"><span>Log chẩn đoán</span><b>Google Drive · không lưu trên service</b><span>Data API</span><b>Production</b></div>
         </article>
-        <article class="ops-panel"><div class="ops-panel-title"><div><h3>Neon Free & Data API</h3><p>Hạn mức guard mà server đang áp dụng; không giả lập số đã dùng nếu không có telemetry.</p></div></div><div class="ops-limit-grid">
-          ${metric('Database guard', formatBytes(dbLimit), `${dbPct.toFixed(1)}% đang dùng`)}
-          ${metric('Compute guard', computeGuard ? `${computeGuard} giờ/tháng` : '—', 'mốc bảo vệ cấu hình server')}
+        <article class="ops-panel"><div class="ops-panel-title"><div><h3>Giới hạn Neon Free & Data API</h3><p>Hạn mức guard mà server đang áp dụng; không giả lập số đã dùng nếu không có telemetry.</p></div></div><div class="ops-limit-grid">
+          ${metric('Giới hạn dung lượng DB', formatBytes(dbLimit), `${dbPct.toFixed(1)}% đang dùng`)}
+          ${metric('Giới hạn compute', computeGuard ? `${computeGuard} giờ/tháng` : '—', 'mốc bảo vệ cấu hình server')}
           ${metric('Data API', 'BẬT', 'Firebase JWT + RLS/RPC')}
           ${metric('Realtime nghiệp vụ', 'Firestore', 'Firebase control-plane')}
         </div><p class="ops-note">Các chỉ số sử dụng ở trên được đọc từ Neon production. Quota không có telemetry trực tiếp không được hiển thị thành số “đã dùng”.</p></article>
-        <article class="ops-panel"><div class="ops-panel-title"><div><h3>Firebase</h3><p>Auth + Firestore realtime + FCM HTTP v1 + Hosting Web</p></div><span class="ops-service-badge good">SPARK GUARD</span></div><div class="ops-kv"><span>Project</span><b>bao-hang-1291</b><span>Hosting</span><b>bao-hang-1291.web.app</b><span>FCM token hoạt động</span><b>${usage.active_device_tokens || 0}</b><span>Billing policy</span><b>Không tự bật</b><span>Deploy guard</span><b>Chặn nếu Cloud Billing được bật</b></div></article>
-        <article class="ops-panel"><div class="ops-panel-title"><div><h3>GitHub & phát hành</h3><p>Public source, CI/CD và OTA</p></div><span class="ops-service-badge good">PUBLIC</span></div><div class="ops-kv"><span>Repo</span><b>tam95supra-source/bao-hang-1291</b><span>Runner policy</span><b>Standard / self-hosted</b><span>Paid runner</span><b>Không dùng</b><span>Release</span><b>Chỉ chạy khi có yêu cầu Beta/Stable</b></div></article>
+        <article class="ops-panel"><div class="ops-panel-title"><div><h3>Firebase</h3><p>Auth + Firestore realtime + FCM HTTP v1 + Hosting Web</p></div><span class="ops-service-badge good">SPARK GUARD</span></div><div class="ops-kv"><span>Dự án</span><b>bao-hang-1291</b><span>Hosting</span><b>bao-hang-1291.web.app</b><span>FCM token hoạt động</span><b>${usage.active_device_tokens || 0}</b><span>Chính sách Billing</span><b>Không tự bật</b><span>Chặn deploy</span><b>Chặn nếu Cloud Billing được bật</b></div></article>
+        <article class="ops-panel"><div class="ops-panel-title"><div><h3>GitHub & phát hành</h3><p>Public source, CI/CD và OTA</p></div><span class="ops-service-badge good">PUBLIC</span></div><div class="ops-kv"><span>Repo</span><b>tam95supra-source/bao-hang-1291</b><span>Chính sách runner</span><b>Standard / self-hosted</b><span>Runner trả phí</span><b>Không dùng</b><span>Phát hành</span><b>Chỉ chạy khi có yêu cầu Beta/Stable</b></div></article>
         <article class="ops-panel span-two"><div class="ops-panel-title"><div><h3>Hàng rào mục tiêu $0</h3><p>Hệ thống ưu tiên dừng/giảm tải trước khi chuyển sang phương án có phí.</p></div></div><div class="ops-guard-list">
           <div class="good"><b>Neon</b><span>Production là backend nghiệp vụ; DB/compute dùng guard Free và không có cơ chế tự nâng gói.</span></div>
           <div class="good"><b>Firebase</b><span>CI kiểm tra billingEnabled=false trước mỗi lần deploy Hosting.</span></div>
