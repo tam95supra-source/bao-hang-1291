@@ -139,7 +139,7 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .user-actions { grid-column: 2; grid-row: 1 / 3; display: flex; gap: 6px; }
 .user-actions button { min-height: 36px; padding: 7px 10px; font-size: 12px; }
 
-.health-row { display: none; gap: 5px; flex-wrap: wrap; margin-top: 6px; }
+.health-row { display: flex; min-height: 24px; gap: 5px; flex-wrap: wrap; margin-top: 6px; }
 .health-chip {
   display: inline-flex;
   align-items: center;
@@ -310,7 +310,17 @@ tbody tr:hover { background: #f8fafc; }
 .app-shell:has(.tabs button:only-child) .content { max-width: 760px; }
 .app-shell:has(.tabs button:only-child) .health-row,
 .app-shell:has(.tabs button:nth-child(2)):not(:has(.tabs button:nth-child(3))) .health-row { display: none !important; }
-.app-shell:has(.tabs button[data-tab="services"].active) .health-row { display: flex; }
+
+.route-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: min(48vh, 420px);
+  color: var(--muted);
+  font-size: 13px;
+}
+.route-loading .spinner { width: 18px; height: 18px; }
 
 @media (min-width: 980px) {
   .app-shell:has(.tabs button:nth-child(5)) {
