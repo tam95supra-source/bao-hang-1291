@@ -12,6 +12,7 @@ const ADMIN_UID = '44fae0a2-09eb-4226-8412-0f1a1f5d7ef8';
 const ADMIN_CODE = '6281280';
 const SESSION_KEY = 'bao-hang-1291-web-session';
 const NEON = process.env.NEON_DATA_API || '';
+const GAS = process.env.APPS_SCRIPT_WORKER_URL || '';
 const CHROME = process.env.CHROME_BIN || '';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -60,6 +61,16 @@ async function fetchJson(url, init, timeoutMs = 15000) {
   let payload = {};
   try { payload = text ? JSON.parse(text) : {}; } catch { payload = { raw: safe(text) }; }
   return { response, payload };
+}
+async function gasAction(idToken, action, extra = {}, timeoutMs = 30000) {
+  const { response, payload } = await fetchJson(GAS, {
+    method: 'POST',
+    headers: { 'content-type': 'text/plain;charset=UTF-8' },
+    body: JSON.stringify({ action, id_token: idToken, ...extra }),
+  }, timeoutMs);
+  if (!response.ok) throw new Error(`GAS_${action}_HTTP_${response.status}:${safe(JSON.stringify(payload))}`);
+  if (payload?.ok !== true) throw new Error(`GAS_${action}_FAILED:${safe(JSON.stringify(payload))}`);
+  return payload;
 }
 async function exchangeCustomToken(customToken) {
   const { response, payload } = await fetchJson(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${API_KEY}`, {
@@ -129,7 +140,8 @@ async function cdpSessionStorage(client) {
 }
 
 async function main() {
-  if (!NEON || !CHROME) throw new Error('TARGETED_E2E_ENV_MISSING');
+  if (!NEON || !GAS || !CHROME) throw new Error('TARGETED_E2E_ENV_MISSING');
+  if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(GAS)) throw new Error('APPS_SCRIPT_WORKER_URL_INVALID');
   const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
   if (sa.project_id !== PROJECT || !sa.client_email || !sa.private_key) throw new Error('FIREBASE_SCOPE_INVALID');
   const app = initializeApp({ credential: cert(sa) }, `target-admin-${Date.now()}`);
@@ -142,6 +154,29 @@ async function main() {
     const customToken = await stage('ADMIN_CREATE_CUSTOM_TOKEN', () => auth.createCustomToken(ADMIN_UID), 10000);
     const exchanged = await stage('ADMIN_EXCHANGE_CUSTOM_TOKEN', () => exchangeCustomToken(customToken), 15000);
     const adminProfile = await stage('ADMIN_PROFILE_EXCHANGED_TOKEN', () => profile(exchanged.idToken, 'custom_exchange'), 15000);
+
+    const sourceStatus = await stage('STAFF_SOURCE_STATUS', () => gasAction(exchanged.idToken, 'staff-source-status', {}, 30000), 32000);
+    if (sourceStatus.sheet_id !== '1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78' || sourceStatus.sheet_name !== 'DANH SÁCH NHÂN SỰ' || sourceStatus.fallback_only !== false) {
+      throw new Error(`STAFF_SOURCE_STATUS_MISMATCH:${safe(JSON.stringify(sourceStatus))}`);
+    }
+    console.log('STAFF_SOURCE_STATUS=PASS current_source=true');
+
+    const sourceValidate = await stage('STAFF_SOURCE_NO_CHANGE_VALIDATE', () => gasAction(exchanged.idToken, 'staff-source-configure', {
+      sheet_url: sourceStatus.sheet_url,
+      sheet_name: sourceStatus.sheet_name,
+    }, 60000), 62000);
+    if (Number(sourceValidate.eligible_rows || 0) !== 502 ||
+        sourceValidate.status !== 'NO_CHANGE' ||
+        sourceValidate.changed !== false ||
+        sourceValidate.validation_only !== true ||
+        Number(sourceValidate.created || 0) !== 0 ||
+        Number(sourceValidate.updated || 0) !== 0 ||
+        Number(sourceValidate.deactivated || 0) !== 0 ||
+        sourceValidate.cleanup?.skipped !== 'SAME_SOURCE_VALIDATION') {
+      throw new Error(`STAFF_SOURCE_NO_CHANGE_MISMATCH:${safe(JSON.stringify(sourceValidate))}`);
+    }
+    console.log('STAFF_SOURCE_NO_CHANGE_VALIDATION=PASS eligible_rows=502 changed=false cleanup_skipped=true');
+
     const refreshDiag = await diagnosticStage('ADMIN_REFRESH_NODE', () => refreshToken(exchanged.refreshToken), 15000);
     if (refreshDiag.ok) await diagnosticStage('ADMIN_PROFILE_REFRESHED_TOKEN', () => profile(refreshDiag.value.idToken, 'node_refresh'), 15000);
 
@@ -193,6 +228,31 @@ async function main() {
     console.log('ADMIN_BROWSER_SECURE_TOKEN_AFTER_RELOAD=PASS http=200 body_finished=true');
     console.log('ADMIN_BROWSER_PROFILE_AFTER_RELOAD=PASS http=200 body_finished=true');
     console.log('ADMIN_BROWSER_BOOTSTRAP_AFTER_RELOAD=PASS role=ADMIN project=bao-hang-1291 selector=.app-shell source=cdp');
+
+    await stage('STAFF_SOURCE_UI_OPEN', async () => {
+      const button = page.locator('button[data-tab="users"]');
+      await button.waitFor({ state: 'visible', timeout: 15000 });
+      await button.click();
+      await page.locator('#opsStaffSourceForm').waitFor({ state: 'visible', timeout: 20000 });
+    }, 24000);
+    const sourceUi = await stage('STAFF_SOURCE_UI_READY', async () => {
+      await page.waitForFunction(() => {
+        const submit = document.querySelector('#opsStaffSourceSubmit');
+        const state = document.querySelector('#opsStaffSourceState');
+        return Boolean(submit && !submit.disabled && state && state.textContent.trim() !== 'ĐANG KIỂM TRA' && state.textContent.trim() !== 'CHƯA SẴN SÀNG');
+      }, null, { timeout: 30000 });
+      return page.evaluate(() => ({
+        submitDisabled: document.querySelector('#opsStaffSourceSubmit')?.disabled ?? true,
+        state: document.querySelector('#opsStaffSourceState')?.textContent?.trim() || '',
+        sheetUrl: document.querySelector('#opsStaffSheetUrl')?.value || '',
+        sheetName: document.querySelector('#opsStaffSheetName')?.value || '',
+      }));
+    }, 32000);
+    if (sourceUi.submitDisabled || sourceUi.sheetName !== 'DANH SÁCH NHÂN SỰ' || !sourceUi.sheetUrl.includes('/spreadsheets/d/1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78/')) {
+      throw new Error(`STAFF_SOURCE_UI_INVALID:${safe(JSON.stringify(sourceUi))}`);
+    }
+    console.log(`STAFF_SOURCE_UI_ENABLE=PASS state=${sourceUi.state}`);
+
     console.log('TARGETED_ADMIN_BOOTSTRAP=PASS');
   } catch (error) {
     console.error(`TARGETED_ADMIN_DIAG trace=${safe(JSON.stringify(trace))} page_errors=${safe(JSON.stringify(pageErrors))}`);
