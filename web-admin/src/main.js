@@ -430,6 +430,7 @@ function renderApp() {
     <nav class="tabs">${tabs.map(([id,label]) => `<button data-tab="${id}" class="${id === state.activeTab ? 'active' : ''}">${label}</button>`).join('')}</nav>
     <main id="content" class="content"></main></div>
     <div id="busy" class="busy" hidden><div><span class="spinner"></span><strong id="busyText">Đang xử lý…</strong></div></div>`;
+  document.body.dataset.testRole = state.testRole || '';
   $('#changePassword').onclick = openChangePassword;
   $('#logout').onclick = () => { clearSession(); renderLogin(); };
   $('#exitTest')?.addEventListener('click', () => { state.testRole = null; state.activeTab = null; renderApp(); });
