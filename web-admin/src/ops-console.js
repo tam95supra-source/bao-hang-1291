@@ -104,6 +104,7 @@ async function request(base, action, payload = {}, allowAuthRetry = true) {
     return request(base, action, payload, false);
   }
   if (!response.ok) throw new Error(authRequired ? 'Phiên đăng nhập cần xác thực lại.' : (data.error || data.message || `Lỗi máy chủ ${response.status}`));
+  if (data?.ok === false && data.error) throw new Error(data.error);
   return data;
 }
 const webApi = (action, payload = {}) => request(WEB_API, action, payload);
