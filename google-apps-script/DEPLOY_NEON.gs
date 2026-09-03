@@ -82,6 +82,14 @@ function doPost(e) {
       return json_(runStaffSync_('MANUAL', caller.profile));
     }
     if (action === 'staff-source-status') return json_(staffSourceStatus_(body));
+    if (action === 'staff-source-bridge-status') {
+      requireUser_(String(body.id_token || ''), ['ADMIN','ADMIN_INVENT']);
+      return json_(getStaffSourceBridgeReceiverStatus());
+    }
+    if (action === 'staff-source-retire-legacy-watchers') {
+      requireUser_(String(body.id_token || ''), ['ADMIN']);
+      return json_(staffSourceBridgeRemoveLegacyWatchers_());
+    }
     if (action === 'staff-source-configure') return json_(staffSourceConfigure_(body));
     if (action === 'staff-recovery-current-source') throw new Error('STAFF_RECOVERY_RETIRED_CANONICAL_HY1');
     if (action === 'staff-cleanup-orphans') {
