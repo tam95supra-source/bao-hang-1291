@@ -420,6 +420,7 @@ let nativeConfirm = globalThis.confirm?.bind(globalThis);
 let nativePrompt = globalThis.prompt?.bind(globalThis);
 let dialogsWrapped = false;
 const VIETNAMESE_MARKS = /[ÀÁÂÃÈÉÊÌÍÒÓÔÕÙÚĂĐĨŨƠƯàáâãèéêìíòóôõùúăđĩũơưẠ-ỹ]/;
+const missingSeen = new Set();
 
 function auditMissing(root = document.body) {
   if (language !== 'en' || !root) return;
@@ -429,8 +430,9 @@ function auditMissing(root = document.body) {
   while ((n = walker.nextNode())) {
     if (n.parentElement?.closest('.bh-language-switcher,script,style')) continue;
     const text = String(n.nodeValue || '').trim();
-    if (text && VIETNAMESE_MARKS.test(text) && !seen.has(text)) {
+    if (text && VIETNAMESE_MARKS.test(text) && !seen.has(text) && !missingSeen.has(text) && missingSeen.size < 100) {
       seen.add(text);
+      missingSeen.add(text);
       console.warn('i18n_missing', text.slice(0,240));
     }
   }
