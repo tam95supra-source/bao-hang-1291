@@ -345,7 +345,7 @@ async function renderUsersView() {
         <form id="opsStaffSourceForm" class="ops-form-grid">
           <label class="span">Link Google Sheet<input id="opsStaffSheetUrl" name="sheet_url" type="url" required placeholder="https://docs.google.com/spreadsheets/d/.../edit" autocomplete="off"></label>
           <label>Tên tab<input id="opsStaffSheetName" name="sheet_name" required autocomplete="off"></label>
-          <div class="ops-form-actions"><button class="primary" type="submit">Kiểm tra & thay nguồn</button><span id="opsStaffSourceMessage"></span></div>
+          <div class="ops-form-actions"><button id="opsStaffSourceSubmit" class="primary" type="submit" disabled>Kiểm tra & thay nguồn</button><span id="opsStaffSourceMessage"></span></div>
         </form>
       </article>` : ''}
       <article class="ops-panel ops-users-panel">
@@ -380,18 +380,25 @@ async function renderUsersView() {
     if (effectiveRole() === 'ADMIN' && $('#opsStaffSourceForm')) {
       const sourceState = $('#opsStaffSourceState');
       const sourceMessage = $('#opsStaffSourceMessage');
+      const sourceSubmit = $('#opsStaffSourceSubmit');
+      let sourceCapabilityReady = false;
       void opsApi('staff-source-status').then((source) => {
         if ($('#content') !== content || content.dataset.opsRender !== 'users') return;
         $('#opsStaffSheetUrl').value = source.sheet_url || '';
         $('#opsStaffSheetName').value = source.sheet_name || '';
+        sourceCapabilityReady = true;
+        if (sourceSubmit) sourceSubmit.disabled = false;
         if (sourceState) sourceState.textContent = source.fallback_only ? 'DỰ PHÒNG 60 PHÚT' : 'ĐANG DÙNG';
         if (sourceMessage) sourceMessage.textContent = source.last_error ? `Lần gần nhất: ${source.last_error}` : '';
-      }).catch((error) => {
-        if (sourceState) sourceState.textContent = 'KHÔNG ĐỌC ĐƯỢC';
-        if (sourceMessage) { sourceMessage.textContent = error.message; sourceMessage.className = 'bad-text'; }
+      }).catch(() => {
+        sourceCapabilityReady = false;
+        if (sourceSubmit) sourceSubmit.disabled = true;
+        if (sourceState) sourceState.textContent = 'CHƯA SẴN SÀNG';
+        if (sourceMessage) { sourceMessage.textContent = 'Nguồn hiện tại vẫn hoạt động; chưa thể thay nguồn ở thời điểm này.'; sourceMessage.className = 'bad-text'; }
       });
       $('#opsStaffSourceForm').addEventListener('submit', async (event) => {
         event.preventDefault();
+        if (!sourceCapabilityReady) return;
         const sheetUrl = $('#opsStaffSheetUrl').value.trim();
         const sheetName = $('#opsStaffSheetName').value.trim();
         if (!confirm('Thay nguồn nhân sự sang Google Sheet/tab này?\n\nNhân sự không còn trong nguồn mới sẽ bị khóa và xóa hẳn nếu chưa từng phát sinh lịch sử. Lịch sử báo hàng cũ vẫn được giữ.')) return;
