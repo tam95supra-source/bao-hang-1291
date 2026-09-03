@@ -62,6 +62,7 @@ function doPost(e) {
     if (action === 'password-reset-preview') return json_(passwordResetPreview_(body));
     if (action === 'password-reset-request') return json_(passwordResetRequest_(body));
     if (action === 'password-reset-mail-capability') return json_(passwordResetMailCapability_(body));
+    if (action === 'password-reset-mail-oauth-configure') return json_(passwordResetMailOAuthConfigure_(body));
     if (action === 'bootstrap-config') return json_(bootstrapConfig_(body));
     if (action === 'realtime-kick') {
       requireRealtimeCaller_(String(body.id_token || ''));
@@ -698,10 +699,70 @@ function passwordResetCode4_() {
   return String(parseInt(hex.slice(0,8),16)%10000).padStart(4,'0');
 }
 
+function passwordResetMailOAuthConfigure_(body) {
+  requireUser_(String(body.id_token||''),['ADMIN']);
+  const clientId=String(body.client_id||'').trim();
+  const clientSecret=String(body.client_secret||'').trim();
+  const refreshToken=String(body.refresh_token||'').trim();
+  const scopeVerified=String(body.scope_verified||'').trim();
+  if(clientId.length<20||clientSecret.length<10||refreshToken.length<20||scopeVerified!=='gmail.send')throw new Error('MAIL_OAUTH_CONFIG_INVALID');
+  PropertiesService.getScriptProperties().setProperties({
+    MAIL_OAUTH_CLIENT_ID:clientId,
+    MAIL_OAUTH_CLIENT_SECRET:clientSecret,
+    MAIL_OAUTH_REFRESH_TOKEN:refreshToken,
+    MAIL_OAUTH_SCOPE_VERIFIED:'gmail.send',
+    MAIL_OAUTH_CONFIGURED_AT:new Date().toISOString()
+  },false);
+  return {ok:true,provider:'GMAIL_API_OAUTH',scope_verified:'gmail.send',recovery_email:BH_PASSWORD_RECOVERY_EMAIL};
+}
+
+function passwordResetMailAccessToken_() {
+  const props=PropertiesService.getScriptProperties();
+  if(String(props.getProperty('MAIL_OAUTH_SCOPE_VERIFIED')||'')!=='gmail.send')throw new Error('MAIL_OAUTH_SCOPE_NOT_VERIFIED');
+  const response=UrlFetchApp.fetch('https://oauth2.googleapis.com/token',{
+    method:'post',
+    contentType:'application/x-www-form-urlencoded',
+    payload:{
+      client_id:requiredProp_('MAIL_OAUTH_CLIENT_ID'),
+      client_secret:requiredProp_('MAIL_OAUTH_CLIENT_SECRET'),
+      refresh_token:requiredProp_('MAIL_OAUTH_REFRESH_TOKEN'),
+      grant_type:'refresh_token'
+    },
+    muteHttpExceptions:true
+  });
+  if(response.getResponseCode()<200||response.getResponseCode()>=300)throw new Error('MAIL_OAUTH_REFRESH_FAILED');
+  const payload=JSON.parse(response.getContentText()||'{}');
+  if(!payload.access_token)throw new Error('MAIL_OAUTH_ACCESS_TOKEN_MISSING');
+  return String(payload.access_token);
+}
+
+function passwordResetGmailSend_(to,subject,bodyText) {
+  const accessToken=passwordResetMailAccessToken_();
+  const encodedSubject=Utilities.base64Encode(Utilities.newBlob(String(subject)).getBytes());
+  const raw=[
+    'To: '+String(to),
+    'Subject: =?UTF-8?B?'+encodedSubject+'?=',
+    'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset=UTF-8',
+    '',
+    String(bodyText)
+  ].join('\r\n');
+  const rawEncoded=Utilities.base64EncodeWebSafe(Utilities.newBlob(raw).getBytes()).replace(/=+$/,'');
+  const response=UrlFetchApp.fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send',{
+    method:'post',
+    contentType:'application/json',
+    headers:{Authorization:'Bearer '+accessToken},
+    payload:JSON.stringify({raw:rawEncoded}),
+    muteHttpExceptions:true
+  });
+  if(response.getResponseCode()<200||response.getResponseCode()>=300)throw new Error('PASSWORD_RESET_GMAIL_SEND_FAILED_HTTP_'+response.getResponseCode());
+  return true;
+}
+
 function passwordResetMailCapability_(body) {
   requireUser_(String(body.id_token||''),['ADMIN']);
-  const quota=Number(MailApp.getRemainingDailyQuota()||0);
-  return {ok:quota>0,recovery_email:BH_PASSWORD_RECOVERY_EMAIL,remaining_daily_quota:quota};
+  passwordResetMailAccessToken_();
+  return {ok:true,provider:'GMAIL_API_OAUTH',recovery_email:BH_PASSWORD_RECOVERY_EMAIL,send_scope_verified:true};
 }
 
 function passwordResetRequest_(body) {
@@ -725,8 +786,7 @@ function passwordResetRequest_(body) {
         recovery_email:BH_PASSWORD_RECOVERY_EMAIL
       };
     }
-    const quota=Number(MailApp.getRemainingDailyQuota()||0);
-    if(quota<1)throw new Error('PASSWORD_RESET_MAIL_QUOTA_EXHAUSTED');
+    passwordResetMailAccessToken_();
     props.setProperty(key,String(now));
     const code4=passwordResetCode4_();
     const subject='[Báo hàng 1291] Mật khẩu tạm cho '+employeeCode;
@@ -741,12 +801,7 @@ function passwordResetRequest_(body) {
       'Đăng nhập Web bằng mã nhân viên và 4 số trên, sau đó đổi sang mật khẩu mới.',
       'Nếu không yêu cầu thao tác này, vui lòng bỏ qua email và liên hệ quản trị.'
     ].join('\n');
-    MailApp.sendEmail({
-      to:BH_PASSWORD_RECOVERY_EMAIL,
-      subject:subject,
-      body:bodyText,
-      name:'Báo hàng 1291'
-    });
+    passwordResetGmailSend_(BH_PASSWORD_RECOVERY_EMAIL,subject,bodyText);
     try {
       firebaseAdminUpdate_(String(target.id||''),{password:BH_TEMP_PASSWORD_PREFIX+code4,disableUser:false});
     } catch(error) {
