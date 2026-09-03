@@ -1,0 +1,11 @@
+{
+  "workflow": "Deploy Web Admin",
+  "run_id": 33705844554,
+  "run_attempt": 1,
+  "trigger_sha": "0d8586031edc10b8c00a678b0bcebe0ef3680cbc",
+  "status": "FAIL",
+  "outcomes": {
+    "deploy": "success",
+    "acceptance": "failure"
+  }
+}
