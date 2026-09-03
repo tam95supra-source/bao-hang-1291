@@ -1,5 +1,5 @@
 import './style.css';
-// Deployment trigger: staff-source capability gate verified.
+// Deployment trigger: active-staff preservation guard verified.
 import { createClient } from './backend-runtime.js';
 
 let excelModulePromise;
