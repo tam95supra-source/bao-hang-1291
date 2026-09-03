@@ -430,7 +430,7 @@ function renderApp() {
   $('#logout').onclick = () => { clearSession(); renderLogin(); };
   $('#exitTest')?.addEventListener('click', () => { state.testRole = null; state.activeTab = null; renderApp(); });
   $$('[data-test]').forEach((button) => button.onclick = () => { state.testRole = button.dataset.test; state.activeTab = null; renderApp(); });
-  $('[data-tab]').forEach((button) => button.onclick = () => {
+  document.querySelectorAll('[data-tab]').forEach((button) => button.onclick = () => {
     const nextTab = button.dataset.tab;
     if (nextTab === state.activeTab && routeIsActive(nextTab)) return;
     state.activeTab = nextTab;
@@ -449,7 +449,7 @@ async function renderTab() {
   if (!content) return;
 
   // Active navigation changes immediately; the lazy module may still be downloading.
-  $('[data-tab]').forEach((button) => button.classList.toggle('active', button.dataset.tab === tab));
+  document.querySelectorAll('[data-tab]').forEach((button) => button.classList.toggle('active', button.dataset.tab === tab));
   window.__BH_OPS_NORMALIZE__?.();
 
   try {
