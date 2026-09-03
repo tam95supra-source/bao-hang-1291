@@ -83,7 +83,7 @@ function doPost(e) {
     }
     if (action === 'staff-source-status') return json_(staffSourceStatus_(body));
     if (action === 'staff-source-configure') return json_(staffSourceConfigure_(body));
-    if (action === 'staff-recovery-current-source') return json_(staffRecoveryCurrentSource_(body));
+    if (action === 'staff-recovery-current-source') throw new Error('STAFF_RECOVERY_RETIRED_CANONICAL_HY1');
     if (action === 'staff-cleanup-orphans') {
       requireUser_(String(body.id_token || ''), ['ADMIN']);
       return json_(cleanupInactiveStaffOrphans_(workerAdminIdToken_(), Math.min(100, Math.max(1, Number(body.limit || 50))), String(body.after_code || '')));
@@ -531,138 +531,7 @@ function staffSourceConfigure_(body) {
 }
 
 function staffRecoveryCurrentSource_(body) {
-  const caller=requireUser_(String(body.id_token || ''), ['ADMIN']);
-  if (String(body.recovery_marker || '') !== 'RESTORE_PRE_VALIDATION_502_20260903') throw new Error('STAFF_RECOVERY_MARKER_INVALID');
-  const source=staffSourceConfig_();
-  if (source.sheetId !== BH_STAFF_SHEET_ID || source.sheetName !== BH_STAFF_SHEET_NAME) throw new Error('STAFF_RECOVERY_SOURCE_SCOPE_MISMATCH');
-
-  const ss=SpreadsheetApp.openById(source.sheetId);
-  const sheet=ss.getSheetByName(source.sheetName);
-  if (!sheet) throw new Error('STAFF_RECOVERY_SHEET_MISSING');
-  const expected=['ma nhan vien','ho va ten','so dien thoai','vi tri chinh','nha cung cap','bo phan','site','kho'];
-  const header=sheet.getRange(1,1,1,8).getDisplayValues()[0].map(normalizeStaffHeader_);
-  for (let i=0;i<expected.length;i++) if (header[i] !== expected[i]) throw new Error('STAFF_RECOVERY_STRUCTURE_MISMATCH:C'+(i+1));
-
-  const lastRow=Math.max(1,sheet.getLastRow());
-  const values=lastRow>=2?sheet.getRange(2,1,lastRow-1,8).getDisplayValues():[];
-  const byCode={};
-  values.forEach(function(row) {
-    const code=String(row[0] || '').trim();
-    const name=String(row[1] || '').trim();
-    if (!code && !name) return;
-    if (!/^[A-Za-z0-9._-]+$/.test(code) || !name) throw new Error('STAFF_RECOVERY_ROW_INVALID:'+code);
-    const key=code.toLowerCase();
-    if (byCode[key]) throw new Error('STAFF_RECOVERY_DUPLICATE_CODE:'+code);
-    byCode[key]={
-      employee_code:code,
-      full_name:name,
-      contractor:String(row[4] || '').trim(),
-      source_position:String(row[3] || '').trim()
-    };
-  });
-  const rows=Object.keys(byCode).sort().map(function(key){return byCode[key];});
-  if (rows.length !== 502) throw new Error('STAFF_RECOVERY_ROW_COUNT_GUARD:'+rows.length);
-
-  const token=workerAdminIdToken_();
-  const profiles=neonRpc_('worker_profiles_snapshot_rpc', {}, token) || [];
-  const existing={};
-  profiles.forEach(function(p){ existing[String(p.employee_code || '').toLowerCase()]=p; });
-
-  const after=String(body.after_code || '').toLowerCase();
-  const limit=Math.min(20,Math.max(1,Number(body.limit || 10)));
-  const pending=rows.filter(function(item) {
-    if (item.employee_code === BH_PROTECTED_ADMIN_CODE) return false;
-    const old=existing[item.employee_code.toLowerCase()];
-    if (old && (old.protected_account || String(old.role || '') === 'ADMIN' || String(old.source_kind || '') === 'MANUAL')) return false;
-    return !old || old.active !== true || String(old.source_kind || '') !== 'GSHEET';
-  }).filter(function(item){ return item.employee_code.toLowerCase() > after; });
-  const batch=pending.slice(0,limit);
-
-  let created=0,reactivated=0,failed=0;
-  const errors=[];
-  batch.forEach(function(item) {
-    try {
-      const key=item.employee_code.toLowerCase();
-      const old=existing[key];
-      let uid=old?String(old.id):Utilities.getUuid();
-      if (!old) {
-        const password=requiredProp_('STAFF_DEFAULT_PASSWORD');
-        firebaseAdminCreate_(uid,employeeEmail_(item.employee_code),password,item.full_name,false);
-        created++;
-      }
-      try {
-        firebaseAdminUpdate_(uid,{
-          email:employeeEmail_(item.employee_code),
-          displayName:item.full_name,
-          emailVerified:true,
-          disableUser:false,
-          customAttributes:claims_(item.employee_code,'PICKER')
-        });
-        neonRpc_('worker_profile_upsert_rpc',{
-          p_id:uid,
-          p_employee_code:item.employee_code,
-          p_full_name:item.full_name,
-          p_contractor:item.contractor,
-          p_role:'PICKER',
-          p_active:true,
-          p_source_kind:'GSHEET',
-          p_source_position:item.source_position,
-          p_protected_account:false
-        },token);
-        if (old) reactivated++;
-      } catch (error) {
-        if (!old) try { firebaseAdminDelete_(uid); } catch (_) {}
-        throw error;
-      }
-    } catch (error) {
-      failed++;
-      errors.push(item.employee_code+': '+safeError_(error));
-    }
-  });
-
-  const refreshed=neonRpc_('worker_profiles_snapshot_rpc', {}, token) || [];
-  const activeSource=refreshed.filter(function(p){ return p && p.active === true && String(p.source_kind || '') === 'GSHEET'; });
-  const inactiveSource=refreshed.filter(function(p){ return p && p.active === false && String(p.source_kind || '') === 'GSHEET'; });
-  const currentCodes={};
-  rows.forEach(function(item){ currentCodes[item.employee_code.toLowerCase()]=true; });
-  const remaining=rows.filter(function(item) {
-    const p=refreshed.find(function(x){return String(x.employee_code || '').toLowerCase() === item.employee_code.toLowerCase();});
-    return !p || p.active !== true || String(p.source_kind || '') !== 'GSHEET';
-  });
-
-  if (String(body.finalize_run_id || '') && remaining.length === 0 && failed === 0) {
-    neonRpc_('worker_staff_run_finish_rpc',{
-      p_run_id:String(body.finalize_run_id),
-      p_status:'FAILED',
-      p_source_hash:'',
-      p_source_rows:502,
-      p_eligible_rows:250,
-      p_created:0,
-      p_updated:0,
-      p_deactivated:0,
-      p_failed:1,
-      p_error_summary:'ABORTED_AND_RESTORED_AFTER_SAME_SOURCE_VALIDATION_TIMEOUT',
-      p_source_response_bytes:0
-    },token);
-  }
-
-  const next=batch.length?String(batch[batch.length-1].employee_code || ''):'';
-  return {
-    ok:failed===0,
-    mode:'RESTORE_PRE_VALIDATION_502',
-    total_source_rows:rows.length,
-    checked:batch.length,
-    created:created,
-    reactivated:reactivated,
-    failed:failed,
-    errors:errors.slice(0,5),
-    next_after_code:next,
-    has_more:remaining.length>0,
-    remaining:remaining.length,
-    active_gsheet:activeSource.length,
-    inactive_gsheet:inactiveSource.length,
-    requested_by:String(caller.profile.employee_code || '')
-  };
+  throw new Error('STAFF_RECOVERY_RETIRED_CANONICAL_HY1');
 }
 
 function installStaffSourceFallbackTrigger_() {
