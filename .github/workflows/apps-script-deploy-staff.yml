@@ -45,6 +45,13 @@ jobs:
           node ops/apps_script_deploy_worker.mjs
           git diff --check
 
+      - name: Configure password recovery Gmail OAuth
+        shell: bash
+        run: |
+          set -euo pipefail
+          node ops/configure_password_recovery_mail.cjs
+          echo 'PASSWORD_RESET_MAIL_RUNTIME=PASS'
+
       - name: Verify completed orphan cleanup receipt
         id: orphan_cleanup
         shell: bash
