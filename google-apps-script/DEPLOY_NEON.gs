@@ -504,16 +504,20 @@ function staffSourceConfigure_(body) {
   const sameSource=current.sheetId===id && current.sheetName===tab;
 
   if (sameSource) {
-    const result=runStaffSync_('MANUAL', caller.profile, candidate);
-    if (Number(result.failed || 0) > 0) throw new Error('STAFF_SOURCE_SYNC_PARTIAL:'+Number(result.failed || 0));
-    return Object.assign({
+    return {
       ok:true,
       sheet_id:id,
       sheet_name:tab,
       eligible_rows:candidate.staff.length,
-      validation_only:result.status==='NO_CHANGE' && result.changed===false,
+      status:'NO_CHANGE',
+      changed:false,
+      validation_only:true,
+      created:0,
+      updated:0,
+      deactivated:0,
+      failed:0,
       cleanup:{ok:true,skipped:'SAME_SOURCE_VALIDATION'}
-    }, result);
+    };
   }
 
   const props=PropertiesService.getScriptProperties();
