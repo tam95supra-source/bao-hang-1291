@@ -76,6 +76,9 @@ jobs:
           node --check "$RUNNER_TEMP/deploy-neon.js"
           node --check "$RUNNER_TEMP/staff-bridge.js"
           node --check ops/staff_cleanup_orphans.mjs
+          node --check ops/staff_cleanup_orphans_direct.cjs
+          node --check ops/apps_script_deploy_staff.mjs
+          node --check ops/apps_script_deploy_worker.mjs
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           import path from 'node:path';
