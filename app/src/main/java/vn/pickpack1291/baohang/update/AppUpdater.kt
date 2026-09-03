@@ -38,9 +38,8 @@ class AppUpdater(
         val prefs = activity.getSharedPreferences("bao_hang_1291_update", AppCompatActivity.MODE_PRIVATE)
         val now = System.currentTimeMillis()
         if (!showUpToDate) {
-            val lastSuccess = prefs.getLong(KEY_LAST_SUCCESS_MS, 0L)
             val lastAttempt = prefs.getLong(KEY_LAST_ATTEMPT_MS, 0L)
-            if (now - lastSuccess < AUTO_SUCCESS_TTL_MS || now - lastAttempt < AUTO_RETRY_TTL_MS) return
+            if (!shouldAutoCheck(now, lastAttempt)) return
             prefs.edit().putLong(KEY_LAST_ATTEMPT_MS, now).apply()
         }
         val installedChannel = BuildConfig.OTA_CHANNEL.trim().lowercase()
@@ -48,33 +47,79 @@ class AppUpdater(
             if (showUpToDate) Toast.makeText(activity, "Bản này không dùng OTA production", Toast.LENGTH_LONG).show()
             return
         }
-        diagnostics.info("ota_check_start", mapOf("channel" to installedChannel, "version" to BuildConfig.VERSION_NAME, "version_code" to BuildConfig.VERSION_CODE))
+        diagnostics.info(
+            "ota_check_start",
+            mapOf(
+                "channel" to installedChannel,
+                "version" to BuildConfig.VERSION_NAME,
+                "version_code" to BuildConfig.VERSION_CODE,
+                "manual" to showUpToDate
+            )
+        )
         activity.lifecycleScope.launch {
             val release = runCatching { withContext(Dispatchers.IO) { fetchManifest() } }.getOrElse { error ->
-                diagnostics.warn("ota_check_failed", mapOf("channel" to installedChannel, "error" to error.message.orEmpty()))
-                if (showUpToDate) Toast.makeText(activity, "Không kiểm tra được cập nhật: ${error.message}", Toast.LENGTH_LONG).show()
+                diagnostics.warn("ota_check_failed", mapOf("channel" to installedChannel, "error" to error.message.orEmpty(), "manual" to showUpToDate))
+                if (showUpToDate) {
+                    AlertDialog.Builder(activity)
+                        .setTitle("Kiểm tra cập nhật")
+                        .setMessage("Không kiểm tra được bản mới nhất.\n\n${error.message ?: "Lỗi kết nối"}")
+                        .setPositiveButton("ĐÓNG", null)
+                        .show()
+                }
                 return@launch
             }
-            if (!showUpToDate) prefs.edit().putLong(KEY_LAST_SUCCESS_MS, System.currentTimeMillis()).apply()
+            prefs.edit().putLong(KEY_LAST_SUCCESS_MS, System.currentTimeMillis()).apply()
             if (release.channel != installedChannel) {
                 diagnostics.error("ota_channel_manifest_mismatch", fields = mapOf("installed_channel" to installedChannel, "manifest_channel" to release.channel))
-                if (showUpToDate) Toast.makeText(activity, "Kênh cập nhật không khớp; đã hủy", Toast.LENGTH_LONG).show()
+                if (showUpToDate) {
+                    AlertDialog.Builder(activity)
+                        .setTitle("Kiểm tra cập nhật")
+                        .setMessage("Kênh cập nhật không khớp; đã hủy.")
+                        .setPositiveButton("ĐÓNG", null)
+                        .show()
+                }
                 return@launch
             }
+
             if (release.versionCode <= BuildConfig.VERSION_CODE) {
                 diagnostics.info("ota_up_to_date", mapOf("channel" to installedChannel, "manifest_code" to release.versionCode))
-                if (showUpToDate) Toast.makeText(activity, "Đang là bản ${BuildConfig.VERSION_NAME} mới nhất của kênh ${installedChannel.uppercase()}", Toast.LENGTH_LONG).show()
+                if (showUpToDate) showCurrentReleaseInfo(release, installedChannel)
                 return@launch
             }
+
             diagnostics.info("ota_update_available", mapOf("channel" to installedChannel, "version" to release.versionName, "version_code" to release.versionCode))
-            AlertDialog.Builder(activity)
-                .setTitle("Có bản ${release.versionName} • ${installedChannel.uppercase()}")
-                .setMessage(release.notes.ifBlank { "Bản mới của Báo hàng 1291 đã sẵn sàng." })
-                .setCancelable(!release.mandatory)
-                .apply { if (!release.mandatory) setNegativeButton("ĐỂ SAU", null) }
-                .setPositiveButton("CẬP NHẬT") { _, _ -> downloadAndInstall(release) }
-                .show()
+            showAvailableRelease(release, installedChannel)
         }
+    }
+
+    private fun showCurrentReleaseInfo(release: Release, installedChannel: String) {
+        val notes = release.notes.ifBlank { "Không có ghi chú phát hành." }
+        AlertDialog.Builder(activity)
+            .setTitle("Thông tin cập nhật")
+            .setMessage(
+                "Kênh: ${installedChannel.uppercase()}\n" +
+                    "Đang cài: v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})\n" +
+                    "Mới nhất: v${release.versionName} (${release.versionCode})\n" +
+                    "Trạng thái: Đang là bản mới nhất\n\n" +
+                    notes
+            )
+            .setPositiveButton("ĐÓNG", null)
+            .show()
+    }
+
+    private fun showAvailableRelease(release: Release, installedChannel: String) {
+        val notes = release.notes.ifBlank { "Bản mới của Báo hàng 1291 đã sẵn sàng." }
+        AlertDialog.Builder(activity)
+            .setTitle("Có bản ${release.versionName} • ${installedChannel.uppercase()}")
+            .setMessage(
+                "Đang cài: v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})\n" +
+                    "Mới nhất: v${release.versionName} (${release.versionCode})\n\n" +
+                    notes
+            )
+            .setCancelable(!release.mandatory)
+            .apply { if (!release.mandatory) setNegativeButton("ĐỂ SAU", null) }
+            .setPositiveButton("CẬP NHẬT") { _, _ -> downloadAndInstall(release) }
+            .show()
     }
 
     private fun downloadAndInstall(release: Release) {
@@ -187,9 +232,11 @@ class AppUpdater(
         }
 
         private const val OTA_CHANNEL_META = "vn.pickpack1291.baohang.OTA_CHANNEL"
+        internal fun shouldAutoCheck(nowMs: Long, lastAttemptMs: Long): Boolean =
+            lastAttemptMs <= 0L || nowMs - lastAttemptMs >= AUTO_CHECK_INTERVAL_MS
+
         private const val KEY_LAST_ATTEMPT_MS = "last_attempt_ms"
         private const val KEY_LAST_SUCCESS_MS = "last_success_ms"
-        private const val AUTO_RETRY_TTL_MS = 30 * 60 * 1000L
-        private const val AUTO_SUCCESS_TTL_MS = 6 * 60 * 60 * 1000L
+        internal const val AUTO_CHECK_INTERVAL_MS = 5 * 60 * 1000L
     }
 }

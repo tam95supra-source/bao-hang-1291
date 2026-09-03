@@ -5,6 +5,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppUpdaterPolicyTest {
+    @Test fun autoCheckRunsImmediatelyAndThenEveryFiveMinutes() {
+        val now = 1_000_000L
+        assertTrue(AppUpdater.shouldAutoCheck(now, 0L))
+        assertFalse(AppUpdater.shouldAutoCheck(now, now - AppUpdater.AUTO_CHECK_INTERVAL_MS + 1L))
+        assertTrue(AppUpdater.shouldAutoCheck(now, now - AppUpdater.AUTO_CHECK_INTERVAL_MS))
+    }
+
     @Test fun acceptsDirectGithubApkForMatchingChannel() {
         assertTrue(
             AppUpdater.isTrustedGitHubApkUrl(
