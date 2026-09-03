@@ -590,6 +590,23 @@ const EN = new Map([
 ]);
 
 const PHRASE_EN = new Map([
+  ["Cập nhật ","Updated "],
+  ["dự phòng mỗi ","fallback every "],
+  ["Đã thay nguồn · ","Source changed · "],
+  [" nhân sự · "," staff · "],
+  [" có hàng"," available"],
+  [" bỏ qua"," skip allowed"],
+  ["Xác nhận lần cuối: cho phép bỏ qua SKU","Final confirmation: allow skip for SKU"],
+  ["Cho phép bỏ qua SKU","Allow skip for SKU"],
+  ["trước đó đã được bỏ qua. Xác nhận hiện đã có hàng?","was previously allowed to be skipped. Confirm the item is now available?"],
+  ["đã có hàng?","is available?"],
+  ["Không xuất được Excel:","Unable to export Excel:"],
+  ["Không có SKU trong nhóm này.","No SKUs in this group."],
+  ["Báo lại trong 30 phút","Repeated within 30 minutes"],
+  ["cần ưu tiên","needs priority"],
+  ["danh mục hiện hành","current catalog"],
+  ["Chưa có dữ liệu","No data"],
+  ["Đã đồng bộ","Synced"],
   ["Đã tạo file log đầy đủ:","Full log file created:"],
   ["tự dọn sau","auto-deleted after"],
   ["Dòng ","Row "],
@@ -650,6 +667,7 @@ const PHRASE_EN = new Map([
 ]);
 
 const REGEX = [
+  [/\b(\d+) đợt\b/g, '$1 requests'],
   [/\b(\d+) phút\b/g, '$1 min'],
   [/\b(\d+) giờ\b/g, '$1 h'],
   [/\b(\d+) lượt\b/g, '$1 reports'],
