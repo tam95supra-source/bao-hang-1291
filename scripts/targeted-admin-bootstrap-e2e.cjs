@@ -166,6 +166,12 @@ async function main() {
       console.log('ADMIN_PROFILE_AUTH_RECOVERY=PASS');
     }
 
+    const mailCapability = await stage('PASSWORD_RESET_MAIL_CAPABILITY', () => gasAction(adminPair.idToken, 'password-reset-mail-capability', {}, 30000), 32000);
+    if (mailCapability.recovery_email !== 'tam95.supra@gmail.com' || Number(mailCapability.remaining_daily_quota || 0) < 1) {
+      throw new Error(`PASSWORD_RESET_MAIL_CAPABILITY_INVALID:${safe(JSON.stringify(mailCapability))}`);
+    }
+    console.log(`PASSWORD_RESET_MAIL_CAPABILITY=PASS email=${mailCapability.recovery_email} remaining_quota=${Number(mailCapability.remaining_daily_quota || 0)}`);
+
     const sourceStatus = await stage('STAFF_SOURCE_STATUS', () => gasAction(adminPair.idToken, 'staff-source-status', {}, 30000), 32000);
     if (sourceStatus.sheet_id !== '1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78' || sourceStatus.sheet_name !== 'DANH SÁCH NHÂN SỰ' || sourceStatus.fallback_only !== false) {
       throw new Error(`STAFF_SOURCE_STATUS_MISMATCH:${safe(JSON.stringify(sourceStatus))}`);
@@ -243,6 +249,28 @@ async function main() {
     await stage('ADMIN_INITIAL_PAGE', () => page.goto(SITE, { waitUntil: 'domcontentloaded', timeout: 18000 }), 20000);
     const initialDom = await stage('ADMIN_INITIAL_CDP_DOM', () => cdpDom(cdp), 8000);
     if (!initialDom.hasLogin) throw new Error(`INITIAL_LOGIN_FORM_MISSING body=${initialDom.bodyHtml}`);
+    await stage('PASSWORD_RECOVERY_UI_PREVIEW', async () => {
+      const codeInput = page.locator('#employeeCode');
+      const forgot = page.locator('#forgotPassword');
+      await codeInput.fill(ADMIN_CODE);
+      await forgot.waitFor({ state: 'visible', timeout: 8000 });
+      await forgot.click();
+      await page.locator('#accountModal').waitFor({ state: 'visible', timeout: 20000 });
+      const preview = await page.evaluate(() => {
+        const modal = document.querySelector('#accountModal');
+        return {
+          text: modal?.textContent || '',
+          hasConfirm: Boolean(document.querySelector('#confirmReset')),
+          hasCancel: Boolean(document.querySelector('#cancelReset')),
+        };
+      });
+      if (!preview.hasConfirm || !preview.hasCancel || !preview.text.includes(ADMIN_CODE) || !preview.text.includes('tam95.supra@gmail.com')) {
+        throw new Error(`PASSWORD_RECOVERY_UI_INVALID:${safe(JSON.stringify(preview))}`);
+      }
+      await page.locator('#cancelReset').click();
+      await page.locator('#accountModal').waitFor({ state: 'detached', timeout: 8000 });
+    }, 26000);
+    console.log('PASSWORD_RECOVERY_UI_PREVIEW=PASS user_bound=true fixed_email=true no_mail_sent=true');
     await stage('ADMIN_SESSION_SEED', () => page.evaluate(({ key, session }) => {
       sessionStorage.setItem(key, JSON.stringify(session));
       const read = JSON.parse(sessionStorage.getItem(key) || 'null');
@@ -273,6 +301,19 @@ async function main() {
     console.log('ADMIN_BROWSER_SECURE_TOKEN_AFTER_RELOAD=PASS http=200 body_finished=true');
     console.log('ADMIN_BROWSER_PROFILE_AFTER_RELOAD=PASS http=200 body_finished=true');
     console.log('ADMIN_BROWSER_BOOTSTRAP_AFTER_RELOAD=PASS role=ADMIN project=bao-hang-1291 selector=.app-shell source=cdp');
+
+    await stage('SELF_PASSWORD_CHANGE_UI', async () => {
+      const button = page.locator('#changePassword');
+      await button.waitFor({ state: 'visible', timeout: 8000 });
+      await button.click();
+      const input = page.locator('#ownNewPassword');
+      await input.waitFor({ state: 'visible', timeout: 8000 });
+      const minLength = await input.getAttribute('minlength');
+      if (minLength !== '8') throw new Error(`SELF_PASSWORD_CHANGE_MIN_LENGTH_INVALID:${minLength}`);
+      await page.locator('#cancelChangePassword').click();
+      await page.locator('#accountModal').waitFor({ state: 'detached', timeout: 8000 });
+    }, 12000);
+    console.log('SELF_PASSWORD_CHANGE_UI=PASS min_length=8');
 
     await stage('STAFF_SOURCE_UI_OPEN', async () => {
       const button = page.locator('button[data-tab="users"]');
