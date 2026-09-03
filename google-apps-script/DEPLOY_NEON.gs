@@ -16,6 +16,7 @@ const BH_STAFF_SHEET_NAME = 'DANH SÁCH NHÂN SỰ';
 const BH_PROTECTED_ADMIN_CODE = '6281280';
 const BH_LOG_FOLDER_ID = '1xB_h0A1Z_AKfX3TgnQyGgl7fM8qkANfs';
 const BH_WEB_LOG_RETENTION_DAYS = 14;
+const BH_DEVICE_LOG_RETENTION_DAYS = 14;
 const BH_EVENT_HEADERS = ['Mã sự kiện','Thời gian','Loại sự kiện','Ticket ID','SKU','Tên sản phẩm','Trạng thái','Số lượt báo','Người báo/Actor ID','Dữ liệu JSON'];
 const BH_ISSUE_HEADERS = ['Ticket ID','SKU','Tên sản phẩm','Trạng thái','Số lượt báo','Báo lần đầu','Cập nhật cuối','Invent xử lý','Số lần mở lại'];
 const BH_USER_HEADERS = ['Mã nhân viên','Họ tên','Nhà thầu','Vai trò','Trạng thái','Cập nhật cuối'];
@@ -74,6 +75,7 @@ function doPost(e) {
       return json_(workerTick_('CLIENT_KICK'));
     }
     if (action === 'upload-log') return json_(uploadLog_(body));
+    if (action === 'list-device-logs') return json_(listDeviceLogs_(body));
     if (action === 'download-log') return json_(downloadLog_(body));
     if (action === 'upload-web-log') return json_(uploadWebLog_(body));
     if (action === 'list-web-logs') return json_(listWebLogs_(body));
@@ -885,6 +887,18 @@ function userDisable_(body) {
   return {ok:true,profile:profile};
 }
 
+function logFileInFolder_(file) {
+  const parents=file.getParents();
+  while(parents.hasNext()) if(parents.next().getId()===BH_LOG_FOLDER_ID) return true;
+  return false;
+}
+
+function parseLogDescription_(file) {
+  const raw=String(file.getDescription()||'').trim();
+  if(!raw)return {};
+  try{return JSON.parse(raw)||{};}catch(ignore){return {};}
+}
+
 function uploadLog_(body) {
   const idToken=String(body.id_token||'');
   const caller=requireUser_(idToken,null);
@@ -893,25 +907,87 @@ function uploadLog_(body) {
   if(!bytes.length||bytes.length>2097152)throw new Error('LOG_SIZE_INVALID');
   const expected=String(body.sha256||'').toLowerCase();
   if(!/^[0-9a-f]{64}$/.test(expected)||sha256HexBytes_(bytes)!==expected)throw new Error('LOG_SHA_MISMATCH');
-  const safeCode=String(caller.profile.employee_code||'user').replace(/[^a-zA-Z0-9._-]/g,'-');
-  const file=getLogFolder_().createFile(Utilities.newBlob(bytes,'application/gzip','log_'+safeCode+'_'+Date.now()+'_'+Utilities.getUuid()+'.jsonl.gz'));
-  try {
-    const registered=neonRpc_('diagnostic_log_register_rpc',{p_object_path:'drive:'+file.getId(),p_compressed_bytes:bytes.length,p_sha256:expected,p_device_name:String(body.device_name||''),p_app_version:String(body.app_version||''),p_client_created_at:body.client_created_at||null},idToken)||{};
-    return Object.assign({ok:true},registered);
-  } catch(error){try{file.setTrashed(true);}catch(ignore){}throw error;}
+  const safeCode=String(caller.profile.employee_code||'user').replace(/[^a-zA-Z0-9._-]/g,'-').slice(0,60);
+  const deviceName=String(body.device_name||'').slice(0,160);
+  const appVersion=String(body.app_version||'').slice(0,80);
+  const clientCreatedAt=String(body.client_created_at||'').slice(0,80);
+  const name='device_'+safeCode+'_'+Date.now()+'_'+Utilities.getUuid()+'.jsonl.gz';
+  const file=getLogFolder_().createFile(Utilities.newBlob(bytes,'application/gzip',name));
+  file.setDescription(JSON.stringify({
+    kind:'device_diagnostic',
+    employee_code:safeCode,
+    device_name:deviceName,
+    app_version:appVersion,
+    client_created_at:clientCreatedAt,
+    sha256:expected
+  }));
+  cleanupDiagnosticLogs_();
+  return {ok:true,id:file.getId(),file_name:file.getName(),compressed_bytes:file.getSize(),sha256:expected,device_name:deviceName,app_version:appVersion,created_at:file.getDateCreated().toISOString(),storage:'GOOGLE_DRIVE_ONLY'};
+}
+
+function listDeviceLogs_(body) {
+  requireUser_(String(body.id_token||''),['ADMIN','ADMIN_INVENT']);
+  const limit=Math.min(100,Math.max(1,Number(body.limit||100)));
+  const files=getLogFolder_().getFiles();
+  const rows=[];
+  while(files.hasNext()){
+    const file=files.next();
+    const name=file.getName();
+    if(!((name.indexOf('device_')===0||name.indexOf('log_')===0)&&name.slice(-9)==='.jsonl.gz'))continue;
+    const meta=parseLogDescription_(file);
+    rows.push({
+      id:file.getId(),
+      employee_code:String(meta.employee_code||((name.split('_')[1])||'')),
+      device_name:String(meta.device_name||''),
+      app_version:String(meta.app_version||''),
+      created_at:file.getDateCreated().toISOString(),
+      compressed_bytes:file.getSize(),
+      sha256:String(meta.sha256||''),
+      storage:'GOOGLE_DRIVE_ONLY'
+    });
+  }
+  rows.sort(function(a,b){return String(b.created_at).localeCompare(String(a.created_at));});
+  return {ok:true,logs:rows.slice(0,limit),retention_days:BH_DEVICE_LOG_RETENTION_DAYS,storage:'GOOGLE_DRIVE_ONLY'};
 }
 
 function downloadLog_(body) {
-  const idToken=String(body.id_token||'');
-  requireUser_(idToken,['ADMIN','ADMIN_INVENT']);
-  const meta=neonRpc_('diagnostic_log_download_meta_rpc',{p_id:String(body.id||'')},idToken);
-  const path=String(meta.object_path||'');
-  if(path.indexOf('drive:')!==0)throw new Error('LOG_NOT_ON_DRIVE');
-  const file=DriveApp.getFileById(path.substring(6));
+  requireUser_(String(body.id_token||''),['ADMIN','ADMIN_INVENT']);
+  const id=String(body.id||'').trim();
+  if(!/^[A-Za-z0-9_-]{10,200}$/.test(id))throw new Error('LOG_ID_INVALID');
+  const file=DriveApp.getFileById(id);
+  const name=file.getName();
+  if(!((name.indexOf('device_')===0||name.indexOf('log_')===0)&&name.slice(-9)==='.jsonl.gz'))throw new Error('LOG_FILE_INVALID');
+  if(!logFileInFolder_(file))throw new Error('LOG_FOLDER_MISMATCH');
   const bytes=file.getBlob().getBytes();
   if(bytes.length>2097152)throw new Error('LOG_SIZE_INVALID');
-  if(sha256HexBytes_(bytes)!==String(meta.sha256||'').toLowerCase())throw new Error('LOG_SHA_MISMATCH');
-  return {ok:true,id:String(meta.id),filename:file.getName(),mime_type:'application/gzip',gzip_base64:Utilities.base64Encode(bytes)};
+  const actual=sha256HexBytes_(bytes);
+  const meta=parseLogDescription_(file);
+  if(meta.sha256&&String(meta.sha256).toLowerCase()!==actual)throw new Error('LOG_SHA_MISMATCH');
+  return {ok:true,id:id,file_name:name,filename:name,mime_type:'application/gzip',gzip_base64:Utilities.base64Encode(bytes),sha256:actual,storage:'GOOGLE_DRIVE_ONLY'};
+}
+
+function cleanupDiagnosticLogs_() {
+  const props=PropertiesService.getScriptProperties();
+  const now=Date.now();
+  const last=Number(props.getProperty('LAST_DIAGNOSTIC_LOG_CLEANUP_MS')||0);
+  if(now-last<21600000)return;
+  const folder=getLogFolder_();
+  const files=folder.getFiles();
+  const webCutoff=now-BH_WEB_LOG_RETENTION_DAYS*86400000;
+  const deviceCutoff=now-BH_DEVICE_LOG_RETENTION_DAYS*86400000;
+  let removed=0;
+  while(files.hasNext()){
+    const file=files.next();
+    const name=file.getName();
+    const created=file.getDateCreated().getTime();
+    const expiredWeb=name.indexOf('web_')===0&&created<webCutoff;
+    const expiredDevice=(name.indexOf('device_')===0||name.indexOf('log_')===0)&&created<deviceCutoff;
+    if(expiredWeb||expiredDevice){
+      try{file.setTrashed(true);removed++;}catch(ignore){}
+    }
+  }
+  props.setProperty('LAST_DIAGNOSTIC_LOG_CLEANUP_MS',String(now));
+  props.setProperty('LAST_DIAGNOSTIC_LOG_CLEANUP_REMOVED',String(removed));
 }
 
 function sanitizeWebLogValue_(value, depth) {
@@ -952,11 +1028,13 @@ function uploadWebLog_(body) {
   const text=rows.join('\n')+'\n';
   const raw=Utilities.newBlob(text,'application/x-ndjson');
   if(raw.getBytes().length>524288)throw new Error('WEB_LOG_BATCH_TOO_LARGE');
-  const name='web_'+safeCode+'_'+safeSession+'_'+Date.now()+'_'+Utilities.getUuid()+'.jsonl.gz';
+  const mode=String(body.mode||'auto')==='manual'?'manual':'auto';
+  const name='web_'+mode+'_'+safeCode+'_'+safeSession+'_'+Date.now()+'_'+Utilities.getUuid()+'.jsonl.gz';
   const gzip=Utilities.gzip(raw,name);
   const file=getLogFolder_().createFile(gzip);
-  cleanupWebLogs_();
-  return {ok:true,file_id:file.getId(),file_name:file.getName(),compressed_bytes:file.getSize(),event_count:events.length};
+  file.setDescription(JSON.stringify({kind:'web_diagnostic',mode:mode,employee_code:safeCode,session_id:safeSession,event_count:events.length}));
+  cleanupDiagnosticLogs_();
+  return {ok:true,file_id:file.getId(),file_name:file.getName(),compressed_bytes:file.getSize(),event_count:events.length,mode:mode,storage:'GOOGLE_DRIVE_ONLY'};
 }
 
 function listWebLogs_(body) {
@@ -967,10 +1045,11 @@ function listWebLogs_(body) {
     const file=files.next();
     const name=file.getName();
     if(name.indexOf('web_')!==0||name.slice(-9)!=='.jsonl.gz')continue;
-    rows.push({id:file.getId(),file_name:name,created_at:file.getDateCreated().toISOString(),updated_at:file.getLastUpdated().toISOString(),compressed_bytes:file.getSize()});
+    const meta=parseLogDescription_(file);
+    rows.push({id:file.getId(),file_name:name,created_at:file.getDateCreated().toISOString(),updated_at:file.getLastUpdated().toISOString(),compressed_bytes:file.getSize(),mode:String(meta.mode||(name.indexOf('web_manual_')===0?'manual':'auto')),storage:'GOOGLE_DRIVE_ONLY'});
   }
   rows.sort(function(a,b){return String(b.created_at).localeCompare(String(a.created_at));});
-  return {ok:true,logs:rows.slice(0,100),retention_days:BH_WEB_LOG_RETENTION_DAYS};
+  return {ok:true,logs:rows.slice(0,100),retention_days:BH_WEB_LOG_RETENTION_DAYS,storage:'GOOGLE_DRIVE_ONLY'};
 }
 
 function downloadWebLog_(body) {
@@ -980,30 +1059,11 @@ function downloadWebLog_(body) {
   const file=DriveApp.getFileById(id);
   if(file.getName().indexOf('web_')!==0||file.getName().slice(-9)!=='.jsonl.gz')throw new Error('WEB_LOG_FILE_INVALID');
   let inFolder=false;
-  const parents=file.getParents();
-  while(parents.hasNext()){if(parents.next().getId()===BH_LOG_FOLDER_ID){inFolder=true;break;}}
+  inFolder=logFileInFolder_(file);
   if(!inFolder)throw new Error('WEB_LOG_FOLDER_MISMATCH');
   const bytes=file.getBlob().getBytes();
   if(bytes.length>2097152)throw new Error('WEB_LOG_SIZE_INVALID');
   return {ok:true,id:id,file_name:file.getName(),mime_type:'application/gzip',gzip_base64:Utilities.base64Encode(bytes)};
-}
-
-function cleanupWebLogs_() {
-  const props=PropertiesService.getScriptProperties();
-  const now=Date.now();
-  const last=Number(props.getProperty('LAST_WEB_LOG_CLEANUP_MS')||0);
-  if(now-last<21600000)return;
-  const cutoff=now-BH_WEB_LOG_RETENTION_DAYS*86400000;
-  const files=getLogFolder_().getFiles();
-  let removed=0;
-  while(files.hasNext()){
-    const file=files.next();
-    if(file.getName().indexOf('web_')===0&&file.getDateCreated().getTime()<cutoff){
-      try{file.setTrashed(true);removed++;}catch(ignore){}
-    }
-  }
-  props.setProperty('LAST_WEB_LOG_CLEANUP_MS',String(now));
-  props.setProperty('LAST_WEB_LOG_CLEANUP_REMOVED',String(removed));
 }
 
 function requireUser_(idToken, allowedRoles) {
