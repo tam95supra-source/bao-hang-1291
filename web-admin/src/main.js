@@ -1,5 +1,5 @@
 import './style.css';
-// Deployment receipt probe: no runtime effect.
+// Deployment trigger: staff-source capability gate verified.
 import { createClient } from './backend-runtime.js';
 
 let excelModulePromise;
