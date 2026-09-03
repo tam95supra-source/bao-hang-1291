@@ -1,4 +1,5 @@
 import './style.css';
+// Deployment receipt probe: no runtime effect.
 import { createClient } from './backend-runtime.js';
 
 let excelModulePromise;

@@ -169,3 +169,55 @@ jobs:
       acceptance_mode: targeted
     secrets:
       FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+  receipt:
+    if: always() && github.ref == 'refs/heads/main'
+    needs: [deploy, acceptance]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Publish sanitized Web deployment receipt
+        shell: bash
+        env:
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          ACCEPTANCE_RESULT: ${{ needs.acceptance.result }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git reset --hard origin/main
+          mkdir -p ops/status
+          python3 - <<'PY'
+          import json, os
+          outcomes={
+            "deploy":os.environ.get("DEPLOY_RESULT",""),
+            "acceptance":os.environ.get("ACCEPTANCE_RESULT",""),
+          }
+          ok=all(v=="success" for v in outcomes.values())
+          payload={
+            "workflow":"Deploy Web Admin",
+            "run_id":int(os.environ["GITHUB_RUN_ID"]),
+            "run_attempt":int(os.environ.get("GITHUB_RUN_ATTEMPT","1")),
+            "trigger_sha":os.environ["GITHUB_SHA"],
+            "status":"PASS" if ok else "FAIL",
+            "outcomes":outcomes,
+          }
+          with open("ops/status/web-admin-last.json","w",encoding="utf-8") as fh:
+            json.dump(payload,fh,ensure_ascii=False,indent=2)
+            fh.write("\n")
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ops/status/web-admin-last.json
+          if git diff --cached --quiet; then
+            echo 'WEB_ADMIN_RUN_RECEIPT=UNCHANGED'
+          else
+            git commit -m 'chore(ops): record Web deployment receipt'
+            git push origin HEAD:main
+            echo 'WEB_ADMIN_RUN_RECEIPT=RECORDED'
+          fi
