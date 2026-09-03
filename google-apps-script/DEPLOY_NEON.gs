@@ -85,7 +85,7 @@ function doPost(e) {
     if (action === 'staff-source-configure') return json_(staffSourceConfigure_(body));
     if (action === 'staff-cleanup-orphans') {
       requireUser_(String(body.id_token || ''), ['ADMIN']);
-      return json_(cleanupInactiveStaffOrphans_(workerAdminIdToken_(), Math.min(100, Math.max(1, Number(body.limit || 50)))));
+      return json_(cleanupInactiveStaffOrphans_(workerAdminIdToken_(), Math.min(100, Math.max(1, Number(body.limit || 50))), String(body.after_code || '')));
     }
     return json_({ok:false,error:'ACTION_NOT_SUPPORTED'});
   } catch (error) {
@@ -544,12 +544,13 @@ function purgeInactiveStaffProfile_(profile, token) {
   return neonRpc_('worker_profile_purge_if_orphan_rpc',{p_id:id,p_execute:true},token) || {eligible:true,purged:false,reason:'NO_RESULT'};
 }
 
-function cleanupInactiveStaffOrphans_(token, limit) {
+function cleanupInactiveStaffOrphans_(token, limit, afterCode) {
   const max=Math.min(100,Math.max(1,Number(limit || 25)));
-  const profiles=neonRpc_('worker_profiles_snapshot_rpc', {}, token) || [];
-  const candidates=profiles.filter(function(p){
-    return p && p.active === false && String(p.source_kind || '') === 'GSHEET' && !p.protected_account && String(p.role || '') !== 'ADMIN';
-  }).slice(0,max);
+  const after=String(afterCode || '').toLowerCase();
+  const profiles=(neonRpc_('worker_profiles_snapshot_rpc', {}, token) || []).filter(function(p){
+    return p && p.active === false && String(p.source_kind || '') === 'GSHEET' && !p.protected_account && String(p.role || '') !== 'ADMIN' && String(p.employee_code || '').toLowerCase() > after;
+  }).sort(function(a,b){return String(a.employee_code || '').localeCompare(String(b.employee_code || ''));});
+  const candidates=profiles.slice(0,max);
   let purged=0,retained=0,failed=0;
   const errors=[];
   candidates.forEach(function(profile){
@@ -561,7 +562,8 @@ function cleanupInactiveStaffOrphans_(token, limit) {
       errors.push(String(profile.employee_code || '')+': '+safeError_(error));
     }
   });
-  return {ok:failed===0,checked:candidates.length,purged:purged,retained:retained,failed:failed,errors:errors.slice(0,10)};
+  const next=candidates.length?String(candidates[candidates.length-1].employee_code || ''):'';
+  return {ok:failed===0,checked:candidates.length,purged:purged,retained:retained,failed:failed,errors:errors.slice(0,10),next_after_code:next,has_more:profiles.length>candidates.length};
 }
 
 function runStaffSync_(triggerSource, callerProfile, preloadedSource) {
