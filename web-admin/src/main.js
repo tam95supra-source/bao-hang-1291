@@ -12,6 +12,8 @@ const BACKEND_BRIDGE_URL = 'https://backend.bao-hang-1291.invalid';
 const BRIDGE_PUBLIC_KEY = 'compat-public';
 const API_BASE = `${BACKEND_BRIDGE_URL}/api/web-api`;
 const SESSION_KEY = 'bao-hang-1291-web-session';
+const PASSWORD_RECOVERY_EMAIL = 'tam95.supra@gmail.com';
+const TEMP_PASSWORD_PREFIX = 'R!';
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const ROLES = {
   ADMIN: 'Admin hệ thống',
@@ -165,6 +167,29 @@ async function api(action, payload = {}) {
     { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) },
   ));
 }
+async function publicAuthApi(action, payload = {}) {
+  return parseResponse(await fetch(
+    `${BACKEND_BRIDGE_URL}/api/public-auth/${encodeURIComponent(action)}`,
+    { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) },
+  ));
+}
+async function changeOwnPassword(newPassword) {
+  const result = await parseResponse(await fetch(
+    `${BACKEND_BRIDGE_URL}/auth/change-password`,
+    { method:'POST', headers:{ 'content-type':'application/json' }, body:JSON.stringify({ new_password:newPassword }) },
+  ));
+  if (result.access_token && state.session) {
+    saveSession({
+      ...state.session,
+      access_token: result.access_token,
+      refresh_token: result.refresh_token || state.session.refresh_token,
+      expires_at: Math.floor(Date.now() / 1000) + 3600,
+    });
+    realtimeClient.realtime.setAuth(state.session.access_token);
+  }
+  return result;
+}
+
 async function issueWithdraw(action, payload = {}) {
   return parseResponse(await authenticatedFetch(
     `${BACKEND_BRIDGE_URL}/api/issue-withdraw/${encodeURIComponent(action)}`,
@@ -193,12 +218,15 @@ function renderLogin(msg = '') {
     <p class="muted">Đăng nhập bằng tài khoản Báo hàng 1291.</p>
     <form id="loginForm"><label>Mã nhân viên<input id="employeeCode" required autocomplete="username"></label>
     <label>Mật khẩu<input id="password" type="password" required autocomplete="current-password"></label>
-    <button class="primary wide">ĐĂNG NHẬP</button></form><div id="loginMessage" class="message" hidden></div>
+    <button class="primary wide">ĐĂNG NHẬP</button></form>
+    <div class="login-actions"><button id="forgotPassword" type="button" class="login-link">Lấy lại mật khẩu</button></div>
+    <div id="loginMessage" class="message" hidden></div>
     <p class="security">Quyền được kiểm tra tại server. Web không chứa service-role key, thông tin xác thực máy chủ hoặc private key.</p>
     <p class="security">Copyright 2026 - SUPRA DC HƯNG YÊN - tamnv2 - Chuyên viên Pick Pack 1291</p>
   </section></main>`;
   if (msg) message('#loginMessage', msg, 'error');
   $('#loginForm').addEventListener('submit', handleLogin);
+  $('#forgotPassword').addEventListener('click', openPasswordRecovery);
   $('#employeeCode').focus();
 }
 async function handleLogin(event) {
@@ -207,7 +235,9 @@ async function handleLogin(event) {
   button.disabled = true;
   message('#loginMessage', 'Đang xác thực…');
   try {
-    const token = await authToken({ email: employeeEmail($('#employeeCode').value), password: $('#password').value });
+    const rawPassword = $('#password').value;
+    const loginPassword = /^\d{4}$/.test(rawPassword) ? TEMP_PASSWORD_PREFIX + rawPassword : rawPassword;
+    const token = await authToken({ email: employeeEmail($('#employeeCode').value), password: loginPassword });
     const profile = await fetchProfile(token.access_token, token.user.id);
     if (!profile.active) throw new Error('Tài khoản đã ngừng hoạt động.');
     saveSession({ access_token: token.access_token, refresh_token: token.refresh_token, expires_at: Math.floor(Date.now() / 1000) + Number(token.expires_in || 3600), profile });
@@ -215,6 +245,100 @@ async function handleLogin(event) {
     renderApp();
   } catch (error) { message('#loginMessage', safeMessage(error), 'error'); }
   finally { button.disabled = false; }
+}
+
+function closeAccountModal() {
+  $('#accountModal')?.remove();
+}
+
+async function openPasswordRecovery() {
+  const code = String($('#employeeCode')?.value || '').trim();
+  if (!code) {
+    message('#loginMessage', 'Nhập mã nhân viên trước khi lấy lại mật khẩu.', 'error');
+    $('#employeeCode')?.focus();
+    return;
+  }
+  message('#loginMessage', 'Đang kiểm tra tài khoản…');
+  try {
+    const preview = await publicAuthApi('password-reset-preview', { employee_code: code });
+    document.body.insertAdjacentHTML('beforeend', `<div id="accountModal" class="account-modal">
+      <section>
+        <h2>Lấy lại mật khẩu</h2>
+        <p class="muted">Xác nhận tài khoản sẽ được đặt lại mật khẩu.</p>
+        <dl class="account-summary">
+          <div><dt>Mã nhân viên</dt><dd>${escapeHtml(preview.employee_code)}</dd></div>
+          <div><dt>Họ tên</dt><dd>${escapeHtml(preview.full_name)}</dd></div>
+          <div><dt>Email nhận mật khẩu</dt><dd>${escapeHtml(preview.recovery_email || PASSWORD_RECOVERY_EMAIL)}</dd></div>
+        </dl>
+        <div id="resetMessage" class="message" hidden></div>
+        <div class="account-actions">
+          <button id="cancelReset" type="button" class="secondary">Hủy</button>
+          <button id="confirmReset" type="button" class="primary">GỬI MẬT KHẨU MỚI</button>
+        </div>
+      </section>
+    </div>`);
+    message('#loginMessage', '');
+    $('#cancelReset').onclick = closeAccountModal;
+    $('#confirmReset').onclick = async () => {
+      const button = $('#confirmReset');
+      button.disabled = true;
+      message('#resetMessage', 'Đang tạo và gửi mật khẩu tạm…');
+      try {
+        const result = await publicAuthApi('password-reset-request', { employee_code: preview.employee_code });
+        if (!result.ok) {
+          if (result.error === 'RESET_COOLDOWN') {
+            throw new Error(`Vừa gửi mật khẩu mới. Có thể yêu cầu lại sau ${Math.max(1, Math.ceil(Number(result.retry_after_seconds || 0) / 60))} phút.`);
+          }
+          throw new Error(result.error || 'Không thể gửi mật khẩu mới.');
+        }
+        message('#resetMessage', `Đã gửi mật khẩu tạm 4 số tới ${result.recovery_email || PASSWORD_RECOVERY_EMAIL}. Dùng 4 số đó để đăng nhập.`, 'good');
+        button.hidden = true;
+        $('#cancelReset').textContent = 'Đóng';
+      } catch (error) {
+        message('#resetMessage', safeMessage(error), 'error');
+        button.disabled = false;
+      }
+    };
+  } catch (error) {
+    message('#loginMessage', safeMessage(error), 'error');
+  }
+}
+
+function openChangePassword() {
+  closeAccountModal();
+  document.body.insertAdjacentHTML('beforeend', `<div id="accountModal" class="account-modal">
+    <section>
+      <h2>Đổi mật khẩu</h2>
+      <p class="muted">Mật khẩu mới tối thiểu 8 ký tự.</p>
+      <label>Mật khẩu mới<input id="ownNewPassword" type="password" minlength="8" autocomplete="new-password"></label>
+      <label>Nhập lại mật khẩu<input id="ownConfirmPassword" type="password" minlength="8" autocomplete="new-password"></label>
+      <div id="changePasswordMessage" class="message" hidden></div>
+      <div class="account-actions">
+        <button id="cancelChangePassword" type="button" class="secondary">Hủy</button>
+        <button id="confirmChangePassword" type="button" class="primary">ĐỔI MẬT KHẨU</button>
+      </div>
+    </section>
+  </div>`);
+  $('#cancelChangePassword').onclick = closeAccountModal;
+  $('#confirmChangePassword').onclick = async () => {
+    const next = $('#ownNewPassword').value;
+    const confirm = $('#ownConfirmPassword').value;
+    if (next.length < 8) return message('#changePasswordMessage', 'Mật khẩu mới phải có ít nhất 8 ký tự.', 'error');
+    if (next !== confirm) return message('#changePasswordMessage', 'Hai lần nhập mật khẩu chưa khớp.', 'error');
+    const button = $('#confirmChangePassword');
+    button.disabled = true;
+    message('#changePasswordMessage', 'Đang đổi mật khẩu…');
+    try {
+      await changeOwnPassword(next);
+      message('#changePasswordMessage', 'Đã đổi mật khẩu thành công.', 'good');
+      button.hidden = true;
+      $('#cancelChangePassword').textContent = 'Đóng';
+    } catch (error) {
+      message('#changePasswordMessage', safeMessage(error), 'error');
+      button.disabled = false;
+    }
+  };
+  $('#ownNewPassword').focus();
 }
 
 function tabsForRole(currentRole) {
@@ -258,12 +382,13 @@ function renderApp() {
   document.body.innerHTML = `<div class="app-shell">
     <header class="topbar"><div><p class="eyebrow">BÁO HÀNG 1291</p><h1>Web nghiệp vụ</h1><div class="health-row" id="healthRow">
       ${healthChip('SERVICE','HOẠT ĐỘNG','good','DỊCH VỤ')}${healthChip('REALTIME','ĐANG KẾT NỐI','','CẬP NHẬT')}${healthChip('SHEET','—','','BÁO CÁO')}${healthChip('FREE TIER','ĐANG GIÁM SÁT','','CHI PHÍ')}
-    </div></div><div class="user"><strong>${escapeHtml(profile.full_name)}</strong><span>${escapeHtml(ROLES[currentRole] || currentRole)}</span><button id="logout" class="ghost">Đăng xuất</button></div></header>
+    </div></div><div class="user"><strong>${escapeHtml(profile.full_name)}</strong><span>${escapeHtml(ROLES[currentRole] || currentRole)}</span><div class="user-actions"><button id="changePassword" class="ghost">Đổi mật khẩu</button><button id="logout" class="ghost">Đăng xuất</button></div></div></header>
     ${state.testRole ? `<div class="test-banner">ĐANG KIỂM THỬ QUYỀN: <strong>${escapeHtml(ROLES[state.testRole])}</strong> · API cũng bị hạ quyền tương ứng. <button id="exitTest">Thoát kiểm thử</button></div>` : ''}
     ${actualRole() === 'ADMIN' && !state.testRole ? `<div class="test-tools"><span>Kiểm thử giao diện + quyền server:</span><button data-test="ADMIN_INVENT">Admin Event</button><button data-test="INVENT">Người báo hàng</button><button data-test="PICKER">Người lấy hàng</button></div>` : ''}
     <nav class="tabs">${tabs.map(([id,label]) => `<button data-tab="${id}" class="${id === state.activeTab ? 'active' : ''}">${label}</button>`).join('')}</nav>
     <main id="content" class="content"></main></div>
     <div id="busy" class="busy" hidden><div><span class="spinner"></span><strong id="busyText">Đang xử lý…</strong></div></div>`;
+  $('#changePassword').onclick = openChangePassword;
   $('#logout').onclick = () => { clearSession(); renderLogin(); };
   $('#exitTest')?.addEventListener('click', () => { state.testRole = null; state.activeTab = null; renderApp(); });
   $$('[data-test]').forEach((button) => button.onclick = () => { state.testRole = button.dataset.test; state.activeTab = null; renderApp(); });
