@@ -1,4 +1,5 @@
 import './ops-console.css';
+import { getLocale } from './i18n.js';
 
 const BACKEND_BRIDGE_URL = 'https://backend.bao-hang-1291.invalid';
 const BRIDGE_PUBLIC_KEY = 'compat-public';
@@ -40,11 +41,11 @@ function formatTime(value, withSeconds = false) {
   if (!value) return '—';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return escapeHtml(value);
-  return date.toLocaleString('vi-VN', { hour12: false, second: withSeconds ? '2-digit' : undefined });
+  return date.toLocaleString(getLocale(), { hour12: false, second: withSeconds ? '2-digit' : undefined });
 }
 function formatBytes(bytes) {
   const value = Math.max(0, Number(bytes || 0));
-  if (value < 1024) return `${value.toLocaleString('vi-VN')} B`;
+  if (value < 1024) return `${value.toLocaleString(getLocale())} B`;
   if (value < 1048576) return `${(value / 1024).toFixed(1)} KB`;
   if (value < 1073741824) return `${(value / 1048576).toFixed(1)} MB`;
   return `${(value / 1073741824).toFixed(2)} GB`;
@@ -56,6 +57,8 @@ function readSession() {
   } catch { return null; }
 }
 function detectedTestRole() {
+  const direct = String(document.body.dataset.testRole || '').trim().toUpperCase();
+  if (['ADMIN_INVENT','INVENT','PICKER'].includes(direct)) return direct;
   const text = $('.test-banner strong')?.textContent?.trim() || '';
   if (text.includes('Admin Event')) return 'ADMIN_INVENT';
   if (text.includes('Người báo hàng')) return 'INVENT';
@@ -239,8 +242,8 @@ function progress(label, used, limit, detail = '') {
 }
 function localDayLabel() {
   const now = new Date();
-  const weekday = now.toLocaleDateString('vi-VN', { weekday: 'long' });
-  return `${weekday.charAt(0).toUpperCase()}${weekday.slice(1)}, ${now.toLocaleDateString('vi-VN')}`;
+  const weekday = now.toLocaleDateString(getLocale(), { weekday: 'long' });
+  return `${weekday.charAt(0).toUpperCase()}${weekday.slice(1)}, ${now.toLocaleDateString(getLocale())}`;
 }
 function statusLabel(status) {
   return ({ OPEN: 'Chờ nhận', CLAIMED: 'Đang xử lý', SEARCHING: 'Đang tìm hàng', REPLENISHING: 'Đang châm hàng', AVAILABLE: 'Đã có hàng', SKIP_ALLOWED: 'Được phép bỏ qua', CLOSED: 'Đã đóng' })[status] || status;
@@ -259,7 +262,7 @@ async function renderOverviewView() {
   if (!content || !isManager()) return;
   content.dataset.opsRender = 'overview';
   content.innerHTML = `${pageHeading('Tổng quan hôm nay', 'Trạng thái vận hành hiện tại, sự kiện cần xử lý và kết quả trong 24 giờ.', `<div class="ops-asof"><b>${escapeHtml(localDayLabel())}</b><span id="overviewNow"></span></div>`)}<div class="ops-loading">Đang tải dữ liệu vận hành…</div>`;
-  const updateClock = () => { const el = $('#overviewNow'); if (el) el.textContent = `Cập nhật lúc ${new Date().toLocaleTimeString('vi-VN', { hour12: false })}`; };
+  const updateClock = () => { const el = $('#overviewNow'); if (el) el.textContent = `Cập nhật lúc ${new Date().toLocaleTimeString(getLocale(), { hour12: false })}`; };
   clearInterval(ui.overviewClock); updateClock(); ui.overviewClock = setInterval(updateClock, 30000);
   try {
     const started = performance.now();
@@ -289,15 +292,15 @@ async function renderOverviewView() {
         ${metric('Đang xử lý', String(summary.claimed_issue_count || 0), 'đang có người phụ trách')}
         ${metric('Lượt báo 24 giờ', String(reports.last_24h?.reports || 0), `${reports.last_24h?.issues || 0} đợt báo thiếu`)}
         ${metric('Đã xử lý 24 giờ', String(reports.last_24h?.resolved || 0), `${reports.last_24h?.available || 0} có hàng · ${reports.last_24h?.skipped || 0} bỏ qua`, 'good')}
-        ${metric('Quá mốc phản hồi', String(reports.overdue_now || 0), 'cần ưu tiên', reports.overdue_now ? 'danger' : '')}
+        ${metric('Quá thời gian tiếp nhận', String(reports.overdue_now || 0), 'cần ưu tiên', reports.overdue_now ? 'danger' : '')}
         ${metric('Nhân sự hoạt động', String(summary.active_user_count || 0), `${summary.profile_count || 0} tài khoản`)}
-        ${metric('SKU đang dùng', Number(summary.sku_count || 0).toLocaleString('vi-VN'), 'danh mục hiện hành')}
+        ${metric('SKU đang dùng', Number(summary.sku_count || 0).toLocaleString(getLocale()), 'danh mục hiện hành')}
         ${metric('Dung lượng dữ liệu', `${(db / 1048576).toFixed(1)} MB`, `${(db / dbLimit * 100).toFixed(1)}% gói miễn phí`, db / dbLimit >= .75 ? 'warn' : 'good')}
       </div>
       <div class="ops-dashboard-grid">
         <article class="ops-panel ops-live"><div class="ops-panel-title"><div><h3>Đang diễn ra</h3><p>${activeIssues.length} đợt đang chờ hoặc đang xử lý</p></div><span class="ops-live-pill">LIVE</span></div>${issueList || '<div class="ops-empty">Không có đợt báo thiếu đang chờ xử lý.</div>'}</article>
         <article class="ops-panel"><div class="ops-panel-title"><div><h3>Nhịp báo thiếu 24 giờ</h3><p>Lượt báo theo giờ, cột đậm là giờ hiện tại</p></div></div><div class="ops-hour-chart">${hourly.map((value, hour) => `<div class="ops-hour ${hour === currentHour ? 'current' : ''}" title="${hour}:00 · ${Number(value)} lượt"><i style="height:${Math.max(4, Number(value) / maxHour * 100)}%"></i><span>${hour % 3 === 0 ? hour : ''}</span></div>`).join('')}</div></article>
-        <article class="ops-panel"><div class="ops-panel-title"><div><h3>Hiệu suất xử lý</h3><p>24 giờ gần nhất và thời gian xử lý 30 ngày</p></div></div><div class="ops-kv"><span>Một nửa đợt được nhận trong</span><b>${reports.median_claim_minutes ?? '—'} phút</b><span>Một nửa đợt xử lý xong trong</span><b>${reports.median_resolution_minutes ?? '—'} phút</b><span>95% xử lý xong trong</span><b>${reports.p95_resolution_minutes ?? '—'} phút</b><span>Đợt báo lại trong 30 phút</span><b>${reports.recurrent_episodes || 0}</b></div></article>
+        <article class="ops-panel"><div class="ops-panel-title"><div><h3>Hiệu suất xử lý</h3><p>24 giờ gần nhất và thời gian xử lý 30 ngày</p></div></div><div class="ops-kv"><span>50% yêu cầu được tiếp nhận trong</span><b>${reports.median_claim_minutes ?? '—'} phút</b><span>50% yêu cầu được xử lý xong trong</span><b>${reports.median_resolution_minutes ?? '—'} phút</b><span>95% yêu cầu được xử lý xong trong</span><b>${reports.p95_resolution_minutes ?? '—'} phút</b><span>Yêu cầu báo lại trong 30 phút</span><b>${reports.recurrent_episodes || 0}</b></div></article>
         <article class="ops-panel"><div class="ops-panel-title"><div><h3>Đồng bộ & dung lượng</h3><p>Thông tin nền đang ảnh hưởng vận hành</p></div></div>${progress('Dung lượng Neon', db, dbLimit)}<div class="ops-kv compact"><span>Đồng bộ nhân sự</span><b>${staff ? `${staff.status} · ${formatTime(staff.finished_at)}` : 'Chưa có'}</b><span>Google Sheet chờ xuất</span><b>${summary.pending_sheet_count || 0}</b><span>Thiết bị FCM hoạt động</span><b>${service.usage?.active_device_tokens || 0}</b></div></article>
       </div>`;
     updateClock();
@@ -495,10 +498,10 @@ async function renderTimingView() {
     content.innerHTML = `${pageHeading('Thời gian nghiệp vụ', 'Mỗi nhóm thời gian được tách riêng theo đúng bước xử lý báo hàng.')}
       <form id="opsTimingForm">
         <div class="ops-settings-grid">
-          <article class="ops-setting-card"><span class="ops-step">01</span><h3>Báo thiếu & nhận xử lý</h3><p>Khoảng thời gian để Người báo hàng nhận đợt báo thiếu và mốc nhắc lại nếu chưa có phản hồi.</p><label>Mốc cần nhận xử lý (phút)<input type="number" name="acknowledge_minutes" min="1" max="480" value="${Number(config.acknowledge_minutes)}"></label><label>Nhắc lại khi chưa xử lý (phút)<input type="number" name="reminder_minutes" min="1" max="480" value="${Number(config.reminder_minutes)}"></label></article>
-          <article class="ops-setting-card"><span class="ops-step">02</span><h3>Châm hàng</h3><p>Mốc theo dõi sau khi đợt báo thiếu đã được nhận và đang tìm/châm bổ sung hàng.</p><label>Mốc châm hàng (phút)<input type="number" name="replenish_minutes" min="1" max="480" value="${Number(config.replenish_minutes)}"></label></article>
-          <article class="ops-setting-card"><span class="ops-step">03</span><h3>Cho phép bỏ qua</h3><p>Tự động cho phép bỏ qua chỉ chạy khi được bật. Khi tắt, hệ thống không tự cho phép bỏ qua dù quá thời gian.</p><label class="ops-check"><input type="checkbox" name="auto_skip_enabled" ${config.auto_skip_enabled ? 'checked' : ''}> Bật tự động cho phép bỏ qua</label><label>Mốc tự cho phép bỏ qua (phút)<input type="number" name="auto_skip_after_minutes" min="15" max="4320" value="${Number(config.auto_skip_after_minutes)}"></label></article>
-          <article class="ops-setting-card"><span class="ops-step">04</span><h3>Xác nhận của Người lấy hàng</h3><p>Khi ĐÃ CÓ HÀNG hoặc ĐƯỢC BỎ QUA, Người lấy hàng phải xác nhận cảnh báo. Đây là chu kỳ nhắc nếu chưa xác nhận.</p><label>Nhắc xác nhận (phút)<input type="number" name="picker_ack_reminder_minutes" min="1" max="60" value="${Number(config.picker_ack_reminder_minutes)}"></label></article>
+          <article class="ops-setting-card"><span class="ops-step">01</span><h3>Tiếp nhận báo thiếu</h3><p>Thời gian từ lúc người lấy hàng báo thiếu đến khi người xử lý nhận yêu cầu, kèm khoảng nhắc lại nếu chưa có người nhận.</p><label>Thời gian tiếp nhận (phút)<input type="number" name="acknowledge_minutes" min="1" max="480" value="${Number(config.acknowledge_minutes)}"></label><label>Nhắc lại nếu chưa xử lý (phút)<input type="number" name="reminder_minutes" min="1" max="480" value="${Number(config.reminder_minutes)}"></label></article>
+          <article class="ops-setting-card"><span class="ops-step">02</span><h3>Xử lý sau khi tiếp nhận</h3><p>Thời gian theo dõi sau khi người xử lý đã nhận yêu cầu và đang tìm hoặc châm bổ sung hàng.</p><label>Thời gian xử lý sau khi nhận (phút)<input type="number" name="replenish_minutes" min="1" max="480" value="${Number(config.replenish_minutes)}"></label></article>
+          <article class="ops-setting-card"><span class="ops-step">03</span><h3>Tự động cho phép bỏ qua</h3><p>Nếu bật, hệ thống tự cho phép bỏ qua SKU khi yêu cầu đã chờ quá thời gian quy định. Nếu tắt, chỉ người có quyền mới được cho phép bỏ qua.</p><label class="ops-check"><input type="checkbox" name="auto_skip_enabled" ${config.auto_skip_enabled ? 'checked' : ''}> Tự động cho phép bỏ qua SKU</label><label>Tự động bỏ qua sau (phút)<input type="number" name="auto_skip_after_minutes" min="15" max="4320" value="${Number(config.auto_skip_after_minutes)}"></label></article>
+          <article class="ops-setting-card"><span class="ops-step">04</span><h3>Cảnh báo cho người lấy hàng</h3><p>Khi có hàng hoặc được phép bỏ qua, cảnh báo sẽ nhắc lại tới khi người lấy hàng xác nhận.</p><label>Nhắc người lấy hàng xác nhận (phút)<input type="number" name="picker_ack_reminder_minutes" min="1" max="60" value="${Number(config.picker_ack_reminder_minutes)}"></label><label>Nhắc lại khi đã tìm thấy hàng (phút)<input type="number" name="found_item_reminder_minutes" min="1" max="60" value="${Number(config.found_item_reminder_minutes || 5)}"></label><small>Mặc định 5 phút cho trường hợp SKU đã được cho phép bỏ qua nhưng sau đó tìm thấy hàng.</small></article>
         </div>
         <div class="ops-save-bar"><div><b>Áp dụng đồng bộ</b><span>Thay đổi được phát realtime sang Web/App đang hoạt động.</span></div><button class="primary" type="submit">Lưu thời gian nghiệp vụ</button></div>
       </form>`;
@@ -510,11 +513,12 @@ async function renderTimingView() {
         reminder_minutes: Number(form.get('reminder_minutes')),
         replenish_minutes: Number(form.get('replenish_minutes')),
         picker_ack_reminder_minutes: Number(form.get('picker_ack_reminder_minutes')),
+        found_item_reminder_minutes: Number(form.get('found_item_reminder_minutes')),
         auto_skip_enabled: form.get('auto_skip_enabled') === 'on',
         auto_skip_after_minutes: Number(form.get('auto_skip_after_minutes')),
       };
       const done = busy('Đang lưu thời gian nghiệp vụ…');
-      try { await webApi('save-operational-config', payload); toast('Đã lưu và phát cấu hình realtime.'); }
+      try { await webApi('save-operational-config', payload); toast('Đã lưu thời gian nghiệp vụ và đồng bộ cấu hình.'); }
       catch (error) { toast(error.message, 'error'); }
       finally { done(); }
     });
