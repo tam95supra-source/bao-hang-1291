@@ -118,6 +118,13 @@ async function gas(idToken,action,extra={}){
     try{
       const access=await refreshAccess(candidate);
       console.log(`PASSWORD_RESET_OAUTH_CANDIDATE_${candidate.label}=REFRESH_OK`);
+      try {
+        const info=await jsonFetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(access)}`);
+        const scopes=String(info.scope||'').split(/\s+/).filter(Boolean).sort();
+        console.log(`PASSWORD_RESET_OAUTH_CURRENT_SCOPES_${candidate.label}=${scopes.join(',')}`);
+      } catch (_) {
+        console.log(`PASSWORD_RESET_OAUTH_CURRENT_SCOPES_${candidate.label}=UNAVAILABLE`);
+      }
       if(await gmailProbe(access,candidate.label)){chosen=candidate;break;}
     }catch(e){
       console.log(`PASSWORD_RESET_OAUTH_CANDIDATE_${candidate.label}=UNAVAILABLE`);
