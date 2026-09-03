@@ -1,6 +1,11 @@
 const STORAGE_KEY = 'bao-hang-1291-language';
 
 const EN = new Map([
+  ['VẬN HÀNH','OPERATIONS'],
+  ['QUẢN LÝ','MANAGEMENT'],
+  ['HẠ TẦNG','INFRASTRUCTURE'],
+  ['THIẾT LẬP','SETTINGS'],
+  ['Phiên bản ứng dụng','App versions'],
   ['BÁO HÀNG 1291','SHORTAGE REPORT 1291'],
   ['Web nghiệp vụ','Operations Web'],
   ['Tiếng Việt Nam','Vietnamese'],
