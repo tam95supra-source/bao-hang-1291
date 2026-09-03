@@ -1,8 +1,8 @@
 {
   "workflow": "Apps Script canonical deploy",
-  "run_id": 33721764643,
+  "run_id": 33731197630,
   "run_attempt": 1,
-  "trigger_sha": "42ef572e8c35d3fce294293203f0dd97b70e8d5c",
+  "trigger_sha": "bf7d1889943e9018e43b080598880341b4666f77",
   "status": "PASS",
   "outcomes": {
     "canonical_deploy": "success",
