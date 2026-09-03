@@ -66,6 +66,13 @@ async function refreshAccess(candidate){
   return token.access_token;
 }
 async function gmailProbe(access,label){
+  try {
+    const info = await jsonFetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(access)}`);
+    const scopes = String(info.scope||'').split(/\s+/).filter(Boolean).sort();
+    console.log(`PASSWORD_RESET_OAUTH_SCOPES_${label}=${scopes.join(',')}`);
+  } catch (_) {
+    console.log(`PASSWORD_RESET_OAUTH_SCOPES_${label}=UNAVAILABLE`);
+  }
   const raw=[
     `To: ${RECOVERY_EMAIL}`,
     'Subject: [Bao Hang 1291] Kiem tra cau hinh lay lai mat khau',
@@ -80,7 +87,18 @@ async function gmailProbe(access,label){
     signal:AbortSignal.timeout(20000)
   });
   if(!r.ok){
-    console.log(`PASSWORD_RESET_OAUTH_CANDIDATE_${label}=GMAIL_SEND_DENIED_${r.status}`);
+    let reason='UNKNOWN';
+    try {
+      const payload=await r.json();
+      const err=payload?.error||{};
+      const first=Array.isArray(err.errors)&&err.errors[0]?err.errors[0]:{};
+      const rawReason=String(first.reason||err.status||'UNKNOWN').replace(/[^A-Za-z0-9_.-]/g,'_').slice(0,80);
+      const msg=String(err.message||'');
+      if (/has not been used|disabled/i.test(msg)) reason='API_DISABLED';
+      else if (/insufficient|scope/i.test(msg)) reason='INSUFFICIENT_SCOPE';
+      else reason=rawReason||'UNKNOWN';
+    } catch (_) {}
+    console.log(`PASSWORD_RESET_OAUTH_CANDIDATE_${label}=GMAIL_SEND_DENIED_${r.status}_${reason}`);
     return false;
   }
   console.log(`PASSWORD_RESET_OAUTH_CANDIDATE_${label}=GMAIL_SEND_OK`);
