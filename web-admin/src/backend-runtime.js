@@ -27,6 +27,7 @@ async function firebaseRuntime() {
         auth,
         firestore: firestoreModule.getFirestore(app),
         signInWithEmailAndPassword: authModule.signInWithEmailAndPassword,
+        updatePassword: authModule.updatePassword,
         signOut: authModule.signOut,
         doc: firestoreModule.doc,
         onSnapshot: firestoreModule.onSnapshot,
@@ -88,6 +89,18 @@ async function firebasePasswordLogin(body) {
     token_type: 'bearer',
     user: { id: credential.user.uid, email: credential.user.email },
   }
+}
+
+async function firebaseChangePassword(body) {
+  const next = String(body.new_password || '');
+  if (next.length < 8) throw new Error('Mật khẩu mới phải có ít nhất 8 ký tự.');
+  const { auth, updatePassword } = await firebaseRuntime()
+  if (typeof auth.authStateReady === 'function') await auth.authStateReady()
+  if (!auth.currentUser) throw new Error('AUTH_REQUIRED')
+  await updatePassword(auth.currentUser, next)
+  const token = await auth.currentUser.getIdToken(true)
+  realtimeToken = token
+  return { ok: true, access_token: token, refresh_token: auth.currentUser.refreshToken || '' }
 }
 
 async function refreshFirebase(body) {
@@ -242,6 +255,9 @@ async function backendFetchAdapter(input, init = {}) {
       if (grant === 'refresh_token') return jsonResponse(await refreshFirebase(body))
       return jsonResponse({ error: 'UNSUPPORTED_GRANT' }, 400)
     }
+    if (url.pathname === '/auth/change-password') {
+      return jsonResponse(await firebaseChangePassword(parseBody(init)))
+    }
     if (url.pathname === '/auth/logout') {
       const { auth, signOut } = await firebaseRuntime()
       await signOut(auth).catch(() => {})
@@ -253,6 +269,14 @@ async function backendFetchAdapter(input, init = {}) {
       const headers = new Headers(init.headers || {})
       headers.delete('apikey')
       return originalFetch(target, { ...init, headers })
+    }
+    const publicMatch = url.pathname.match(/^\/api\/public-auth\/([^/]+)$/)
+    if (publicMatch) {
+      const action = decodeURIComponent(publicMatch[1])
+      if (!['password-reset-preview','password-reset-request'].includes(action)) {
+        return jsonResponse({ error: `PUBLIC_AUTH_ACTION_UNSUPPORTED:${action}` }, 400)
+      }
+      return worker(action, parseBody(init), { method:'POST', headers:{ 'content-type':'application/json' } })
     }
     const functionMatch = url.pathname.match(/^\/api\/(web-api|api|issue-withdraw|admin-ops)\/([^/]+)$/)
     if (functionMatch) {
@@ -267,7 +291,7 @@ async function backendFetchAdapter(input, init = {}) {
         if (action === 'update-user') return worker('update-user', body, init)
         if (action === 'delete-user') return worker('user-disable', { user_id: body.id || body.user_id }, init)
       }
-      if (['update-user', 'import-users', 'sync-google-sheet', 'staff-sync-now', 'staff-source-status', 'staff-source-configure', 'upload-log', 'download-log', 'user-upsert', 'user-disable'].includes(action)) {
+      if (['update-user', 'import-users', 'sync-google-sheet', 'staff-sync-now', 'staff-source-status', 'staff-source-configure', 'password-reset-mail-capability', 'upload-log', 'download-log', 'user-upsert', 'user-disable'].includes(action)) {
         return worker(action, body, init)
       }
       const response = await neonRpc(action, body, init)
@@ -277,7 +301,9 @@ async function backendFetchAdapter(input, init = {}) {
     return jsonResponse({ error: 'LEGACY_ENDPOINT_RETIRED' }, 410)
   } catch (error) {
     const message = String(error?.code || error?.message || error)
-    const friendly = message.includes('auth/invalid-credential') ? 'Sai mã nhân viên hoặc mật khẩu' : message
+    const friendly = message.includes('auth/invalid-credential') ? 'Sai mã nhân viên hoặc mật khẩu'
+      : message.includes('auth/requires-recent-login') ? 'Phiên đăng nhập đã quá cũ. Vui lòng đăng xuất, đăng nhập lại rồi đổi mật khẩu.'
+      : message
     return jsonResponse({ error: friendly, message: friendly }, 400)
   }
 }
