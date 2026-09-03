@@ -137,41 +137,38 @@ async function responseNeedsAuthRefresh(response) {
   const text = await response.clone().text().catch(() => '');
   return /(^|[^A-Z_])AUTH_REQUIRED([^A-Z_]|$)/.test(text);
 }
-async function api(action, payload = {}, allowAuthRetry = true) {
+async function authenticatedFetch(url, init = {}, allowAuthRetry = true) {
   await refreshSessionIfNeeded(false);
-  const headers = { 'content-type': 'application/json', apikey: BRIDGE_PUBLIC_KEY, authorization: `Bearer ${state.session.access_token}` };
-  if (state.testRole) headers['x-admin-test-role'] = state.testRole;
-  const response = await fetch(`${API_BASE}/${encodeURIComponent(action)}`, { method: 'POST', headers, body: JSON.stringify(payload) });
+  const headers = new Headers(init.headers || {});
+  headers.set('apikey', BRIDGE_PUBLIC_KEY);
+  headers.set('authorization', `Bearer ${state.session.access_token}`);
+  if (state.testRole && !headers.has('x-admin-test-role')) headers.set('x-admin-test-role', state.testRole);
+  const response = await fetch(url, { ...init, headers });
   if (await responseNeedsAuthRefresh(response)) {
     if (allowAuthRetry) {
       try {
         await refreshSessionIfNeeded(true);
-        return api(action, payload, false);
+        return authenticatedFetch(url, init, false);
       } catch (_) {}
     }
     clearSession();
     renderLogin('Phiên đăng nhập cần xác thực lại.');
     throw new Error('Phiên đăng nhập cần xác thực lại.');
   }
-  return parseResponse(response);
+  return response;
 }
-async function issueWithdraw(action, payload = {}, allowAuthRetry = true) {
-  await refreshSessionIfNeeded(false);
-  const headers = { 'content-type': 'application/json', apikey: BRIDGE_PUBLIC_KEY, authorization: `Bearer ${state.session.access_token}` };
-  if (state.testRole) headers['x-admin-test-role'] = state.testRole;
-  const response = await fetch(`${BACKEND_BRIDGE_URL}/api/issue-withdraw/${encodeURIComponent(action)}`, { method: 'POST', headers, body: JSON.stringify(payload) });
-  if (await responseNeedsAuthRefresh(response)) {
-    if (allowAuthRetry) {
-      try {
-        await refreshSessionIfNeeded(true);
-        return issueWithdraw(action, payload, false);
-      } catch (_) {}
-    }
-    clearSession();
-    renderLogin('Phiên đăng nhập cần xác thực lại.');
-    throw new Error('Phiên đăng nhập cần xác thực lại.');
-  }
-  return parseResponse(response);
+window.__BH_AUTH_FETCH__ = authenticatedFetch;
+async function api(action, payload = {}) {
+  return parseResponse(await authenticatedFetch(
+    `${API_BASE}/${encodeURIComponent(action)}`,
+    { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) },
+  ));
+}
+async function issueWithdraw(action, payload = {}) {
+  return parseResponse(await authenticatedFetch(
+    `${BACKEND_BRIDGE_URL}/api/issue-withdraw/${encodeURIComponent(action)}`,
+    { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) },
+  ));
 }
 function setBusy(busy, text = 'Đang xử lý…') {
   const el = $('#busy');

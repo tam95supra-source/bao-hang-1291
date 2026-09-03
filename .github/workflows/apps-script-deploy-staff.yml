@@ -25,6 +25,7 @@ jobs:
       GAS_SCRIPT_ID: ${{ secrets.GAS_SCRIPT_ID }}
       GAS_DEPLOYMENT_ID: ${{ secrets.GAS_DEPLOYMENT_ID }}
       GOOGLE_SHEET_WEBHOOK_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -37,6 +38,12 @@ jobs:
           node ops/apps_script_deploy_staff.mjs
           node ops/apps_script_deploy_worker.mjs
           git diff --check
+
+      - name: Purge history-free inactive staff
+        shell: bash
+        run: |
+          set -euo pipefail
+          node ops/staff_cleanup_orphans.mjs
 
       - name: Commit canonical source normalization
         shell: bash
@@ -58,7 +65,8 @@ jobs:
           set -euo pipefail
           test -s acceptance-evidence/apps-script-deploy.json
           test -s acceptance-evidence/apps-script-worker-deploy.json
-          if grep -RniE 'client_secret|refresh_token|access_token|private_key' acceptance-evidence/apps-script-deploy.json acceptance-evidence/apps-script-worker-deploy.json; then
+          test -s acceptance-evidence/staff-orphan-cleanup.json
+          if grep -RniE 'client_secret|refresh_token|access_token|private_key' acceptance-evidence/apps-script-deploy.json acceptance-evidence/apps-script-worker-deploy.json acceptance-evidence/staff-orphan-cleanup.json; then
             echo SECRET_MATERIAL_DETECTED >&2
             exit 1
           fi
@@ -71,6 +79,7 @@ jobs:
           path: |
             acceptance-evidence/apps-script-deploy.json
             acceptance-evidence/apps-script-worker-deploy.json
+            acceptance-evidence/staff-orphan-cleanup.json
           retention-days: 1
           if-no-files-found: error
 
@@ -84,3 +93,4 @@ jobs:
           echo "APPS_SCRIPT_DEPLOY_ARTIFACT_ID=$ARTIFACT_ID"
           echo "APPS_SCRIPT_STAFF_DEPLOY_ACCEPTANCE=PASS"
           echo "APPS_SCRIPT_WORKER_DEPLOY_ACCEPTANCE=PASS"
+          echo "STAFF_ORPHAN_CLEANUP=PASS"

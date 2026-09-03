@@ -104,6 +104,7 @@ async function request(base, action, payload = {}, allowAuthRetry = true) {
     return request(base, action, payload, false);
   }
   if (!response.ok) throw new Error(authRequired ? 'Phiên đăng nhập cần xác thực lại.' : (data.error || data.message || `Lỗi máy chủ ${response.status}`));
+  if (data?.ok === false && data.error) throw new Error(data.error);
   return data;
 }
 const webApi = (action, payload = {}) => request(WEB_API, action, payload);
@@ -324,9 +325,9 @@ async function renderUsersView() {
   content.dataset.opsRender = 'users';
   if(content.dataset.opsRender!=='users'||!content.querySelector('.ops-users-table'))content.innerHTML = `${pageHeading('Nhân sự & tài khoản', 'Google Sheet là nguồn chính; tài khoản tạo thêm được quản lý riêng và không ghi ngược vào nguồn.', `<span class="ops-source-label">DỮ LIỆU THEO NGÀY · DANH SÁCH NHÂN SỰ</span>`)}<div class="ops-loading">Đang tải nhân sự…</div>`;
   try {
-    const [list, sync, service] = await Promise.all([webApi('list-users'), webApi('staff-sync-status'), webApi('service-metrics')]);
+    const [list, sync] = await Promise.all([webApi('list-users'), webApi('staff-sync-status')]);
     if ($('#content') !== content || content.dataset.opsRender !== 'users') return;
-    const users = list.users || [];
+    const users = (list.users || []).filter((user) => user.active === true);
     const last = sync.runs?.[0];
     const auto = true;
     const interval = 60;
@@ -339,6 +340,14 @@ async function renderUsersView() {
         <span><i class="dot good"></i>Thay đổi trong service: <b>realtime</b></span>
         <span>Google Sheet: <b>${gsheetCount}</b> · Tạo thêm: <b>${manualCount}</b></span>
       </section>
+      ${effectiveRole() === 'ADMIN' ? `<article class="ops-panel ops-staff-source">
+        <div class="ops-panel-title"><div><h3>Nguồn Google Sheet nhân sự</h3><p>Chỉ chuyển nguồn sau khi hệ thống kiểm tra đúng cấu trúc 8 cột hiện hành. Lịch sử báo hàng không bị xóa.</p></div><span id="opsStaffSourceState" class="ops-source-label">ĐANG KIỂM TRA</span></div>
+        <form id="opsStaffSourceForm" class="ops-form-grid">
+          <label class="span">Link Google Sheet<input id="opsStaffSheetUrl" name="sheet_url" type="url" required placeholder="https://docs.google.com/spreadsheets/d/.../edit" autocomplete="off"></label>
+          <label>Tên tab<input id="opsStaffSheetName" name="sheet_name" required autocomplete="off"></label>
+          <div class="ops-form-actions"><button class="primary" type="submit">Kiểm tra & thay nguồn</button><span id="opsStaffSourceMessage"></span></div>
+        </form>
+      </article>` : ''}
       <article class="ops-panel ops-users-panel">
         <div class="ops-panel-title"><div><h3>Danh sách tài khoản</h3><p>Chỉ tài khoản “Tạo thêm” mới có nút Sửa/Xóa. Nhân sự Google Sheet được khóa theo nguồn.</p></div><label class="ops-search">Tìm<input id="opsUserSearch" placeholder="Mã nhân viên hoặc họ tên" value="${escapeHtml(ui.userSearch)}"></label></div>
         <div class="table-wrap"><table class="ops-users-table"><thead><tr><th>Mã nhân viên</th><th>Họ tên</th><th>Quyền</th><th>Nguồn</th><th>Trạng thái</th><th class="ops-action-col">Thao tác</th></tr></thead><tbody id="opsUserRows"></tbody></table></div>
@@ -368,6 +377,35 @@ async function renderUsersView() {
       $$('[data-delete-user]').forEach((button) => button.onclick = () => openDeleteUser(users.find((u) => u.id === button.dataset.deleteUser), async () => { await renderUsersView(); }));
     };
     draw();
+    if (effectiveRole() === 'ADMIN' && $('#opsStaffSourceForm')) {
+      const sourceState = $('#opsStaffSourceState');
+      const sourceMessage = $('#opsStaffSourceMessage');
+      void opsApi('staff-source-status').then((source) => {
+        if ($('#content') !== content || content.dataset.opsRender !== 'users') return;
+        $('#opsStaffSheetUrl').value = source.sheet_url || '';
+        $('#opsStaffSheetName').value = source.sheet_name || '';
+        if (sourceState) sourceState.textContent = source.fallback_only ? 'DỰ PHÒNG 60 PHÚT' : 'ĐANG DÙNG';
+        if (sourceMessage) sourceMessage.textContent = source.last_error ? `Lần gần nhất: ${source.last_error}` : '';
+      }).catch((error) => {
+        if (sourceState) sourceState.textContent = 'KHÔNG ĐỌC ĐƯỢC';
+        if (sourceMessage) { sourceMessage.textContent = error.message; sourceMessage.className = 'bad-text'; }
+      });
+      $('#opsStaffSourceForm').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const sheetUrl = $('#opsStaffSheetUrl').value.trim();
+        const sheetName = $('#opsStaffSheetName').value.trim();
+        if (!confirm('Thay nguồn nhân sự sang Google Sheet/tab này?\n\nNhân sự không còn trong nguồn mới sẽ bị khóa và xóa hẳn nếu chưa từng phát sinh lịch sử. Lịch sử báo hàng cũ vẫn được giữ.')) return;
+        const done = busy('Đang kiểm tra cấu trúc và đồng bộ nguồn nhân sự…');
+        try {
+          const result = await opsApi('staff-source-configure', { sheet_url: sheetUrl, sheet_name: sheetName });
+          toast(`Đã thay nguồn · ${Number(result.eligible_rows || 0)} nhân sự · tạo ${Number(result.created || 0)} · cập nhật ${Number(result.updated || 0)} · loại ${Number(result.deactivated || 0)}.`);
+          await renderUsersView();
+        } catch (error) {
+          if (sourceMessage) { sourceMessage.textContent = error.message; sourceMessage.className = 'bad-text'; }
+          toast(error.message, 'error');
+        } finally { done(); }
+      });
+    }
     const searchInput = $('#opsUserSearch');
     if (searchInput) {
       searchInput.value = ui.userSearch;

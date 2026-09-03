@@ -45,11 +45,15 @@ function issueMarkup(issue) {
 async function api(path, body = {}) {
   const s = session();
   if (!s) throw new Error('AUTH_REQUIRED');
-  const response = await fetch(`${BACKEND}${path}`, {
+  const url = `${BACKEND}${path}`;
+  const init = {
     method: 'POST',
     headers: { 'content-type': 'application/json', apikey: 'compat-public', authorization: `Bearer ${s.access_token}` },
     body: JSON.stringify(body),
-  });
+  };
+  const response = typeof globalThis.__BH_AUTH_FETCH__ === 'function'
+    ? await globalThis.__BH_AUTH_FETCH__(url, init)
+    : await fetch(url, init);
   const text = await response.text();
   let data = {};
   try { data = text ? JSON.parse(text) : {}; } catch { data = { error: text }; }

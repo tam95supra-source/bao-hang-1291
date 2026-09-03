@@ -267,7 +267,7 @@ async function backendFetchAdapter(input, init = {}) {
         if (action === 'update-user') return worker('update-user', body, init)
         if (action === 'delete-user') return worker('user-disable', { user_id: body.id || body.user_id }, init)
       }
-      if (['update-user', 'import-users', 'sync-google-sheet', 'staff-sync-now', 'upload-log', 'download-log', 'user-upsert', 'user-disable'].includes(action)) {
+      if (['update-user', 'import-users', 'sync-google-sheet', 'staff-sync-now', 'staff-source-status', 'staff-source-configure', 'upload-log', 'download-log', 'user-upsert', 'user-disable'].includes(action)) {
         return worker(action, body, init)
       }
       const response = await neonRpc(action, body, init)

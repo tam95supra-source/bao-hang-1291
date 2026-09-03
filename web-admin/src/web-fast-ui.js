@@ -21,6 +21,7 @@ const state = {
   withdrawnLoaded: false,
   withdrawnLoading: false,
   role: '',
+  boardAt: 0,
 };
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -61,9 +62,11 @@ async function api(action, payload = {}) {
   if (testText.includes('Admin Event')) headers['x-admin-test-role'] = 'ADMIN_INVENT';
   else if (testText.includes('Người báo hàng')) headers['x-admin-test-role'] = 'INVENT';
   else if (testText.includes('Picker')) headers['x-admin-test-role'] = 'PICKER';
-  const response = await fetch(`${API}/${encodeURIComponent(action)}`, {
-    method: 'POST', headers, body: JSON.stringify(payload),
-  });
+  const url = `${API}/${encodeURIComponent(action)}`;
+  const init = { method: 'POST', headers, body: JSON.stringify(payload) };
+  const response = typeof globalThis.__BH_AUTH_FETCH__ === 'function'
+    ? await globalThis.__BH_AUTH_FETCH__(url, init)
+    : await fetch(url, init);
   const text = await response.text();
   let data = {};
   try { data = text ? JSON.parse(text) : {}; } catch { data = { error: text }; }
@@ -211,7 +214,7 @@ function reconcileList() {
 }
 
 function currentIssue() {
-  return allRows().find((x) => String(x.id) === String(state.selectedId)) || null;
+  return rowsForBucket().find((x) => String(x.id) === String(state.selectedId)) || null;
 }
 
 function renderDetail() {
@@ -224,7 +227,8 @@ function renderDetail() {
   }
   const bucket = state.bucket;
   const manager = ['ADMIN','ADMIN_INVENT'].includes(state.role);
-  const active = !['recent','withdrawn'].includes(bucket);
+  const activeStatus = ['OPEN','CLAIMED','SEARCHING','REPLENISHING'].includes(issue.status);
+  const active = activeStatus && !['recent','withdrawn'].includes(bucket);
   const canAct = active && ['ADMIN','ADMIN_INVENT','INVENT'].includes(state.role);
   detail.innerHTML = `<div class="fast-detail-head"><div><span>SKU</span><h3>${esc(issue.sku)}</h3></div><b class="fast-status ${tone(issue.status)}">${esc(statusLabel(issue.status))}</b></div>
     <p class="fast-detail-name">${esc(issue.product_name || 'Chưa có tên SKU')}</p>
@@ -299,7 +303,7 @@ function reconcile() {
   ensureShell();
   updateCounts();
   const rows = rowsForBucket();
-  if (state.selectedId && !allRows().some((r) => String(r.id) === String(state.selectedId))) state.selectedId = '';
+  if (state.selectedId && !rows.some((r) => String(r.id) === String(state.selectedId))) state.selectedId = '';
   if (!state.selectedId && rows.length) state.selectedId = String(rows[0].id || '');
   reconcileList();
   reconcileSelection();
@@ -326,12 +330,18 @@ async function loadWithdrawn() {
 }
 
 async function loadBoard(force = false) {
+  if (!force && state.board && Date.now() - state.boardAt < 5000) {
+    ensureShell();
+    reconcile();
+    return;
+  }
   if (state.loading) { state.queued = true; return; }
   state.loading = true;
   ensureShell();
   try {
     const main = await api('issue-board');
     state.board = { ...main, withdrawn: state.board?.withdrawn || [], realtime_seq: Number(main.realtime_seq || 0) };
+    state.boardAt = Date.now();
     if (!force && state.bucket === 'claimed' && !(state.board.claimed || []).length && (state.board.open || []).length) state.bucket = 'open';
     $$('#fastEvents [data-fast-bucket]').forEach((b) => b.classList.toggle('active', b.dataset.fastBucket === state.bucket));
     reconcile();

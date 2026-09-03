@@ -24,7 +24,8 @@ function staffSourceBridgeReceive_(body) {
   if (action !== 'staff-source-ping' && action !== 'staff-source-structure-ping') {
     throw new Error('STAFF_BRIDGE_ACTION_INVALID');
   }
-  if (String(body.source_id || '') !== BH_STAFF_BRIDGE.SOURCE_ID || String(body.source_tab || '') !== BH_STAFF_BRIDGE.SOURCE_TAB) {
+  const configuredSource = staffSourceConfig_();
+  if (String(body.source_id || '') !== configuredSource.sheetId || String(body.source_tab || '') !== configuredSource.sheetName) {
     throw new Error('STAFF_BRIDGE_SOURCE_MISMATCH');
   }
 
@@ -118,7 +119,7 @@ function staffSourceBridgeApplyRows_(body) {
   }
 
   const sheet = staffSourceBridgeSheet_();
-  const values = sheet.getRange(rowStart, 1, rowEnd - rowStart + 1, 6).getDisplayValues();
+  const values = sheet.getRange(rowStart, 1, rowEnd - rowStart + 1, 8).getDisplayValues();
   const oldCodes = body.old_codes && typeof body.old_codes === 'object' && !Array.isArray(body.old_codes) ? body.old_codes : {};
   const items = [];
   const candidateCodes = {};
@@ -256,6 +257,7 @@ function staffSourceBridgeDeactivateProfile_(profile, token, reason) {
 }
 
 function staffSourceBridgeParseRow_(row) {
+  if (String(row[6] || '').trim() !== '1291' || String(row[7] || '').trim().toUpperCase() !== 'HY1') return null;
   const code = String(row[0] || '').trim();
   const name = String(row[1] || '').trim();
   if (!code || !name) return null;
@@ -279,30 +281,17 @@ function staffSourceBridgeRole_(position, department, code) {
 }
 
 function staffSourceBridgeSheet_() {
-  const ss = SpreadsheetApp.openById(BH_STAFF_BRIDGE.SOURCE_ID);
-  if (ss.getId() !== BH_STAFF_BRIDGE.SOURCE_ID) throw new Error('STAFF_BRIDGE_SHEET_ID_MISMATCH');
-  const sheet = ss.getSheetByName(BH_STAFF_BRIDGE.SOURCE_TAB);
+  const source=staffSourceConfig_();
+  const ss = SpreadsheetApp.openById(source.sheetId);
+  if (ss.getId() !== source.sheetId) throw new Error('STAFF_BRIDGE_SHEET_ID_MISMATCH');
+  const sheet = ss.getSheetByName(source.sheetName);
   if (!sheet) throw new Error('STAFF_BRIDGE_SHEET_MISSING');
   return sheet;
 }
 
 function staffSourceBridgeReadFullSource_() {
-  const sheet = staffSourceBridgeSheet_();
-  const lastRow = Math.max(1, sheet.getLastRow());
-  const values = lastRow >= 2 ? sheet.getRange(2,1,lastRow-1,6).getDisplayValues() : [];
-  const byCode = {};
-  values.forEach(function(row) {
-    const item = staffSourceBridgeParseRow_(row);
-    if (!item) return;
-    const key = item.employee_code.toLowerCase();
-    if (byCode[key]) throw new Error('STAFF_BRIDGE_DUPLICATE_CODE:' + item.employee_code);
-    byCode[key] = item;
-  });
-  const staff = Object.keys(byCode).sort().map(function(k){ return byCode[k]; });
-  if (staff.length < BH_STAFF_BRIDGE.MIN_FULL_SOURCE_ROWS || staff.length > BH_STAFF_BRIDGE.MAX_FULL_SOURCE_ROWS) {
-    throw new Error('STAFF_BRIDGE_SOURCE_COUNT_GUARD:' + staff.length);
-  }
-  return staff;
+  const source=staffSourceConfig_();
+  return readStaffSource_(source.sheetId, source.sheetName).staff;
 }
 
 function staffSourceBridgeFlush_(token) {
@@ -326,11 +315,12 @@ function staffSourceBridgeRemoveLegacyWatchers_() {
 
 function getStaffSourceBridgeReceiverStatus() {
   const props = PropertiesService.getScriptProperties();
+  const source=staffSourceConfig_();
   return {
     ok:true,
     mode:'SOURCE_DRIVEN_DELTA_V1',
-    source_id:BH_STAFF_BRIDGE.SOURCE_ID,
-    source_tab:BH_STAFF_BRIDGE.SOURCE_TAB,
+    source_id:source.sheetId,
+    source_tab:source.sheetName,
     last_ok:props.getProperty('LAST_STAFF_SOURCE_BRIDGE_OK') || '',
     last_error:props.getProperty('LAST_STAFF_SOURCE_BRIDGE_ERROR') || ''
   };

@@ -72,7 +72,10 @@ jobs:
         run: |
           set -euo pipefail
           cp google-apps-script/DEPLOY_NEON.gs "$RUNNER_TEMP/deploy-neon.js"
+          cp google-apps-script/STAFF_SOURCE_BRIDGE_RECEIVER.gs "$RUNNER_TEMP/staff-bridge.js"
           node --check "$RUNNER_TEMP/deploy-neon.js"
+          node --check "$RUNNER_TEMP/staff-bridge.js"
+          node --check ops/staff_cleanup_orphans.mjs
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           import path from 'node:path';
@@ -114,6 +117,16 @@ jobs:
           const matches = [...source.matchAll(invalid)].map((m) => m[0]);
           if (matches.length) throw new Error('WEB_SINGLE_SELECTOR_FOREACH=' + JSON.stringify(matches));
           console.log('WEB_DOM_COLLECTION_HELPER_GATE=PASS');
+          NODE
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const main = fs.readFileSync('web-admin/src/main.js', 'utf8');
+          const fast = fs.readFileSync('web-admin/src/web-fast-ui.js', 'utf8');
+          const ops = fs.readFileSync('web-admin/src/ops-console.js', 'utf8');
+          if (!main.includes('window.__BH_AUTH_FETCH__ = authenticatedFetch')) throw new Error('WEB_AUTH_REFRESH_HELPER_MISSING');
+          if (!fast.includes('return rowsForBucket().find') || !fast.includes('const activeStatus =')) throw new Error('WEB_STALE_SKU_GUARD_MISSING');
+          if (!ops.includes('opsStaffSourceForm') || !ops.includes('filter((user) => user.active === true)')) throw new Error('WEB_CURRENT_STAFF_SOURCE_UI_MISSING');
+          console.log('WEB_AUTH_STALE_SKU_STAFF_GATE=PASS');
           NODE
           echo 'APPS_SCRIPT_SYNTAX_GATE=PASS'
 

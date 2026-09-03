@@ -34,7 +34,8 @@ async function refreshSessionIfNeeded() {
 }
 async function request(base, action, payload={}) {
   const session = await refreshSessionIfNeeded(); const headers={'content-type':'application/json',apikey:BRIDGE_PUBLIC_KEY,authorization:`Bearer ${session.access_token}`}; const testRole=detectedTestRole(); if(testRole)headers['x-admin-test-role']=testRole;
-  const response=await fetch(`${base}/${encodeURIComponent(action)}`,{method:'POST',headers,body:JSON.stringify(payload)}); const text=await response.text(); let data={}; if(text){try{data=JSON.parse(text)}catch{data={error:text}}} if(!response.ok)throw new Error(data.error||data.message||`Lỗi máy chủ ${response.status}`); return data;
+  const url=`${base}/${encodeURIComponent(action)}`,init={method:'POST',headers,body:JSON.stringify(payload)};
+  const response=typeof globalThis.__BH_AUTH_FETCH__==='function'?await globalThis.__BH_AUTH_FETCH__(url,init):await fetch(url,init); const text=await response.text(); let data={}; if(text){try{data=JSON.parse(text)}catch{data={error:text}}} if(!response.ok)throw new Error(data.error||data.message||`Lỗi máy chủ ${response.status}`); return data;
 }
 const webApi=(action,payload={})=>request(WEB_API,action,payload); const opsApi=(action,payload={})=>request(ADMIN_OPS,action,payload); const withdrawApi=(action,payload={})=>request(ISSUE_WITHDRAW,action,payload);
 function setBusy(active,text='Đang xử lý…'){const o=$('#busy');if(!o)return;o.hidden=!active;const l=$('#busyText');if(l)l.textContent=text;}
