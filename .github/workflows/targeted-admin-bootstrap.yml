@@ -24,6 +24,7 @@ jobs:
     timeout-minutes: 5
     env:
       NEON_DATA_API: https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1
+      APPS_SCRIPT_WORKER_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v6
         with:
