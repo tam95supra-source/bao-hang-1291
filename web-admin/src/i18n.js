@@ -384,12 +384,55 @@ const EN = new Map([
   
 ]);
 
+const PHRASE_EN = new Map([
+  ['Báo thiếu SKU','Report shortage for SKU'],
+  ['Thu hồi báo thiếu SKU','Withdraw shortage report for SKU'],
+  ['Điều phối SKU','Reassign SKU'],
+  ['Xác nhận SKU','Confirm SKU'],
+  ['Lý do điều phối lại','Reassignment reason'],
+  ['Nhập số thứ tự người nhận','Enter the assignee number'],
+  ['Đã ghi nhận báo thiếu SKU','Shortage report recorded for SKU'],
+  ['Đã thu hồi SKU','Shortage report withdrawn for SKU'],
+  ['Đã chuyển sang ĐÃ CÓ HÀNG','changed to ITEM AVAILABLE'],
+  ['Báo lúc','Reported at'],
+  ['Thu hồi lúc','Withdrawn at'],
+  ['Cập nhật lúc','Updated at'],
+  ['Phụ trách:','Assigned:'],
+  ['Thao tác:','Handled by:'],
+  ['Người xử lý:','Handler:'],
+  ['Nhà thầu:','Contractor:'],
+  ['Lần gần nhất:','Last run:'],
+  ['Google Sheet:','Google Sheet:'],
+  ['Nhân sự:','Staff:'],
+  ['Phản hồi server:','Server response:'],
+  ['Cập nhật báo thiếu:','Shortage updates:'],
+  ['Đang xử lý','In progress'],
+  ['Đã có hàng','Available'],
+  ['Đã bỏ qua','Skipped'],
+  ['Đã thu hồi','Withdrawn'],
+  ['Được phép bỏ qua','Skip allowed'],
+  ['Đã tìm thấy hàng','Item found'],
+  ['gói miễn phí','free tier'],
+  ['mục đang chờ','pending items'],
+  ['tài khoản','accounts'],
+  ['đợt báo thiếu','shortage requests'],
+  ['lượt báo thiếu','shortage reports'],
+  ['lượt báo','reports'],
+  ['nhân sự','staff'],
+  ['người','people'],
+  ['yêu cầu','requests'],
+]);
+
 const REGEX = [
   [/\b(\d+) phút\b/g, '$1 min'],
   [/\b(\d+) giờ\b/g, '$1 h'],
   [/\b(\d+) lượt\b/g, '$1 reports'],
   [/\b(\d+) người\b/g, '$1 people'],
   [/\b(\d+) yêu cầu\b/g, '$1 requests'],
+  [/\b(\d+) đợt báo thiếu\b/g, '$1 shortage requests'],
+  [/\b(\d+) lượt báo thiếu\b/g, '$1 shortage reports'],
+  [/\b(\d+) tài khoản\b/g, '$1 accounts'],
+  [/\b(\d+) mục đang chờ\b/g, '$1 pending items'],
 ];
 
 let language = (() => { try { return localStorage.getItem(STORAGE_KEY) === 'en' ? 'en' : 'vi'; } catch { return 'vi'; } })();
@@ -402,12 +445,17 @@ export function getLanguage() { return language; }
 export function getLocale() { return language === 'en' ? 'en-US' : 'vi-VN'; }
 
 export function translateText(value) {
-  let out = String(value ?? '');
-  if (language !== 'en' || !out.trim()) return out;
-  const entries = [...EN.entries()].sort((a,b) => b[0].length - a[0].length);
-  for (const [vi,en] of entries) out = out.split(vi).join(en);
+  const source = String(value ?? '');
+  if (language !== 'en' || !source.trim()) return source;
+  const leading = source.match(/^\s*/)?.[0] || '';
+  const trailing = source.match(/\s*$/)?.[0] || '';
+  const core = source.trim();
+  if (EN.has(core)) return leading + EN.get(core) + trailing;
+  let out = core;
+  const phrases = [...PHRASE_EN.entries()].sort((a,b) => b[0].length - a[0].length);
+  for (const [vi,en] of phrases) out = out.split(vi).join(en);
   for (const [re,repl] of REGEX) out = out.replace(re,repl);
-  return out;
+  return leading + out + trailing;
 }
 
 export function t(vi, en = '') {
