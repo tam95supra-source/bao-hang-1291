@@ -1,4 +1,5 @@
 import './web-fast-ui.css';
+import { getLocale } from './i18n.js';
 
 const SESSION_KEY = 'bao-hang-1291-web-session';
 const BACKEND = 'https://backend.bao-hang-1291.invalid';
@@ -45,7 +46,8 @@ function session() {
 
 function applyRoleState() {
   const s = session();
-  state.role = s?.profile?.role || '';
+  const testRole = String(document.body.dataset.testRole || '').trim().toUpperCase();
+  state.role = ['ADMIN_INVENT','INVENT','PICKER'].includes(testRole) ? testRole : (s?.profile?.role || '');
   if (state.role) document.body.dataset.role = state.role;
   else delete document.body.dataset.role;
 }
@@ -66,10 +68,8 @@ async function api(action, payload = {}) {
     apikey: 'compat-public',
     authorization: `Bearer ${s.access_token}`,
   };
-  const testText = $('.test-banner strong')?.textContent || '';
-  if (testText.includes('Admin Event')) headers['x-admin-test-role'] = 'ADMIN_INVENT';
-  else if (testText.includes('Người báo hàng')) headers['x-admin-test-role'] = 'INVENT';
-  else if (testText.includes('Picker')) headers['x-admin-test-role'] = 'PICKER';
+  const testRole = String(document.body.dataset.testRole || '').trim().toUpperCase();
+  if (['ADMIN_INVENT','INVENT','PICKER'].includes(testRole)) headers['x-admin-test-role'] = testRole;
   const url = `${API}/${encodeURIComponent(action)}`;
   const init = { method: 'POST', headers, body: JSON.stringify(payload) };
   const response = typeof globalThis.__BH_AUTH_FETCH__ === 'function'
@@ -86,7 +86,7 @@ function fmtTime(value) {
   if (!value) return '—';
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return String(value);
-  return d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false });
+  return d.toLocaleTimeString(getLocale(), { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
 function age(value) {
@@ -101,7 +101,7 @@ function statusLabel(status) {
   return ({
     OPEN: 'Chờ nhận', CLAIMED: 'Đang xử lý', SEARCHING: 'Đang xử lý',
     REPLENISHING: 'Đang xử lý', AVAILABLE: 'Đã có hàng',
-    SKIP_ALLOWED: 'Cho phép SKIP', CLOSED: 'Đã đóng', WITHDRAWN: 'Đã thu hồi',
+    SKIP_ALLOWED: 'Cho phép bỏ qua', CLOSED: 'Đã đóng', WITHDRAWN: 'Đã thu hồi',
   })[status] || status || '—';
 }
 
@@ -239,6 +239,9 @@ function renderDetail() {
   const activeStatus = ['OPEN','CLAIMED','SEARCHING','REPLENISHING'].includes(issue.status);
   const active = activeStatus && !['recent','withdrawn'].includes(bucket);
   const canAct = active && ['ADMIN','ADMIN_INVENT','INVENT'].includes(state.role);
+  const currentUserId = session()?.profile?.id || '';
+  const canRestore = issue.status === 'SKIP_ALLOWED' && bucket === 'recent' &&
+    (['ADMIN','ADMIN_INVENT'].includes(state.role) || (state.role === 'INVENT' && String(issue.assigned_id || '') === String(currentUserId)));
   detail.innerHTML = `<div class="fast-detail-head"><div><span>SKU</span><h3>${esc(issue.sku)}</h3></div><b class="fast-status ${tone(issue.status)}">${esc(statusLabel(issue.status))}</b></div>
     <p class="fast-detail-name">${esc(issue.product_name || 'Chưa có tên SKU')}</p>
     <dl class="fast-facts">
@@ -250,7 +253,8 @@ function renderDetail() {
     ${issue.recurrence_30m ? '<div class="fast-warning">SKU báo lại trong vòng 30 phút.</div>' : ''}
     <div class="fast-actions">
       ${active && issue.status === 'OPEN' ? `<button class="secondary" data-fast-action="claim" data-id="${esc(issue.id)}">Nhận xử lý</button>` : ''}
-      ${canAct ? `<button class="primary" data-fast-action="available" data-id="${esc(issue.id)}" data-sku="${esc(issue.sku)}">Có hàng</button><button class="danger" data-fast-action="skip" data-id="${esc(issue.id)}" data-sku="${esc(issue.sku)}">Cho SKIP</button>` : ''}
+      ${canAct ? `<button class="primary" data-fast-action="available" data-id="${esc(issue.id)}" data-sku="${esc(issue.sku)}">Có hàng</button><button class="danger" data-fast-action="skip" data-id="${esc(issue.id)}" data-sku="${esc(issue.sku)}">Cho phép bỏ qua</button>` : ''}
+      ${canRestore ? `<button class="primary" data-fast-action="found" data-id="${esc(issue.id)}" data-sku="${esc(issue.sku)}">ĐÃ TÌM THẤY HÀNG</button>` : ''}
       ${manager && active ? `<button class="secondary" data-fast-action="reassign" data-id="${esc(issue.id)}" data-sku="${esc(issue.sku)}">Điều phối lại</button>` : ''}
     </div>
     <div class="fast-sync-state" id="fastSyncState" hidden></div>`;
@@ -272,14 +276,16 @@ async function handleDetailAction(event) {
   const sku = button.dataset.sku || '';
   try {
     if (action === 'skip') {
-      if (!confirm(`Xác nhận không tìm thấy SKU ${sku} và CHO PHÉP SKIP?`)) return;
-      if (!confirm(`XÁC NHẬN LẦN 2\nCho phép SKIP SKU ${sku}?`)) return;
+      if (!confirm(`Xác nhận không tìm thấy SKU ${sku} và CHO PHÉP BỎ QUA?`)) return;
+      if (!confirm(`XÁC NHẬN LẦN 2\nCho phép bỏ qua SKU ${sku}?`)) return;
     }
     if (action === 'available' && !confirm(`Xác nhận SKU ${sku} đã có hàng/châm bù?`)) return;
+    if (action === 'found' && !confirm(`SKU ${sku} trước đó đã được cho phép bỏ qua. Xác nhận hiện đã tìm thấy hàng và báo lại cho người lấy hàng?`)) return;
     setSync('Đang đồng bộ…');
     if (action === 'claim') await api('claim-issue', { issue_id: id, client_request_id: crypto.randomUUID() });
     if (action === 'available') await api('update-issue', { issue_id: id, action: 'AVAILABLE', client_request_id: crypto.randomUUID() });
     if (action === 'skip') await api('update-issue', { issue_id: id, action: 'NOT_FOUND', client_request_id: crypto.randomUUID() });
+    if (action === 'found') await api('restore-skipped', { issue_id: id, reason: 'Đã tìm thấy hàng sau khi trước đó cho phép bỏ qua' });
     if (action === 'reassign') {
       const result = await api('list-users');
       const users = (result.users || []).filter((u) => ['INVENT','ADMIN_INVENT'].includes(u.role) && u.active);

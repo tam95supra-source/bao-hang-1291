@@ -15,6 +15,7 @@ const BH_STAFF_SHEET_ID = '1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78';
 const BH_STAFF_SHEET_NAME = 'DANH SÁCH NHÂN SỰ';
 const BH_PROTECTED_ADMIN_CODE = '6281280';
 const BH_LOG_FOLDER_ID = '1xB_h0A1Z_AKfX3TgnQyGgl7fM8qkANfs';
+const BH_WEB_LOG_RETENTION_DAYS = 14;
 const BH_EVENT_HEADERS = ['Mã sự kiện','Thời gian','Loại sự kiện','Ticket ID','SKU','Tên sản phẩm','Trạng thái','Số lượt báo','Người báo/Actor ID','Dữ liệu JSON'];
 const BH_ISSUE_HEADERS = ['Ticket ID','SKU','Tên sản phẩm','Trạng thái','Số lượt báo','Báo lần đầu','Cập nhật cuối','Invent xử lý','Số lần mở lại'];
 const BH_USER_HEADERS = ['Mã nhân viên','Họ tên','Nhà thầu','Vai trò','Trạng thái','Cập nhật cuối'];
@@ -74,6 +75,9 @@ function doPost(e) {
     }
     if (action === 'upload-log') return json_(uploadLog_(body));
     if (action === 'download-log') return json_(downloadLog_(body));
+    if (action === 'upload-web-log') return json_(uploadWebLog_(body));
+    if (action === 'list-web-logs') return json_(listWebLogs_(body));
+    if (action === 'download-web-log') return json_(downloadWebLog_(body));
     if (action === 'user-upsert' || action === 'update-user') {
       if (action === 'update-user') body.user = Object.assign({}, body);
       return json_(userUpsert_(body));
@@ -908,6 +912,98 @@ function downloadLog_(body) {
   if(bytes.length>2097152)throw new Error('LOG_SIZE_INVALID');
   if(sha256HexBytes_(bytes)!==String(meta.sha256||'').toLowerCase())throw new Error('LOG_SHA_MISMATCH');
   return {ok:true,id:String(meta.id),filename:file.getName(),mime_type:'application/gzip',gzip_base64:Utilities.base64Encode(bytes)};
+}
+
+function sanitizeWebLogValue_(value, depth) {
+  if (depth > 5) return '[MAX_DEPTH]';
+  if (value === null || value === undefined) return null;
+  if (Array.isArray(value)) return value.slice(0,50).map(function(v){return sanitizeWebLogValue_(v,depth+1);});
+  if (typeof value === 'object') {
+    const out = {};
+    Object.keys(value).slice(0,80).forEach(function(key){
+      out[key] = /token|password|secret|private.?key|authorization/i.test(key) ? '[REDACTED]' : sanitizeWebLogValue_(value[key],depth+1);
+    });
+    return out;
+  }
+  if (typeof value === 'string') {
+    return value
+      .replace(/Bearer\s+[A-Za-z0-9._~-]+/gi,'Bearer [REDACTED]')
+      .replace(/"(access_token|refresh_token|id_token|password|private_key|client_secret)"\s*:\s*"[^"]*"/gi,'"$1":"[REDACTED]"')
+      .slice(0,4000);
+  }
+  return value;
+}
+
+function uploadWebLog_(body) {
+  const idToken=String(body.id_token||'');
+  const caller=requireUser_(idToken,null);
+  const events=Array.isArray(body.events)?body.events:[];
+  if(!events.length||events.length>200)throw new Error('WEB_LOG_BATCH_INVALID');
+  const safeSession=String(body.session_id||'').replace(/[^a-zA-Z0-9._-]/g,'-').slice(0,80)||'session';
+  const safeCode=String(caller.profile.employee_code||'user').replace(/[^a-zA-Z0-9._-]/g,'-').slice(0,60);
+  const receivedAt=new Date().toISOString();
+  const rows=events.map(function(event){
+    const safe=sanitizeWebLogValue_(event,0)||{};
+    safe.server_received_at=receivedAt;
+    safe.actor_employee_code=safeCode;
+    safe.actor_role=String(caller.profile.role||'PICKER');
+    return JSON.stringify(safe);
+  });
+  const text=rows.join('\n')+'\n';
+  const raw=Utilities.newBlob(text,'application/x-ndjson');
+  if(raw.getBytes().length>524288)throw new Error('WEB_LOG_BATCH_TOO_LARGE');
+  const name='web_'+safeCode+'_'+safeSession+'_'+Date.now()+'_'+Utilities.getUuid()+'.jsonl.gz';
+  const gzip=Utilities.gzip(raw,name);
+  const file=getLogFolder_().createFile(gzip);
+  cleanupWebLogs_();
+  return {ok:true,file_id:file.getId(),file_name:file.getName(),compressed_bytes:file.getSize(),event_count:events.length};
+}
+
+function listWebLogs_(body) {
+  requireUser_(String(body.id_token||''),['ADMIN','ADMIN_INVENT']);
+  const files=getLogFolder_().getFiles();
+  const rows=[];
+  while(files.hasNext()){
+    const file=files.next();
+    const name=file.getName();
+    if(name.indexOf('web_')!==0||name.slice(-9)!=='.jsonl.gz')continue;
+    rows.push({id:file.getId(),file_name:name,created_at:file.getDateCreated().toISOString(),updated_at:file.getLastUpdated().toISOString(),compressed_bytes:file.getSize()});
+  }
+  rows.sort(function(a,b){return String(b.created_at).localeCompare(String(a.created_at));});
+  return {ok:true,logs:rows.slice(0,100),retention_days:BH_WEB_LOG_RETENTION_DAYS};
+}
+
+function downloadWebLog_(body) {
+  requireUser_(String(body.id_token||''),['ADMIN','ADMIN_INVENT']);
+  const id=String(body.id||'').trim();
+  if(!/^[A-Za-z0-9_-]{10,200}$/.test(id))throw new Error('WEB_LOG_ID_INVALID');
+  const file=DriveApp.getFileById(id);
+  if(file.getName().indexOf('web_')!==0||file.getName().slice(-9)!=='.jsonl.gz')throw new Error('WEB_LOG_FILE_INVALID');
+  let inFolder=false;
+  const parents=file.getParents();
+  while(parents.hasNext()){if(parents.next().getId()===BH_LOG_FOLDER_ID){inFolder=true;break;}}
+  if(!inFolder)throw new Error('WEB_LOG_FOLDER_MISMATCH');
+  const bytes=file.getBlob().getBytes();
+  if(bytes.length>2097152)throw new Error('WEB_LOG_SIZE_INVALID');
+  return {ok:true,id:id,file_name:file.getName(),mime_type:'application/gzip',gzip_base64:Utilities.base64Encode(bytes)};
+}
+
+function cleanupWebLogs_() {
+  const props=PropertiesService.getScriptProperties();
+  const now=Date.now();
+  const last=Number(props.getProperty('LAST_WEB_LOG_CLEANUP_MS')||0);
+  if(now-last<21600000)return;
+  const cutoff=now-BH_WEB_LOG_RETENTION_DAYS*86400000;
+  const files=getLogFolder_().getFiles();
+  let removed=0;
+  while(files.hasNext()){
+    const file=files.next();
+    if(file.getName().indexOf('web_')===0&&file.getDateCreated().getTime()<cutoff){
+      try{file.setTrashed(true);removed++;}catch(ignore){}
+    }
+  }
+  props.setProperty('LAST_WEB_LOG_CLEANUP_MS',String(now));
+  props.setProperty('LAST_WEB_LOG_CLEANUP_REMOVED',String(removed));
 }
 
 function requireUser_(idToken, allowedRoles) {

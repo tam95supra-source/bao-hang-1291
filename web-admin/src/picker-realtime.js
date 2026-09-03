@@ -1,3 +1,4 @@
+import { getLocale } from './i18n.js';
 import { getApps, initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore, doc, onSnapshot } from 'firebase/firestore';
@@ -31,7 +32,7 @@ function esc(value) {
 function fmt(value) {
   if (!value) return '—';
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('vi-VN', { hour12: false });
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString(getLocale(), { hour12: false });
 }
 
 function statusLabel(status) {
