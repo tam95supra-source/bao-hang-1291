@@ -23,7 +23,7 @@ function candidates(source){
     const s=String(value||'').replace(/\s+/g,' ').trim();
     if(!s||!vi.test(s)||keys.has(s))return;
     if(s.includes(').replace(/')||s.includes('RegExp')||s.includes('Regex('))return;
-    if(/[{}]/.test(s))return;
+    if(/[<>{}]/.test(s))return;
     out.add(s);
   };
   for(const m of source.matchAll(/>([^<>{}\n]{1,260})</g))add(m[1]);
