@@ -136,11 +136,11 @@ jobs:
           NODE
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const source = fs.readFileSync('web-admin/src/main.js', 'utf8');
           const invalid = /(?<!\$)\$\([^\n;]*\)\.forEach\s*\(/g;
-          const matches = [...source.matchAll(invalid)].map((m) => m[0]);
+          const files = ['web-admin/src/main.js','web-admin/src/web-fast-ui.js','web-admin/src/ops-console.js','web-admin/src/warehouse-ui-v2.js'];
+          const matches = files.flatMap((file) => [...fs.readFileSync(file, 'utf8').matchAll(invalid)].map((m) => file + ':' + m[0]));
           if (matches.length) throw new Error('WEB_SINGLE_SELECTOR_FOREACH=' + JSON.stringify(matches));
-          console.log('WEB_DOM_COLLECTION_HELPER_GATE=PASS');
+          console.log('WEB_DOM_COLLECTION_HELPER_GATE=PASS files=' + files.length);
           NODE
           node --input-type=module <<'NODE'
           import fs from 'node:fs';

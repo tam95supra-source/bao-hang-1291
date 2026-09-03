@@ -357,7 +357,7 @@ async function loadBoard(force = false) {
     state.board = { ...main, withdrawn: state.board?.withdrawn || [], realtime_seq: Number(main.realtime_seq || 0) };
     state.boardAt = Date.now();
     if (!force && state.bucket === 'claimed' && !(state.board.claimed || []).length && (state.board.open || []).length) state.bucket = 'open';
-    $('#fastEvents [data-fast-bucket]').forEach((b) => b.classList.toggle('active', b.dataset.fastBucket === state.bucket));
+    document.querySelectorAll('#fastEvents [data-fast-bucket]').forEach((b) => b.classList.toggle('active', b.dataset.fastBucket === state.bucket));
     reconcile();
     if (state.bucket === 'withdrawn') void loadWithdrawn();
   } catch (error) {
