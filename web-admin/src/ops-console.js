@@ -302,7 +302,9 @@ async function renderOverviewView() {
       </div>`;
     updateClock();
   } catch (error) {
-    content.innerHTML = `${pageHeading('Tổng quan hôm nay', 'Trạng thái vận hành hiện tại.')}<div class="message" data-type="error">${escapeHtml(error.message)}</div>`;
+    if ($('#content') === content && content.dataset.opsRender === 'overview') {
+      content.innerHTML = `${pageHeading('Tổng quan hôm nay', 'Trạng thái vận hành hiện tại.')}<div class="message" data-type="error">${escapeHtml(error.message)}</div>`;
+    }
   }
 }
 
@@ -435,7 +437,9 @@ async function renderUsersView() {
       finally { done(); }
     });
   } catch (error) {
-    content.innerHTML = `${pageHeading('Nhân sự & tài khoản')}<div class="message" data-type="error">${escapeHtml(error.message)}</div>`;
+    if ($('#content') === content && content.dataset.opsRender === 'users') {
+      content.innerHTML = `${pageHeading('Nhân sự & tài khoản')}<div class="message" data-type="error">${escapeHtml(error.message)}</div>`;
+    }
   }
 }
 function openEditUser(user, after) {
@@ -515,7 +519,9 @@ async function renderTimingView() {
       finally { done(); }
     });
   } catch (error) {
-    content.innerHTML = `${pageHeading('Thời gian nghiệp vụ')}<div class="message" data-type="error">${escapeHtml(error.message)}</div>`;
+    if ($('#content') === content && content.dataset.opsRender === 'timing') {
+      content.innerHTML = `${pageHeading('Thời gian nghiệp vụ')}<div class="message" data-type="error">${escapeHtml(error.message)}</div>`;
+    }
   }
 }
 
@@ -569,7 +575,9 @@ async function renderServerView() {
         </div></article>
       </div>`;
   } catch (error) {
-    content.innerHTML = `${pageHeading('Hạ tầng & chi phí')}<div class="message" data-type="error">${escapeHtml(error.message)}</div>`;
+    if ($('#content') === content && content.dataset.opsRender === 'server') {
+      content.innerHTML = `${pageHeading('Hạ tầng & chi phí')}<div class="message" data-type="error">${escapeHtml(error.message)}</div>`;
+    }
   }
 }
 
