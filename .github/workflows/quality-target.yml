@@ -67,6 +67,14 @@ jobs:
           npm --prefix web-admin install --ignore-scripts --no-audit --no-fund --no-package-lock
           npm --prefix web-admin run build
 
+      - name: Verify canonical Web shell contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/validate-web-shell-consistency.cjs
+          node --check scripts/web-shell-consistency-e2e.cjs
+          node --check scripts/web-shell-cold-goto-shim.cjs
+
       - name: Verify Apps Script syntax and Web initial JS budget
         shell: bash
         run: |

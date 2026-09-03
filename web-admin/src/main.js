@@ -350,9 +350,41 @@ function openChangePassword() {
 }
 
 function tabsForRole(currentRole) {
-  if(currentRole==='ADMIN')return [['overview','Tổng quan'],['events','Sự kiện'],['sku','Danh mục SKU'],['reports','Báo cáo'],['users','Nhân sự & quyền'],['devices','Thiết bị'],['services','Hệ thống & dung lượng'],['logs','Nhật ký & kiểm tra'],['config','Cấu hình'],['versions','Phiên bản']];
-  if(currentRole==='ADMIN_INVENT')return [['overview','Tổng quan'],['events','Sự kiện'],['sku','Danh mục SKU'],['reports','Báo cáo'],['users','Nhân sự'],['logs','Nhật ký'],['sla','Thời gian nghiệp vụ']];
-  if(currentRole==='INVENT')return [['events','Sự kiện']];return [['picker','Báo thiếu hàng']];
+  if (currentRole === 'ADMIN') return [
+    ['overview','Tổng quan hôm nay','VẬN HÀNH'],
+    ['events','Xử lý báo thiếu','VẬN HÀNH'],
+    ['sku','Danh mục SKU','VẬN HÀNH'],
+    ['reports','Báo cáo vận hành','VẬN HÀNH'],
+    ['users','Nhân sự & tài khoản','QUẢN LÝ'],
+    ['devices','Thiết bị & thông báo','QUẢN LÝ'],
+    ['services','Hạ tầng & chi phí','HẠ TẦNG'],
+    ['logs','Nhật ký hệ thống','HẠ TẦNG'],
+    ['config','Thời gian nghiệp vụ','THIẾT LẬP'],
+    ['versions','Phiên bản ứng dụng','THIẾT LẬP'],
+  ];
+  if (currentRole === 'ADMIN_INVENT') return [
+    ['overview','Tổng quan hôm nay','VẬN HÀNH'],
+    ['events','Xử lý báo thiếu','VẬN HÀNH'],
+    ['sku','Danh mục SKU','VẬN HÀNH'],
+    ['reports','Báo cáo vận hành','VẬN HÀNH'],
+    ['users','Nhân sự & tài khoản','QUẢN LÝ'],
+    ['server','Hạ tầng & chi phí','HẠ TẦNG'],
+    ['logs','Nhật ký hệ thống','HẠ TẦNG'],
+    ['sla','Thời gian nghiệp vụ','THIẾT LẬP'],
+  ];
+  if (currentRole === 'INVENT') return [['events','Xử lý báo thiếu','VẬN HÀNH']];
+  return [['picker','Báo thiếu hàng','VẬN HÀNH']];
+}
+function renderNavigation(tabs) {
+  const showSections = tabs.length >= 5;
+  let currentSection = '';
+  return tabs.map(([id, label, section]) => {
+    const sectionHtml = showSections && section && section !== currentSection
+      ? `<span class="nav-section-label" data-nav-section="${escapeHtml(section)}">${escapeHtml(section)}</span>`
+      : '';
+    currentSection = section || currentSection;
+    return `${sectionHtml}<button data-tab="${id}" class="${id === state.activeTab ? 'active' : ''}"${id === state.activeTab ? ' aria-current="page"' : ''}>${escapeHtml(label)}</button>`;
+  }).join('');
 }
 function tabFromHash(tabs) {
   const id = location.hash.replace(/^#\/?/, '').split('/')[0];
@@ -372,7 +404,7 @@ async function ensureTabModule(tab) {
     key = 'events'; loader = () => import('./web-fast-ui.js');
   } else if (['overview','reports'].includes(tab)) {
     key = 'warehouse'; loader = () => import('./warehouse-ui-v2.js');
-  } else if (['users','services','sla','config'].includes(tab)) {
+  } else if (['users','services','server','sla','config'].includes(tab)) {
     key = 'ops'; loader = () => import('./ops-console.js');
   } else if (tab === 'picker' && currentRole === 'PICKER') {
     key = 'picker'; loader = () => import('./picker-realtime.js');
@@ -428,7 +460,7 @@ function renderApp() {
     </div></div><div class="user"><strong>${escapeHtml(profile.full_name)}</strong><span>${escapeHtml(ROLES[currentRole] || currentRole)}</span><div class="user-actions"><button id="changePassword" class="ghost">Đổi mật khẩu</button><button id="logout" class="ghost">Đăng xuất</button></div></div></header>
     ${state.testRole ? `<div class="test-banner">ĐANG KIỂM THỬ QUYỀN: <strong>${escapeHtml(ROLES[state.testRole])}</strong> · API cũng bị hạ quyền tương ứng. <button id="exitTest">Thoát kiểm thử</button></div>` : ''}
     ${actualRole() === 'ADMIN' && !state.testRole ? `<div class="test-tools"><span>Kiểm thử giao diện + quyền server:</span><button data-test="ADMIN_INVENT">Admin Event</button><button data-test="INVENT">Người báo hàng</button><button data-test="PICKER">Người lấy hàng</button></div>` : ''}
-    <nav class="tabs">${tabs.map(([id,label]) => `<button data-tab="${id}" class="${id === state.activeTab ? 'active' : ''}">${label}</button>`).join('')}</nav>
+    <nav class="tabs" data-shell-generation="canonical-v2">${renderNavigation(tabs)}</nav>
     <main id="content" class="content"></main></div>
     <div id="busy" class="busy" hidden><div><span class="spinner"></span><strong id="busyText">Đang xử lý…</strong></div></div>`;
   document.body.dataset.testRole = state.testRole || '';
@@ -456,7 +488,6 @@ async function renderTab() {
 
   // Active navigation changes immediately; the lazy module may still be downloading.
   document.querySelectorAll('[data-tab]').forEach((button) => button.classList.toggle('active', button.dataset.tab === tab));
-  window.__BH_OPS_NORMALIZE__?.();
 
   try {
     await ensureTabModule(tab);
@@ -465,22 +496,26 @@ async function renderTab() {
   }
   if (!routeIsActive(tab, epoch)) return;
 
-  // A lazy-loaded module can install navigation labels/renderers, so normalize once more.
-  window.__BH_OPS_NORMALIZE__?.();
+  // Route modules render content only; the app shell/navigation is owned exclusively by main.js.
   const wv2 = window.__BH_WV2_RENDER__ || {};
   const ops = window.__BH_OPS_RENDER__ || {};
+  const requireRenderer = (renderer, label) => {
+    if (typeof renderer !== 'function') throw new Error(`Không tải được giao diện ${label}. Vui lòng tải lại trang.`);
+    return renderer;
+  };
   const handlers = {
-    overview: () => (wv2.overview ? wv2.overview() : renderOverview()),
-    events: () => (wv2.events ? wv2.events() : renderEvents()),
+    overview: () => requireRenderer(wv2.overview, 'Tổng quan hôm nay')(),
+    events: () => requireRenderer(wv2.events, 'Xử lý báo thiếu')(),
     picker: renderPicker,
-    reports: () => (wv2.reports ? wv2.reports() : renderReports()),
+    reports: () => requireRenderer(wv2.reports, 'Báo cáo vận hành')(),
     sku: renderSku,
-    users: () => (ops.users ? ops.users() : renderUsers()),
+    users: () => requireRenderer(ops.users, 'Nhân sự & tài khoản')(),
     devices: renderDevices,
-    services: () => (ops.services ? ops.services() : renderIntegrations()),
+    services: () => requireRenderer(ops.services, 'Hạ tầng & chi phí')(),
+    server: () => requireRenderer(ops.server, 'Hạ tầng & chi phí')(),
     logs: renderLogs,
-    sla: () => (ops.sla ? ops.sla() : renderSla()),
-    config: () => (ops.config ? ops.config() : renderConfig()),
+    sla: () => requireRenderer(ops.sla, 'Thời gian nghiệp vụ')(),
+    config: () => requireRenderer(ops.config, 'Thời gian nghiệp vụ')(),
     versions: renderVersions,
   };
   try {

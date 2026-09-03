@@ -191,6 +191,21 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .tabs button.active { color: #fff; background: var(--navy); }
 .tabs:has(button:only-child) { display: none; }
 
+/* Canonical v2 navigation: emitted by main.js on first paint; never lazy-mutated. */
+.tabs button::before { content: none !important; display: none !important; }
+.tabs button { margin-top: 0 !important; border-top: 0 !important; }
+.nav-section-label {
+  display: block;
+  padding: 0 12px;
+  margin: 18px 0 6px;
+  color: #98a2b3;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: .11em;
+  line-height: 1.2;
+}
+.nav-section-label:first-child { margin-top: 4px; }
+
 .content { width: 100%; max-width: 1240px; margin: 0 auto; padding: 24px 28px 64px; }
 .heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 16px; }
 .heading.compact { margin-top: 28px; }
