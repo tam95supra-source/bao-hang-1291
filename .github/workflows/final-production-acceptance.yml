@@ -157,7 +157,7 @@ jobs:
           node scripts/final-e2e-manifest.cjs "$RUNNER_TEMP/preflight-manifest.json"
           node scripts/final-e2e-cleanup.cjs "$RUNNER_TEMP/preflight-manifest.json" 2>&1 | tee "$RUNNER_TEMP/preflight-cleanup.log"
           grep -F 'TEST_CLEANUP_READBACK=PASS' "$RUNNER_TEMP/preflight-cleanup.log" >/dev/null
-          grep -F 'REAL_USER_10060_PRESERVED=PASS' "$RUNNER_TEMP/preflight-cleanup.log" >/dev/null
+          grep -F 'REAL_ACTIVE_GSHEET_PRESERVED=PASS' "$RUNNER_TEMP/preflight-cleanup.log" >/dev/null
       - name: Mark preflight PASS
         id: done
         run: |
@@ -317,7 +317,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          markers=('TEST_SKU_REMAINING=0' 'TEST_PROFILE_REMAINING=0' 'TEST_REPORT_REMAINING=0' 'TEST_OWNERSHIP_REMAINING=0' 'TEST_EVENT_REMAINING=0' 'TEST_NOTIFICATION_REMAINING=0' 'TEST_REALTIME_SIGNAL_REMAINING=0' 'TEST_FIREBASE_USERS_REMAINING=0' 'REAL_USER_10060_PRESERVED=PASS' 'TEST_CLEANUP_READBACK=PASS')
+          markers=('TEST_SKU_REMAINING=0' 'TEST_PROFILE_REMAINING=0' 'TEST_REPORT_REMAINING=0' 'TEST_OWNERSHIP_REMAINING=0' 'TEST_EVENT_REMAINING=0' 'TEST_NOTIFICATION_REMAINING=0' 'TEST_REALTIME_SIGNAL_REMAINING=0' 'TEST_FIREBASE_USERS_REMAINING=0' 'REAL_ACTIVE_GSHEET_PRESERVED=PASS' 'TEST_CLEANUP_READBACK=PASS')
           for m in "${markers[@]}"; do grep -F "$m" .acceptance-evidence/cleanup/cleanup.log >/dev/null || { echo "MISSING_CLEANUP_MARKER=$m" >&2; exit 1; }; done
           echo cleanup_pass=true >> "$GITHUB_OUTPUT"
           echo CLEANUP_READBACK_MARKERS=PASS
