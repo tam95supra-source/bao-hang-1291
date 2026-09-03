@@ -166,7 +166,7 @@ function mapRpc(action, body, init) {
     case 'register-device': return ['api_register_device_rpc', base({ p_fcm_token: b.fcm_token, p_device_name: b.device_name || '', p_app_version: b.app_version || '', p_platform: b.platform || 'web' })]
     case 'sync-catalog': return ['api_sync_catalog_rpc', base({ p_after_sku: b.after_sku || null, p_updated_since: b.updated_since || null, p_sync_until: b.sync_until || null, p_limit: b.limit || 1000 })]
     case 'get-operational-config': return ['api_get_operational_config_rpc', base()]
-    case 'save-operational-config': return ['api_save_operational_config_rpc', base({ p_acknowledge_minutes: b.acknowledge_minutes, p_reminder_minutes: b.reminder_minutes, p_replenish_minutes: b.replenish_minutes, p_picker_ack_reminder_minutes: b.picker_ack_reminder_minutes || 3, p_auto_skip_enabled: !!b.auto_skip_enabled, p_auto_skip_after_minutes: b.auto_skip_after_minutes || 120 })]
+    case 'save-operational-config': return ['api_save_operational_config_rpc', base({ p_acknowledge_minutes: b.acknowledge_minutes, p_reminder_minutes: b.reminder_minutes, p_replenish_minutes: b.replenish_minutes, p_picker_ack_reminder_minutes: b.picker_ack_reminder_minutes || 3, p_found_item_reminder_minutes: b.found_item_reminder_minutes || 5, p_auto_skip_enabled: !!b.auto_skip_enabled, p_auto_skip_after_minutes: b.auto_skip_after_minutes || 120 })]
     case 'get-config': return ['api_get_config_rpc', base()]
     case 'save-config': return ['api_save_config_rpc', base({ p_config: b })]
     case 'list-users': return ['api_list_users_rpc', base()]
@@ -291,7 +291,7 @@ async function backendFetchAdapter(input, init = {}) {
         if (action === 'update-user') return worker('update-user', body, init)
         if (action === 'delete-user') return worker('user-disable', { user_id: body.id || body.user_id }, init)
       }
-      if (['update-user', 'import-users', 'sync-google-sheet', 'staff-sync-now', 'staff-source-status', 'staff-source-configure', 'password-reset-mail-capability', 'upload-log', 'download-log', 'user-upsert', 'user-disable'].includes(action)) {
+      if (['update-user', 'import-users', 'sync-google-sheet', 'staff-sync-now', 'staff-source-status', 'staff-source-configure', 'password-reset-mail-capability', 'upload-log', 'download-log', 'upload-web-log', 'list-web-logs', 'download-web-log', 'user-upsert', 'user-disable'].includes(action)) {
         return worker(action, body, init)
       }
       const response = await neonRpc(action, body, init)
