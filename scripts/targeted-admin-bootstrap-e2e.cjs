@@ -220,7 +220,7 @@ async function main() {
         Number(syncSecond.failed || 0) !== 0) {
       throw new Error(`STAFF_SOURCE_RECONCILE_IDEMPOTENT_MISMATCH:${safe(JSON.stringify(syncSecond))}`);
     }
-    console.log(`STAFF_SOURCE_RECONCILE=PASS first_status=${syncFirst.status} first_updated=${Number(syncFirst.updated || 0)} second_status=NO_CHANGE eligible_rows=250 deactivated=0 failed=0`);
+    console.log(`STAFF_SOURCE_RECONCILE=PASS first_status=${syncFirst.status} first_updated=${Number(syncFirst.updated || 0)} second_status=NO_CHANGE eligible_rows=250 deactivated=0 failed=0 api_ok=true`);
 
     const refreshDiag = await diagnosticStage('ADMIN_REFRESH_NODE', () => refreshToken(adminPair.refreshToken), 15000);
     if (refreshDiag.ok) await diagnosticStage('ADMIN_PROFILE_REFRESHED_TOKEN', () => profile(refreshDiag.value.idToken, 'node_refresh'), 15000);
