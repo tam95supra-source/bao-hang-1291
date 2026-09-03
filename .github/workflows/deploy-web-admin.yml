@@ -84,6 +84,7 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/validate-web-shell-consistency.cjs
+          node scripts/validate-web-i18n-context.cjs
           node --check scripts/web-shell-consistency-e2e.cjs
           node --check scripts/web-shell-cold-goto-shim.cjs
 
