@@ -79,6 +79,7 @@ jobs:
           node --check ops/staff_cleanup_orphans_direct.cjs
           node --check ops/apps_script_deploy_staff.mjs
           node --check ops/apps_script_deploy_worker.mjs
+          node --check ops/configure_password_recovery_mail.cjs
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           const deploy = fs.readFileSync('google-apps-script/DEPLOY_NEON.gs', 'utf8');
@@ -160,10 +161,13 @@ jobs:
           for (const marker of requiredMain) if (!main.includes(marker)) throw new Error('PASSWORD_RECOVERY_WEB_MISSING:' + marker);
           const requiredRuntime = ['public-auth','updatePassword','/auth/change-password'];
           for (const marker of requiredRuntime) if (!runtime.includes(marker)) throw new Error('PASSWORD_RECOVERY_RUNTIME_MISSING:' + marker);
-          const requiredGas = ["BH_PASSWORD_RECOVERY_EMAIL = 'tam95.supra@gmail.com'","BH_PASSWORD_RESET_COOLDOWN_MS = 5 * 60 * 1000","MailApp.sendEmail","passwordResetRequest_","passwordResetPreview_","passwordResetMailCapability_"];
+          const requiredGas = ["BH_PASSWORD_RECOVERY_EMAIL = 'tam95.supra@gmail.com'","BH_PASSWORD_RESET_COOLDOWN_MS = 5 * 60 * 1000","passwordResetGmailSend_","passwordResetMailAccessToken_","passwordResetMailOAuthConfigure_","passwordResetRequest_","passwordResetPreview_","passwordResetMailCapability_"];
           for (const marker of requiredGas) if (!gas.includes(marker)) throw new Error('PASSWORD_RECOVERY_GAS_MISSING:' + marker);
           if (/console\.log\([^\n]*code4|return\s*\{[^}]*code4/s.test(gas)) throw new Error('PASSWORD_RESET_CODE_EXPOSURE_RISK');
-          console.log('PASSWORD_RECOVERY_SECURITY_GATE=PASS email=fixed temp_input=4digits cooldown=5m self_change=true');
+          if (gas.includes('MailApp.sendEmail') || gas.includes('MailApp.getRemainingDailyQuota')) throw new Error('PASSWORD_RECOVERY_MAILAPP_SCOPE_REGRESSION');
+          const mailConfig = fs.readFileSync('ops/configure_password_recovery_mail.cjs','utf8');
+          if (!mailConfig.includes('GMAIL_SEND_OAUTH_SCOPE_MISSING') || !mailConfig.includes('password-reset-mail-oauth-configure')) throw new Error('PASSWORD_RECOVERY_OAUTH_CONFIG_GUARD_MISSING');
+          console.log('PASSWORD_RECOVERY_SECURITY_GATE=PASS email=fixed temp_input=4digits cooldown=5m self_change=true provider=gmail_oauth');
           NODE
           echo 'APPS_SCRIPT_SYNTAX_GATE=PASS'
 
