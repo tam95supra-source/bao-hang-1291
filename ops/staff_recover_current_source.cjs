@@ -63,10 +63,17 @@ async function gas(pair, apiKey, payload, timeoutMs = 45000) {
       }, timeoutMs);
       if (!r.ok) throw new Error(`GAS_HTTP_${r.status}`);
       if (data?.ok !== true) {
-        if (/AUTH_REQUIRED/.test(String(data?.error || ''))) {
+        const detail = String(data?.error || '') + ' ' + JSON.stringify(data?.errors || []);
+        if (/AUTH_REQUIRED/.test(detail)) {
           pair = await refreshPair(apiKey,pair);
           await new Promise(resolve=>setTimeout(resolve,1200*attempt));
           last = new Error('GAS_AUTH_REQUIRED_RETRY');
+          continue;
+        }
+        if (/FIREBASE_ADMIN_5\d\d|service is currently unavailable|UNAVAILABLE|backendError|503/i.test(detail) && attempt < 4) {
+          console.log(`STAFF_RECOVERY_TRANSIENT_RETRY attempt=${attempt}`);
+          await new Promise(resolve=>setTimeout(resolve,2000*attempt));
+          last = new Error('GAS_TRANSIENT_RETRY');
           continue;
         }
         throw new Error(`GAS_ACTION_FAIL:${safe(data?.error || JSON.stringify(data))}`);
@@ -122,7 +129,7 @@ async function snapshot(pair, apiKey) {
       action:'staff-recovery-current-source',
       recovery_marker:MARKER,
       after_code:cursor,
-      limit:20,
+      limit:10,
       finalize_run_id:RUN_ID
     },55000);
     pair=out.pair;
