@@ -15,10 +15,10 @@ function readUserViewState() {
 }
 const savedUserViewState = readUserViewState();
 const ROLE_LABELS = {
-  ADMIN: 'Admin hệ thống',
-  ADMIN_INVENT: 'Admin Event',
+  ADMIN: 'Quản trị hệ thống',
+  ADMIN_INVENT: 'Quản trị báo thiếu',
   INVENT: 'Người báo hàng',
-  PICKER: 'Picker / Người lấy hàng',
+  PICKER: 'Người lấy hàng',
 };
 
 const ui = {
@@ -60,7 +60,7 @@ function detectedTestRole() {
   const direct = String(document.body.dataset.testRole || '').trim().toUpperCase();
   if (['ADMIN_INVENT','INVENT','PICKER'].includes(direct)) return direct;
   const text = $('.test-banner strong')?.textContent?.trim() || '';
-  if (text.includes('Admin Event')) return 'ADMIN_INVENT';
+  if (text.includes('Admin Event') || text.includes('Quản trị báo thiếu')) return 'ADMIN_INVENT';
   if (text.includes('Người báo hàng')) return 'INVENT';
   if (text.includes('Picker')) return 'PICKER';
   return '';
