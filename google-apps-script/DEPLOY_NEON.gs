@@ -14,7 +14,7 @@ const BH_REPORT_SHEET_ID = '15_AJ8oB7cEeQjeM6Jb6dm0ki6NcqyxPRVRTAvQPHVM0';
 const BH_STAFF_SHEET_ID = '1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78';
 const BH_STAFF_SHEET_NAME = 'DANH SÁCH NHÂN SỰ';
 const BH_PROTECTED_ADMIN_CODE = '6281280';
-const BH_LOG_FOLDER = 'Báo hàng 1291 - Diagnostic Logs';
+const BH_LOG_FOLDER_ID = '1xB_h0A1Z_AKfX3TgnQyGgl7fM8qkANfs';
 const BH_EVENT_HEADERS = ['Mã sự kiện','Thời gian','Loại sự kiện','Ticket ID','SKU','Tên sản phẩm','Trạng thái','Số lượt báo','Người báo/Actor ID','Dữ liệu JSON'];
 const BH_ISSUE_HEADERS = ['Ticket ID','SKU','Tên sản phẩm','Trạng thái','Số lượt báo','Báo lần đầu','Cập nhật cuối','Invent xử lý','Số lần mở lại'];
 const BH_USER_HEADERS = ['Mã nhân viên','Họ tên','Nhà thầu','Vai trò','Trạng thái','Cập nhật cuối'];
@@ -1246,7 +1246,7 @@ function getOrCreateSheet_(name,headers) {
   s.setFrozenRows(1);
   return s;
 }
-function getLogFolder_(){const it=DriveApp.getFoldersByName(BH_LOG_FOLDER);return it.hasNext()?it.next():DriveApp.createFolder(BH_LOG_FOLDER);}
+function getLogFolder_(){return DriveApp.getFolderById(BH_LOG_FOLDER_ID);}
 function parseBody_(e){if(!e||!e.postData||!e.postData.contents)return{};try{return JSON.parse(e.postData.contents)}catch(ignore){return{}}}
 function fetchJson_(url,opts){const r=UrlFetchApp.fetch(url,opts||{});const t=r.getContentText();try{return t?JSON.parse(t):{}}catch(ignore){return{ok:false,error:'INVALID_JSON',http:r.getResponseCode()}}}
 function safeError_(e){return String(e&&e.message?e.message:e).slice(0,1000)}
