@@ -301,16 +301,27 @@ function staffSourceBridgeFlush_(token) {
   return {sheet:sheetResult,realtime:realtimeResult};
 }
 
+function staffSourceBridgeLegacyWatcherCount_() {
+  const legacy = ['staffSourceEditV2','staffSourceChangeV2','staffSourceEditV3','staffSourceChangeV3','staffEventRetryV33'];
+  return ScriptApp.getProjectTriggers().filter(function(t) {
+    return legacy.indexOf(String(t.getHandlerFunction() || '')) >= 0;
+  }).length;
+}
+
 function staffSourceBridgeRemoveLegacyWatchers_() {
+  const legacy = ['staffSourceEditV2','staffSourceChangeV2','staffSourceEditV3','staffSourceChangeV3','staffEventRetryV33'];
+  let removed = 0;
   ScriptApp.getProjectTriggers().forEach(function(t) {
     const h = String(t.getHandlerFunction() || '');
-    if (h === 'staffSourceEditV2' || h === 'staffSourceChangeV2' || h === 'staffSourceEditV3' || h === 'staffSourceChangeV3' || h === 'staffEventRetryV33') {
+    if (legacy.indexOf(h) >= 0) {
       ScriptApp.deleteTrigger(t);
+      removed++;
     }
   });
   const props = PropertiesService.getScriptProperties();
   props.deleteProperty('STAFF_EVENT_SYNC_V2_ENABLED');
   props.deleteProperty('STAFF_EVENT_SYNC_V3_ENABLED');
+  return {ok:true,removed:removed,legacy_trigger_count_after:staffSourceBridgeLegacyWatcherCount_()};
 }
 
 function getStaffSourceBridgeReceiverStatus() {
@@ -321,6 +332,7 @@ function getStaffSourceBridgeReceiverStatus() {
     mode:'SOURCE_DRIVEN_DELTA_V1',
     source_id:source.sheetId,
     source_tab:source.sheetName,
+    legacy_trigger_count:staffSourceBridgeLegacyWatcherCount_(),
     last_ok:props.getProperty('LAST_STAFF_SOURCE_BRIDGE_OK') || '',
     last_error:props.getProperty('LAST_STAFF_SOURCE_BRIDGE_ERROR') || ''
   };
