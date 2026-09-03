@@ -122,7 +122,7 @@ async function accessToken() {
     console.log('APPS_SCRIPT_AUTH_MODE=USER_REFRESH');
     return token;
   } catch (userError) {
-    console.log('APPS_SCRIPT_AUTH_USER_REFRESH=UNAVAILABLE');
+    console.log(`APPS_SCRIPT_AUTH_USER_REFRESH=UNAVAILABLE reason=${String(userError?.message || userError).replace(/[\r\n]+/g,' ').slice(0,220)}`);
     try {
       const token = await serviceAccountScriptAccessToken();
       console.log('APPS_SCRIPT_AUTH_MODE=SERVICE_ACCOUNT');
