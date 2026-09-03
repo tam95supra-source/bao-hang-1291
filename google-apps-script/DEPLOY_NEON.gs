@@ -504,7 +504,7 @@ function staffSourceConfigure_(body) {
   const sameSource=current.sheetId===id && current.sheetName===tab;
 
   if (sameSource) {
-    const result=runStaffSync_('SOURCE_VALIDATE', caller.profile, candidate);
+    const result=runStaffSync_('MANUAL', caller.profile, candidate);
     if (Number(result.failed || 0) > 0) throw new Error('STAFF_SOURCE_SYNC_PARTIAL:'+Number(result.failed || 0));
     return Object.assign({
       ok:true,
@@ -519,7 +519,7 @@ function staffSourceConfigure_(body) {
   const props=PropertiesService.getScriptProperties();
   props.setProperties({STAFF_SOURCE_SHEET_ID:id,STAFF_SOURCE_SHEET_NAME:tab,STAFF_SOURCE_CHANGED_AT:new Date().toISOString()}, false);
   installStaffSourceFallbackTrigger_();
-  const result=runStaffSync_('SOURCE_SWITCH', caller.profile, candidate);
+  const result=runStaffSync_('MANUAL', caller.profile, candidate);
   const cleanup=cleanupInactiveStaffOrphans_(workerAdminIdToken_(), 25);
   if (Number(result.failed || 0) > 0) throw new Error('STAFF_SOURCE_SYNC_PARTIAL:'+Number(result.failed || 0));
   return Object.assign({ok:true,sheet_id:id,sheet_name:tab,eligible_rows:candidate.staff.length,cleanup:cleanup}, result);
@@ -535,7 +535,7 @@ function installStaffSourceFallbackTrigger_() {
 function staffSourceFallbackTick() {
   const props=PropertiesService.getScriptProperties();
   try {
-    const result=runStaffSync_('SOURCE_FALLBACK', {role:'ADMIN'});
+    const result=runStaffSync_('AUTO', {role:'ADMIN'});
     cleanupInactiveStaffOrphans_(workerAdminIdToken_(), 20);
     props.deleteProperty('LAST_STAFF_SYNC_ERROR');
     return result;
