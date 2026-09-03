@@ -2,7 +2,7 @@ import './style.css';
 // Deployment trigger: active-staff preservation guard verified.
 import { createClient } from './backend-runtime.js';
 import { installI18n, getLocale } from './i18n.js';
-import { installWebLogger, flushWebLogs } from './web-logger.js';
+import { installWebLogger, createWebDiagnosticLog } from './web-logger.js';
 
 let excelModulePromise;
 async function getExcelJS() {
@@ -18,8 +18,8 @@ const PASSWORD_RECOVERY_EMAIL = 'tam95.supra@gmail.com';
 const TEMP_PASSWORD_PREFIX = 'R!';
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const ROLES = {
-  ADMIN: 'Admin hệ thống',
-  ADMIN_INVENT: 'Admin Event',
+  ADMIN: 'Quản trị hệ thống',
+  ADMIN_INVENT: 'Quản trị báo thiếu',
   INVENT: 'Người báo hàng',
   PICKER: 'Người lấy hàng',
 };
@@ -74,7 +74,6 @@ function readSession() {
 function saveSession(session) {
   state.session = session;
   sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
-  if (session?.access_token && session?.profile) setTimeout(() => void flushWebLogs(), 1500);
 }
 async function stopRealtime() {
   clearInterval(state.fallbackTimer);
@@ -100,11 +99,19 @@ function clearSession() {
 async function parseResponse(response) {
   const text = await response.text();
   let data = {};
+  let malformed = false;
   if (text) {
-    try { data = JSON.parse(text); } catch { data = { error: text }; }
+    try { data = JSON.parse(text); }
+    catch { malformed = true; }
+  }
+  if (malformed) {
+    const error = new Error('Phản hồi dịch vụ không đúng định dạng. Vui lòng thử lại sau.');
+    error.code = 'INVALID_SERVICE_RESPONSE';
+    error.status = response.status;
+    throw error;
   }
   if (!response.ok) {
-    const error = new Error(data.error || data.message || `Lỗi máy chủ ${response.status}`);
+    const error = new Error(String(data.error || data.message || `Lỗi dịch vụ ${response.status}`).slice(0,500));
     error.code = data.code;
     error.status = response.status;
     throw error;
@@ -620,7 +627,7 @@ window.addEventListener('hashchange', () => {
 
 async function renderOverview(){
   $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">VẬN HÀNH</p><h2>Tổng quan vận hành kho</h2></div></div><div id="metrics" class="metrics"></div><div id="overviewStatus"></div>`;
-  try{const [d,r,svc]=await Promise.all([api('admin-summary'),api('reports-summary'),api('service-metrics')]);$('#metrics').innerHTML=[['Chờ nhận',d.open_issue_count],['Đang xử lý',d.claimed_issue_count],['SKU đang dùng',d.sku_count],['Nhân sự hoạt động',d.active_user_count],['Báo 24 giờ',r.last_24h?.reports],['Quá thời gian tiếp nhận',r.overdue_now]].map(([l,v])=>`<article class="metric"><span>${l}</span><strong>${Number(v||0).toLocaleString(getLocale())}</strong></article>`).join('');const db=Number(svc.usage?.database_bytes||0),lim=Number(svc.free_limits?.database_bytes||1),pct=Math.min(100,db/lim*100);$('#overviewStatus').innerHTML=`<div class="panel-grid"><article class="card"><h3>Hiệu suất 24 giờ</h3><p>Đợt báo thiếu: <b>${Number(r.last_24h?.issues||0)}</b> · Đã xử lý: <b>${Number(r.last_24h?.resolved||0)}</b></p><p>Có hàng/châm bù: <b>${Number(r.last_24h?.available||0)}</b> · Cho phép bỏ qua: <b>${Number(r.last_24h?.skipped||0)}</b></p><p>50% yêu cầu được tiếp nhận trong: <b>${r.median_claim_minutes??'—'} phút</b> · 50% yêu cầu được xử lý xong trong: <b>${r.median_resolution_minutes??'—'} phút</b></p></article><article class="card"><h3>Nhân sự nguồn</h3><p>${d.staff_sync?`${escapeHtml(d.staff_sync.status)} · ${formatTime(d.staff_sync.finished_at)} · ${Number(d.staff_sync.eligible_rows||0)} nhân sự`:'Chưa đồng bộ.'}</p></article><article class="card"><h3>Kiểm soát gói miễn phí</h3><p>Dung lượng dữ liệu: <b>${(db/1048576).toFixed(1)} MB / ${(lim/1048576).toFixed(0)} MB (${pct.toFixed(1)}%)</b></p><p>Thiết bị FCM: ${Number(svc.usage?.active_device_tokens||0)} · Log: ${(Number(svc.usage?.diagnostic_log_bytes||0)/1048576).toFixed(2)} MB · Sheet chờ: ${Number(svc.usage?.sheet_pending||0)}</p><p class="muted">Không tự bật Billing hoặc dịch vụ trả phí.</p></article></div>`;const sheet=$('[data-health="SHEET"]');if(sheet){$('em',sheet).textContent=d.pending_sheet_count?`${d.pending_sheet_count} CHỜ`:'OK';sheet.className=`health-chip ${d.pending_sheet_count?'warn':'good'}`;}const free=$('[data-health="FREE TIER"]');if(free){$('em',free).textContent=`DB ${pct.toFixed(1)}%`;free.className=`health-chip ${pct>=80?'warn':'good'}`;}}
+  try{const [d,r,svc]=await Promise.all([api('admin-summary'),api('reports-summary'),api('service-metrics')]);$('#metrics').innerHTML=[['Chờ nhận',d.open_issue_count],['Đang xử lý',d.claimed_issue_count],['SKU đang dùng',d.sku_count],['Nhân sự hoạt động',d.active_user_count],['Báo 24 giờ',r.last_24h?.reports],['Quá thời gian tiếp nhận',r.overdue_now]].map(([l,v])=>`<article class="metric"><span>${l}</span><strong>${Number(v||0).toLocaleString(getLocale())}</strong></article>`).join('');const db=Number(svc.usage?.database_bytes||0),lim=Number(svc.free_limits?.database_bytes||1),pct=Math.min(100,db/lim*100);$('#overviewStatus').innerHTML=`<div class="panel-grid"><article class="card"><h3>Hiệu suất 24 giờ</h3><p>Đợt báo thiếu: <b>${Number(r.last_24h?.issues||0)}</b> · Đã xử lý: <b>${Number(r.last_24h?.resolved||0)}</b></p><p>Có hàng/châm bù: <b>${Number(r.last_24h?.available||0)}</b> · Cho phép bỏ qua: <b>${Number(r.last_24h?.skipped||0)}</b></p><p>50% yêu cầu được tiếp nhận trong: <b>${r.median_claim_minutes??'—'} phút</b> · 50% yêu cầu được xử lý xong trong: <b>${r.median_resolution_minutes??'—'} phút</b></p></article><article class="card"><h3>Nhân sự nguồn</h3><p>${d.staff_sync?`${escapeHtml(d.staff_sync.status)} · ${formatTime(d.staff_sync.finished_at)} · ${Number(d.staff_sync.eligible_rows||0)} nhân sự`:'Chưa đồng bộ.'}</p></article><article class="card"><h3>Kiểm soát gói miễn phí</h3><p>Dung lượng dữ liệu: <b>${(db/1048576).toFixed(1)} MB / ${(lim/1048576).toFixed(0)} MB (${pct.toFixed(1)}%)</b></p><p>Thiết bị FCM: ${Number(svc.usage?.active_device_tokens||0)} · Log chẩn đoán: Google Drive · Dữ liệu chờ ghi Sheet: ${Number(svc.usage?.sheet_pending||0)}</p><p class="muted">Không tự bật Billing hoặc dịch vụ trả phí.</p></article></div>`;const sheet=$('[data-health="SHEET"]');if(sheet){$('em',sheet).textContent=d.pending_sheet_count?`${d.pending_sheet_count} CHỜ`:'OK';sheet.className=`health-chip ${d.pending_sheet_count?'warn':'good'}`;}const free=$('[data-health="FREE TIER"]');if(free){$('em',free).textContent=`DB ${pct.toFixed(1)}%`;free.className=`health-chip ${pct>=80?'warn':'good'}`;}}
   catch(e){$('#metrics').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}
 }
 function formatAge(value) {
@@ -704,7 +711,7 @@ async function openReassign(issueId, sku, done) {
 }
 
 function renderPicker() {
-  $('#content').innerHTML = `<div class="heading"><div><p class="eyebrow">PICKER</p><h2>Người lấy hàng</h2></div></div>
+  $('#content').innerHTML = `<div class="heading"><div><p class="eyebrow">LẤY HÀNG</p><h2>Người lấy hàng</h2></div></div>
     <div class="card"><label>Nhập hoặc quét mã SKU<input id="skuSearch" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Nhập ít nhất 3 số của SKU"></label><div id="skuResults" class="search-results"></div>
     <div id="selectedSku" class="selected muted">Chưa chọn SKU</div><button id="reportShortage" class="danger wide" disabled>BÁO THIẾU</button><div id="pickerMsg" class="message" hidden></div></div>
     <div class="heading compact"><h3>Báo gần đây của tôi</h3><button id="refreshMine" class="secondary">Làm mới</button></div><div id="myIssues"></div><div id="pendingAlert"></div>`;
@@ -781,13 +788,13 @@ async function loadPendingAlerts() {
 
 async function renderInventory(){return renderSku();}
 async function renderReports(){
- $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">BÁO CÁO</p><h2>Báo cáo vận hành kho</h2></div></div><div id="reportBody"></div>`;try{const r=await api('reports-summary');$('#reportBody').innerHTML=`<div class="metrics"><article class="metric"><span>Lượt báo 30 ngày</span><strong>${Number(r.reports||0).toLocaleString(getLocale())}</strong></article><article class="metric"><span>Đợt báo thiếu 30 ngày</span><strong>${Number(r.issues||0).toLocaleString(getLocale())}</strong></article><article class="metric"><span>Đang mở</span><strong>${Number(r.active_now||0)}</strong></article><article class="metric"><span>Quá thời gian tiếp nhận</span><strong>${Number(r.overdue_now||0)}</strong></article><article class="metric"><span>50% yêu cầu được tiếp nhận trong</span><strong>${r.median_claim_minutes??'—'} phút</strong></article><article class="metric"><span>95% yêu cầu được xử lý xong trong</span><strong>${r.p95_resolution_minutes??'—'} phút</strong></article></div><div class="panel-grid"><article class="card"><h3>24 giờ gần nhất</h3><p>Lượt báo: <b>${Number(r.last_24h?.reports||0)}</b> · Đợt báo thiếu: <b>${Number(r.last_24h?.issues||0)}</b> · Hoàn tất: <b>${Number(r.last_24h?.resolved||0)}</b></p><p>Có hàng/châm bù: <b>${Number(r.last_24h?.available||0)}</b> · Cho phép bỏ qua: <b>${Number(r.last_24h?.skipped||0)}</b></p></article><article class="card"><h3>Chất lượng xử lý</h3><p>50% yêu cầu được xử lý xong trong: <b>${r.median_resolution_minutes??'—'} phút</b> · 95% yêu cầu được xử lý xong trong: <b>${r.p95_resolution_minutes??'—'} phút</b></p><p>Báo lại trong 30 phút: <b>${Number(r.recurrent_episodes||0)}</b> · Tự cho phép bỏ qua 30 ngày: <b>${Number(r.auto_skip_count_30d||0)}</b></p></article></div><article class="card"><h3>SKU phát sinh nhiều nhất</h3><div class="table-wrap"><table><thead><tr><th>SKU</th><th>Tên sản phẩm</th><th>Lượt báo</th></tr></thead><tbody>${(r.top_skus||[]).map(x=>`<tr><td><b>${escapeHtml(x.sku)}</b></td><td>${escapeHtml(x.product_name||'')}</td><td>${Number(x.reports||0)}</td></tr>`).join('')}</tbody></table></div></article>`;}catch(e){$('#reportBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}
+ $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">BÁO CÁO</p><h2>Báo cáo vận hành kho</h2></div></div><div id="reportBody"></div>`;try{const r=await api('reports-summary');$('#reportBody').innerHTML=`<div class="metrics"><article class="metric"><span>Lượt báo 30 ngày</span><strong>${Number(r.reports||0).toLocaleString(getLocale())}</strong></article><article class="metric"><span>Đợt báo thiếu 30 ngày</span><strong>${Number(r.issues||0).toLocaleString(getLocale())}</strong></article><article class="metric"><span>Đang mở</span><strong>${Number(r.active_now||0)}</strong></article><article class="metric"><span>Quá thời gian tiếp nhận</span><strong>${Number(r.overdue_now||0)}</strong></article><article class="metric"><span>50% yêu cầu được tiếp nhận trong</span><strong>${r.median_claim_minutes??'—'} phút</strong></article><article class="metric"><span>95% yêu cầu được xử lý xong trong</span><strong>${r.p95_resolution_minutes??'—'} phút</strong></article></div><div class="panel-grid"><article class="card"><h3>24 giờ gần nhất</h3><p>Lượt báo: <b>${Number(r.last_24h?.reports||0)}</b> · Đợt báo thiếu: <b>${Number(r.last_24h?.issues||0)}</b> · Hoàn tất: <b>${Number(r.last_24h?.resolved||0)}</b></p><p>Có hàng/châm bù: <b>${Number(r.last_24h?.available||0)}</b> · Cho phép bỏ qua: <b>${Number(r.last_24h?.skipped||0)}</b></p></article><article class="card"><h3>Chất lượng xử lý</h3><p>50% yêu cầu được xử lý xong trong: <b>${r.median_resolution_minutes??'—'} phút</b> · 95% yêu cầu được xử lý xong trong: <b>${r.p95_resolution_minutes??'—'} phút</b></p><p>Báo lại trong 30 phút: <b>${Number(r.recurrent_episodes||0)}</b> · Tự cho phép bỏ qua 30 ngày: <b>${Number(r.auto_skip_count_30d||0)}</b></p></article></div><article class="card"><h3>SKU phát sinh nhiều nhất</h3><div class="table-wrap"><table><thead><tr><th>SKU</th><th>Tên hàng</th><th>Lượt báo</th></tr></thead><tbody>${(r.top_skus||[]).map(x=>`<tr><td><b>${escapeHtml(x.sku)}</b></td><td>${escapeHtml(x.product_name||'')}</td><td>${Number(x.reports||0)}</td></tr>`).join('')}</tbody></table></div></article>`;}catch(e){$('#reportBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}
 }
 
 async function renderSku(){
- const can=elevated();$('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">DANH MỤC</p><h2>Danh mục SKU / tên hàng</h2></div></div><article class="card"><p class="muted">Chỉ lưu <b>SKU và tên sản phẩm</b>; không lưu số tồn, bin, số lượng chờ xuất hoặc vị trí.</p>${can?`<input id="catalogFile" type="file" accept=".xlsx"><button id="replaceCatalog" class="primary">CẬP NHẬT TỪ FILE TỒN BIN</button><div id="catalogMsg" class="message" hidden></div>`:''}<label>Tìm SKU / tên hàng<input id="catalogSearch" placeholder="Nhập SKU hoặc tên sản phẩm"></label><button id="catalogSearchBtn" class="secondary">TÌM</button><div id="catalogRows"></div></article>`;
- const load=async()=>{try{const q=$('#catalogSearch').value.trim();if(!q){$('#catalogRows').innerHTML='<p class="muted">Nhập từ khóa để tra cứu.</p>';return;}const d=await api('search-skus',{query:q,limit:100});$('#catalogRows').innerHTML=`<div class="table-wrap"><table><thead><tr><th>SKU</th><th>Tên sản phẩm</th></tr></thead><tbody>${d.items.map(i=>`<tr><td><b>${escapeHtml(i.sku)}</b></td><td>${escapeHtml(i.product_name)}</td></tr>`).join('')}</tbody></table></div>`;}catch(e){$('#catalogRows').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}};$('#catalogSearchBtn').onclick=load;$('#catalogSearch').addEventListener('keydown',e=>{if(e.key==='Enter')load();});
- if(can)$('#replaceCatalog').onclick=async()=>{const f=$('#catalogFile').files?.[0];if(!f)return message('#catalogMsg','Chọn file XLSX trước.','error');if(f.size>MAX_FILE_BYTES)return message('#catalogMsg','File vượt giới hạn 20 MB.','error');try{setBusy(true,'Đang đọc SKU và tên sản phẩm…');const X=await getExcelJS(),wb=new X.Workbook();await wb.xlsx.load(await f.arrayBuffer());const sh=wb.worksheets[0];if(!sh)throw new Error('File không có worksheet.');const h=new Map();sh.getRow(1).eachCell((c,col)=>h.set(normalize(c.text),col));const find=a=>a.map(normalize).map(x=>h.get(x)).find(Boolean),sc=find(['sku','mã sku','ma sku']),nc=find(['tên sku','ten sku','tên sản phẩm','ten san pham','tên hàng','ten hang','product name','sku name']);if(!sc||!nc)throw new Error('File phải có cột SKU và Tên SKU/Tên sản phẩm.');const m=new Map();for(let r=2;r<=sh.rowCount;r++){const sku=String(sh.getRow(r).getCell(sc).text||'').trim(),name=String(sh.getRow(r).getCell(nc).text||'').trim();if(!sku&&!name)continue;if(!sku||!name)throw new Error(`Dòng ${r}: thiếu SKU hoặc tên sản phẩm`);if(m.has(sku)&&m.get(sku)!==name)throw new Error(`SKU ${sku} có nhiều tên khác nhau`);m.set(sku,name);}if(!m.size)throw new Error('Không tìm thấy SKU hợp lệ.');const items=[...m].map(([sku,product_name])=>({sku,product_name})),res=await api('replace-catalog',{items,source_name:f.name});message('#catalogMsg',`Đã cập nhật ${Number(res.active_count||items.length).toLocaleString(getLocale())} SKU · phiên ${res.revision}.`,'good');}catch(e){message('#catalogMsg',safeMessage(e),'error');}finally{setBusy(false);}};
+ const can=elevated();$('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">DANH MỤC</p><h2>Danh mục SKU</h2></div></div><article class="card"><p class="muted">Danh mục này chỉ lưu <b>mã SKU và tên hàng</b>; không lưu tồn kho, vị trí bin hoặc số lượng chờ xuất.</p>${can?`<input id="catalogFile" type="file" accept=".xlsx"><button id="replaceCatalog" class="primary">CẬP NHẬT TỪ FILE TỒN BIN</button><div id="catalogMsg" class="message" hidden></div>`:''}<label>Tìm SKU hoặc tên hàng<input id="catalogSearch" placeholder="Nhập SKU hoặc tên hàng"></label><button id="catalogSearchBtn" class="secondary">TÌM</button><div id="catalogRows"></div></article>`;
+ const load=async()=>{try{const q=$('#catalogSearch').value.trim();if(!q){$('#catalogRows').innerHTML='<p class="muted">Nhập từ khóa để tra cứu.</p>';return;}const d=await api('search-skus',{query:q,limit:100});$('#catalogRows').innerHTML=`<div class="table-wrap"><table><thead><tr><th>SKU</th><th>Tên hàng</th></tr></thead><tbody>${d.items.map(i=>`<tr><td><b>${escapeHtml(i.sku)}</b></td><td>${escapeHtml(i.product_name)}</td></tr>`).join('')}</tbody></table></div>`;}catch(e){$('#catalogRows').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}};$('#catalogSearchBtn').onclick=load;$('#catalogSearch').addEventListener('keydown',e=>{if(e.key==='Enter')load();});
+ if(can)$('#replaceCatalog').onclick=async()=>{const f=$('#catalogFile').files?.[0];if(!f)return message('#catalogMsg','Chọn file XLSX trước.','error');if(f.size>MAX_FILE_BYTES)return message('#catalogMsg','File vượt giới hạn 20 MB.','error');try{setBusy(true,'Đang đọc mã SKU và tên hàng…');const X=await getExcelJS(),wb=new X.Workbook();await wb.xlsx.load(await f.arrayBuffer());const sh=wb.worksheets[0];if(!sh)throw new Error('File không có worksheet.');const h=new Map();sh.getRow(1).eachCell((c,col)=>h.set(normalize(c.text),col));const find=a=>a.map(normalize).map(x=>h.get(x)).find(Boolean),sc=find(['sku','mã sku','ma sku']),nc=find(['tên sku','ten sku','tên sản phẩm','ten san pham','tên hàng','ten hang','product name','sku name']);if(!sc||!nc)throw new Error('File phải có cột SKU và Tên SKU/Tên hàng.');const m=new Map();for(let r=2;r<=sh.rowCount;r++){const sku=String(sh.getRow(r).getCell(sc).text||'').trim(),name=String(sh.getRow(r).getCell(nc).text||'').trim();if(!sku&&!name)continue;if(!sku||!name)throw new Error(`Dòng ${r}: thiếu mã SKU hoặc tên hàng`);if(m.has(sku)&&m.get(sku)!==name)throw new Error(`SKU ${sku} có nhiều tên hàng khác nhau`);m.set(sku,name);}if(!m.size)throw new Error('Không tìm thấy SKU hợp lệ.');const items=[...m].map(([sku,product_name])=>({sku,product_name})),res=await api('replace-catalog',{items,source_name:f.name});message('#catalogMsg',`Đã cập nhật ${Number(res.active_count||items.length).toLocaleString(getLocale())} SKU · phiên ${res.revision}.`,'good');}catch(e){message('#catalogMsg',safeMessage(e),'error');}finally{setBusy(false);}};
 }
 async function renderUsers(){
  $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">STAFF</p><h2>Nhân sự & quyền</h2></div><button id="staffSync" class="secondary">ĐỒNG BỘ NGUỒN NGAY</button></div><div id="staffStatus"></div><div id="usersBody"></div>`;
@@ -809,31 +816,80 @@ async function renderDevices() {
   $('#content').innerHTML = `<div class="heading"><div><p class="eyebrow">DEVICE</p><h2>Thiết bị & thông báo</h2></div></div><div id="deviceBody" class="card muted">Đang tải…</div>`;
   try {
     const logs = await api('list-logs',{limit:50});
-    $('#deviceBody').innerHTML = `<p>Log thiết bị gần đây là nguồn chẩn đoán; FCM accepted không được coi là thiết bị đã nhận nếu chưa có client_received/ACK.</p>${logs.logs.length ? `<div class="table-wrap"><table><thead><tr><th>User</th><th>Thiết bị</th><th>App</th><th>Thời gian</th></tr></thead><tbody>${logs.logs.map(l=>`<tr><td>${escapeHtml(l.employee_code)}</td><td>${escapeHtml(l.device_name)}</td><td>${escapeHtml(l.app_version)}</td><td>${formatTime(l.created_at)}</td></tr>`).join('')}</tbody></table></div>` : '<p>Chưa có log thiết bị gần đây.</p>'}`;
+    $('#deviceBody').innerHTML = `<p>Các file log thiết bị gần đây dùng để chẩn đoán lỗi. Trạng thái FCM accepted chỉ xác nhận Firebase đã nhận yêu cầu gửi; chỉ coi thiết bị đã nhận thông báo khi có client_received/ACK.</p>${logs.logs.length ? `<div class="table-wrap"><table><thead><tr><th>User</th><th>Thiết bị</th><th>Phiên bản app</th><th>Thời gian</th></tr></thead><tbody>${logs.logs.map(l=>`<tr><td>${escapeHtml(l.employee_code)}</td><td>${escapeHtml(l.device_name)}</td><td>${escapeHtml(l.app_version)}</td><td>${formatTime(l.created_at)}</td></tr>`).join('')}</tbody></table></div>` : '<p>Chưa có log thiết bị gần đây.</p>'}`;
   } catch(error){$('#deviceBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(error))}</div>`;}
 }
 
 async function renderIntegrations(){
- $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">SYSTEM</p><h2>Hệ thống & dung lượng</h2></div></div><div id="serviceBody"></div>`;try{const d=await api('service-metrics'),u=d.usage||{},l=d.free_limits||{},db=Number(u.database_bytes||0),lim=Number(l.database_bytes||1);$('#serviceBody').innerHTML=`<div class="metrics"><article class="metric"><span>Database</span><strong>${(db/1048576).toFixed(1)} MB</strong></article><article class="metric"><span>SKU hoạt động</span><strong>${Number(u.sku_active||0).toLocaleString(getLocale())}</strong></article><article class="metric"><span>Nhân sự hoạt động</span><strong>${Number(u.profiles_active||0)}</strong></article><article class="metric"><span>Thiết bị FCM</span><strong>${Number(u.active_device_tokens||0)}</strong></article></div><div class="panel-grid"><article class="card"><h3>Ngưỡng kiểm soát 0 đồng</h3><p>Dung lượng dữ liệu: ${(db/lim*100).toFixed(1)}% / 500 MB</p><p>Storage: 1 GB · Egress: 5 GB/tháng · MAU: 50.000/tháng · Edge Functions: 500.000 lượt/tháng · Realtime: 2.000.000 message/tháng · 200 kết nối đồng thời · tối đa 2 project active.</p><p class="muted">Thông tin dùng để cảnh báo vận hành; hệ thống không tự bật Billing.</p></article><article class="card"><h3>Dữ liệu kỹ thuật</h3><p>Notification events: ${Number(u.notification_events||0).toLocaleString(getLocale())}</p><p>Diagnostic log: ${(Number(u.diagnostic_log_bytes||0)/1048576).toFixed(2)} MB</p><p>Google Sheet chờ: ${Number(u.sheet_pending||0)}</p><p>Catalog revision: ${Number(u.catalog_revision||0)}</p></article></div>`;}catch(e){$('#serviceBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}
+ $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">SYSTEM</p><h2>Hệ thống & dung lượng</h2></div></div><div id="serviceBody"></div>`;try{const d=await api('service-metrics'),u=d.usage||{},l=d.free_limits||{},db=Number(u.database_bytes||0),lim=Number(l.database_bytes||1);$('#serviceBody').innerHTML=`<div class="metrics"><article class="metric"><span>Database</span><strong>${(db/1048576).toFixed(1)} MB</strong></article><article class="metric"><span>SKU hoạt động</span><strong>${Number(u.sku_active||0).toLocaleString(getLocale())}</strong></article><article class="metric"><span>Nhân sự hoạt động</span><strong>${Number(u.profiles_active||0)}</strong></article><article class="metric"><span>Thiết bị FCM</span><strong>${Number(u.active_device_tokens||0)}</strong></article></div><div class="panel-grid"><article class="card"><h3>Ngưỡng kiểm soát 0 đồng</h3><p>Dung lượng dữ liệu: ${(db/lim*100).toFixed(1)}% / 500 MB</p><p>Storage: 1 GB · Egress: 5 GB/tháng · MAU: 50.000/tháng · Edge Functions: 500.000 lượt/tháng · Realtime: 2.000.000 message/tháng · 200 kết nối đồng thời · tối đa 2 project active.</p><p class="muted">Thông tin dùng để cảnh báo vận hành; hệ thống không tự bật Billing.</p></article><article class="card"><h3>Dữ liệu kỹ thuật</h3><p>Sự kiện thông báo: ${Number(u.notification_events||0).toLocaleString(getLocale())}</p><p>Log chẩn đoán: Google Drive (không lưu trên service)</p><p>Dữ liệu chờ ghi Google Sheet: ${Number(u.sheet_pending||0)}</p><p>Phiên dữ liệu SKU: ${Number(u.catalog_revision||0)}</p></article></div>`;}catch(e){$('#serviceBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}
 }
 
 async function renderLogs() {
-  $('#content').innerHTML = `<div class="heading"><div><p class="eyebrow">AUDIT</p><h2>Nhật ký & kiểm tra</h2></div><button id="refreshLogs" class="secondary">Làm mới</button></div><div class="panel-grid"><section><h3>Nhật ký web</h3><div id="webLogs"></div></section><section><h3>Log thiết bị</h3><div id="logs"></div></section><section><h3>Lịch sử nghiệp vụ</h3><div id="audit"></div></section></div>`;
-  $('#refreshLogs').onclick=renderLogs;
-  try{
-    const [logs,audit,webLogs]=await Promise.all([api('list-logs',{limit:100}),api('audit-history',{limit:150}),api('list-web-logs',{})]);
-    $('#webLogs').innerHTML=(webLogs.logs||[]).length?(webLogs.logs||[]).map(l=>`<article class="card log"><div><strong>${escapeHtml(l.file_name)}</strong><span>${formatTime(l.created_at)}</span><small>${Number(l.compressed_bytes||0).toLocaleString(getLocale())} bytes · lưu trực tiếp Google Drive · tự dọn sau ${Number(webLogs.retention_days||14)} ngày</small></div><button class="secondary" data-web-log="${l.id}">TẢI</button></article>`).join(''):'<div class="card muted">Chưa có log web.</div>';
-    document.querySelectorAll('[data-web-log]').forEach(b=>b.onclick=()=>downloadWebLog(b.dataset.webLog));
-    $('#logs').innerHTML=logs.logs.length?logs.logs.map(l=>`<article class="card log"><div><strong>${escapeHtml(l.employee_code)} · ${escapeHtml(l.device_name)}</strong><span>${escapeHtml(l.app_version)} · ${formatTime(l.created_at)}</span><small>${Number(l.compressed_bytes||0).toLocaleString(getLocale())} bytes · SHA ${escapeHtml(String(l.sha256).slice(0,12))}</small></div><button class="secondary" data-log="${l.id}">TẢI</button></article>`).join(''):'<div class="card muted">Chưa có log.</div>';
-    document.querySelectorAll('[data-log]').forEach(b=>b.onclick=()=>downloadLog(b.dataset.log));
-    $('#audit').innerHTML=audit.audit.length?audit.audit.map(a=>`<article class="card"><strong>${escapeHtml(a.action)}</strong><p>${escapeHtml(a.from_status||'—')} → ${escapeHtml(a.to_status||'—')}</p><small>${formatTime(a.created_at)} · issue ${escapeHtml(String(a.issue_id).slice(0,8))}</small></article>`).join(''):'<div class="card muted">Chưa có lịch sử.</div>';
-  }catch(error){const target=$('#webLogs')||$('#logs');if(target)target.innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(error))}</div>`;}
+  $('#content').innerHTML = `<div class="heading"><div><p class="eyebrow">CHẨN ĐOÁN</p><h2>Nhật ký hệ thống</h2></div><div class="actions"><button id="createFullLog" class="primary">TẠO FILE LOG ĐẦY ĐỦ</button><button id="refreshLogs" class="secondary">Làm mới</button></div></div>
+    <div id="logPageMessage" class="message" hidden></div>
+    <article class="card"><strong>Lưu trữ log chẩn đoán</strong><p>File log Web và thiết bị được lưu trực tiếp trong thư mục Google Drive của Báo hàng 1291. Hệ thống không lưu bản sao hoặc chỉ mục log mới trên Neon/service. Log tự động chỉ tạo khi có lỗi đáng chú ý và được gộp theo chu kỳ để tránh tạo quá nhiều file.</p><p class="muted">Nút “Tạo file log đầy đủ” gom thông tin chẩn đoán của phiên Web hiện tại thành một file, lưu lên Google Drive và đồng thời tải file về máy.</p></article>
+    <div class="panel-grid"><section><h3>Log Web</h3><div id="webLogs"><div class="card muted">Đang tải…</div></div></section><section><h3>Log thiết bị</h3><div id="logs"><div class="card muted">Đang tải…</div></div></section><section><h3>Lịch sử thao tác</h3><div id="audit"><div class="card muted">Đang tải…</div></div></section></div>`;
+  $('#refreshLogs').onclick = () => void renderLogs();
+  $('#createFullLog').onclick = async () => {
+    const button = $('#createFullLog');
+    button.disabled = true;
+    setBusy(true, 'Đang tạo file log đầy đủ…');
+    try {
+      const result = await createWebDiagnosticLog();
+      await renderLogs();
+      message('#logPageMessage', `Đã tạo file log đầy đủ: ${result.file_name || 'Google Drive'}.`, 'good');
+      if (result.file_id) await downloadWebLog(result.file_id);
+    } catch (error) {
+      message('#logPageMessage', safeMessage(error), 'error');
+    } finally {
+      setBusy(false);
+      const nextButton = $('#createFullLog');
+      if (nextButton) nextButton.disabled = false;
+    }
+  };
+
+  const [deviceResult, auditResult, webResult] = await Promise.allSettled([
+    api('list-logs',{limit:100}),
+    api('audit-history',{limit:150}),
+    api('list-web-logs',{}),
+  ]);
+
+  if (webResult.status === 'fulfilled' && webResult.value?.ok !== false) {
+    const webLogs = webResult.value || {};
+    const rows = Array.isArray(webLogs.logs) ? webLogs.logs : [];
+    $('#webLogs').innerHTML = rows.length ? rows.map((l) => {
+      const mode = l.mode === 'manual' ? 'Tạo thủ công' : 'Tự động · khi có lỗi';
+      return `<article class="card log"><div><strong>${escapeHtml(l.file_name)}</strong><span>${formatTime(l.created_at)}</span><small>${escapeHtml(mode)} · ${Number(l.compressed_bytes||0).toLocaleString(getLocale())} bytes · Google Drive · tự dọn sau ${Number(webLogs.retention_days||14)} ngày</small></div><button class="secondary" data-web-log="${l.id}">TẢI</button></article>`;
+    }).join('') : '<div class="card muted">Chưa có file log Web.</div>';
+    document.querySelectorAll('[data-web-log]').forEach((b) => b.onclick = () => downloadWebLog(b.dataset.webLog));
+  } else {
+    const error = webResult.status === 'rejected' ? webResult.reason : new Error(webResult.value?.error || 'Không đọc được log Web từ Google Drive.');
+    $('#webLogs').innerHTML = `<div class="message" data-type="error">${escapeHtml(safeMessage(error))}</div>`;
+  }
+
+  if (deviceResult.status === 'fulfilled' && deviceResult.value?.ok !== false) {
+    const deviceLogs = deviceResult.value || {};
+    const rows = Array.isArray(deviceLogs.logs) ? deviceLogs.logs : [];
+    $('#logs').innerHTML = rows.length ? rows.map((l) => `<article class="card log"><div><strong>${escapeHtml(l.employee_code || '—')} · ${escapeHtml(l.device_name || 'Thiết bị')}</strong><span>${escapeHtml(l.app_version || 'Không rõ phiên bản')} · ${formatTime(l.created_at)}</span><small>${Number(l.compressed_bytes||0).toLocaleString(getLocale())} bytes · Google Drive${l.sha256 ? ` · SHA ${escapeHtml(String(l.sha256).slice(0,12))}` : ''}</small></div><button class="secondary" data-log="${l.id}">TẢI</button></article>`).join('') : '<div class="card muted">Chưa có file log thiết bị.</div>';
+    document.querySelectorAll('[data-log]').forEach((b) => b.onclick = () => downloadLog(b.dataset.log));
+  } else {
+    const error = deviceResult.status === 'rejected' ? deviceResult.reason : new Error(deviceResult.value?.error || 'Không đọc được log thiết bị từ Google Drive.');
+    $('#logs').innerHTML = `<div class="message" data-type="error">${escapeHtml(safeMessage(error))}</div>`;
+  }
+
+  if (auditResult.status === 'fulfilled') {
+    const audit = auditResult.value || {};
+    const rows = Array.isArray(audit.audit) ? audit.audit : [];
+    $('#audit').innerHTML = rows.length ? rows.map((a) => `<article class="card"><strong>${escapeHtml(a.action)}</strong><p>${escapeHtml(a.from_status||'—')} → ${escapeHtml(a.to_status||'—')}</p><small>${formatTime(a.created_at)} · yêu cầu ${escapeHtml(String(a.issue_id||'').slice(0,8))}</small></article>`).join('') : '<div class="card muted">Chưa có lịch sử thao tác.</div>';
+  } else {
+    $('#audit').innerHTML = `<div class="message" data-type="error">${escapeHtml(safeMessage(auditResult.reason))}</div>`;
+  }
 }
 async function downloadLog(id){
   try{
     setBusy(true,'Đang tải log…');
     const r=await api('download-log',{id});
-    if(!r.gzip_base64)throw new Error('Máy chủ không trả dữ liệu log.');
+    if(!r.gzip_base64)throw new Error('Google Drive không trả dữ liệu log thiết bị.');
     const raw=atob(r.gzip_base64),bytes=new Uint8Array(raw.length);
     for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);
     const url=URL.createObjectURL(new Blob([bytes],{type:'application/gzip'}));
@@ -866,11 +922,11 @@ async function renderSla(){
 }
 
 async function renderConfig(){
- $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">CONFIG</p><h2>Cấu hình hệ thống</h2></div></div><div id="configBody"></div>`;try{const c=await api('get-config');$('#configBody').innerHTML=`<article class="card"><div class="form-grid"><label>Lưu lịch sử nghiệp vụ (ngày)<input id="retentionDays" type="number" min="7" max="365" value="${c.retention_days}"><small>Giữ ticket/audit theo chu kỳ, không phụ thuộc trạng thái nhân sự.</small></label><label>Lưu log chẩn đoán (ngày)<input id="logDays" type="number" min="1" max="60" value="${c.diagnostic_log_retention_days}"><small>Log cũ tự xóa để kiểm soát dung lượng.</small></label><label class="check"><input id="staffAuto" type="checkbox" ${c.staff_auto_sync_enabled?'checked':''}> Tự động đồng bộ DANH MỤC NHÂN SỰ</label><label>Chu kỳ đồng bộ nhân sự (phút)<input id="staffInterval" type="number" min="15" max="1440" value="${c.staff_sync_interval_minutes||60}"><small>Khuyến nghị 60 phút để giảm network/quota.</small></label><label class="check"><input id="cfgAutoSkip" type="checkbox" ${c.auto_skip_enabled?'checked':''}> Tự động cho phép bỏ qua SKU</label><label>Tự động bỏ qua sau (phút)<input id="cfgAutoSkipAfter" type="number" min="15" max="4320" value="${c.auto_skip_after_minutes||120}"></label></div><button id="saveConfig" class="primary">LƯU CẤU HÌNH</button><div id="configMsg" class="message" hidden></div></article>`;$('#saveConfig').onclick=async()=>{try{await api('save-config',{...c,retention_days:Number($('#retentionDays').value),diagnostic_log_retention_days:Number($('#logDays').value),staff_auto_sync_enabled:$('#staffAuto').checked,staff_sync_interval_minutes:Number($('#staffInterval').value),auto_skip_enabled:$('#cfgAutoSkip').checked,auto_skip_after_minutes:Number($('#cfgAutoSkipAfter').value)});message('#configMsg','Đã lưu cấu hình hệ thống.','good');}catch(e){message('#configMsg',safeMessage(e),'error');}};}catch(e){$('#configBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}
+ $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">CONFIG</p><h2>Cấu hình hệ thống</h2></div></div><div id="configBody"></div>`;try{const c=await api('get-config');$('#configBody').innerHTML=`<article class="card"><div class="form-grid"><label>Lưu lịch sử nghiệp vụ (ngày)<input id="retentionDays" type="number" min="7" max="365" value="${c.retention_days}"><small>Giữ ticket/audit theo chu kỳ, không phụ thuộc trạng thái nhân sự.</small></label><label>Lưu log chẩn đoán (ngày)<input id="logDays" type="number" min="1" max="60" value="${c.diagnostic_log_retention_days}"><small>Log cũ tự xóa để kiểm soát dung lượng.</small></label><label class="check"><input id="staffAuto" type="checkbox" ${c.staff_auto_sync_enabled?'checked':''}> Tự động đồng bộ DANH MỤC NHÂN SỰ</label><label>Chu kỳ đồng bộ nhân sự (phút)<input id="staffInterval" type="number" min="15" max="1440" value="${c.staff_sync_interval_minutes||60}"><small>Khuyến nghị 60 phút để giảm network/quota.</small></label><label class="check"><input id="cfgAutoSkip" type="checkbox" ${c.auto_skip_enabled?'checked':''}> Tự động cho phép bỏ qua SKU</label><label>Tự động cho phép bỏ qua sau (phút)<input id="cfgAutoSkipAfter" type="number" min="15" max="4320" value="${c.auto_skip_after_minutes||120}"></label></div><button id="saveConfig" class="primary">LƯU CẤU HÌNH</button><div id="configMsg" class="message" hidden></div></article>`;$('#saveConfig').onclick=async()=>{try{await api('save-config',{...c,retention_days:Number($('#retentionDays').value),diagnostic_log_retention_days:Number($('#logDays').value),staff_auto_sync_enabled:$('#staffAuto').checked,staff_sync_interval_minutes:Number($('#staffInterval').value),auto_skip_enabled:$('#cfgAutoSkip').checked,auto_skip_after_minutes:Number($('#cfgAutoSkipAfter').value)});message('#configMsg','Đã lưu cấu hình hệ thống.','good');}catch(e){message('#configMsg',safeMessage(e),'error');}};}catch(e){$('#configBody').innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(e))}</div>`;}
 }
 
 async function renderVersions(){
-  $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">RELEASE</p><h2>Phiên bản</h2></div></div><article class="card"><h3>OTA</h3><p>Stable và Beta được khóa channel trong APK, signer và SHA được workflow release kiểm tra trước publish.</p><p class="muted">Release mới vẫn đi qua workflow production đã harden; Web không chứa signing key.</p></article><article class="card"><h3>Runtime</h3><p>Dùng mục Thiết bị & thông báo / Log để đối chiếu app version đang chạy. Không coi file build là đã triển khai nếu chưa có evidence runtime.</p></article>`;
+  $('#content').innerHTML=`<div class="heading"><div><p class="eyebrow">PHÁT HÀNH</p><h2>Phiên bản ứng dụng</h2></div></div><article class="card"><h3>Cập nhật ứng dụng</h3><p>Bản Stable và Beta được tách kênh. Trước khi phát hành, hệ thống kiểm tra chữ ký và SHA của file APK.</p><p class="muted">Web không chứa khóa ký ứng dụng. Chỉ bản đã qua kiểm tra phát hành mới được công bố.</p></article><article class="card"><h3>Phiên bản đang sử dụng</h3><p>Dùng mục Thiết bị & thông báo và Nhật ký hệ thống để đối chiếu phiên bản app đang chạy thực tế. File build chỉ được coi là đã triển khai khi có bằng chứng runtime.</p></article>`;
 }
 
 async function bootstrapApp() {

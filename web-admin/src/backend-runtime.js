@@ -176,7 +176,6 @@ function mapRpc(action, body, init) {
     case 'reports-summary': return ['api_reports_summary_rpc', base()]
     case 'issue-history': return ['api_issue_history_rpc', base({ p_limit: b.limit || 200 })]
     case 'audit-history': return ['api_audit_history_rpc', base({ p_limit: b.limit || 150 })]
-    case 'list-logs': return ['api_list_logs_rpc', base({ p_limit: b.limit || 100, p_employee_code: b.employee_code || '' })]
     case 'import-skus': return ['api_import_skus_rpc', base({ p_items: b.items || [] })]
     case 'replace-catalog': return ['api_replace_catalog_rpc', base({ p_items: b.items || [], p_source_name: b.source_name || '' })]
     default: return null
@@ -235,11 +234,25 @@ async function neonRpc(action, body, init) {
 async function worker(action, body, init) {
   if (!WORKER_URL) return jsonResponse({ ok: false, error: 'WORKER_NOT_CONFIGURED' }, 503)
   const token = bearer(init) || realtimeToken
-  return originalFetch(WORKER_URL, {
+  const response = await originalFetch(WORKER_URL, {
     method: 'POST',
     // text/plain keeps this a CORS-simple request. Apps Script parses the JSON body itself.
     headers: { 'content-type': 'text/plain;charset=UTF-8' },
     body: JSON.stringify({ action, id_token: token, ...body }),
+  })
+  const text = await response.text()
+  try {
+    JSON.parse(text || '{}')
+  } catch {
+    return jsonResponse({
+      ok:false,
+      error:'GOOGLE_WORKER_INVALID_RESPONSE',
+      message:'Dịch vụ Google trả phản hồi không đúng định dạng. Vui lòng thử lại sau.',
+    }, 502)
+  }
+  return new Response(text || '{}', {
+    status:response.status,
+    headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'},
   })
 }
 
@@ -291,6 +304,7 @@ async function backendFetchAdapter(input, init = {}) {
         if (action === 'update-user') return worker('update-user', body, init)
         if (action === 'delete-user') return worker('user-disable', { user_id: body.id || body.user_id }, init)
       }
+      if (action === 'list-logs') return worker('list-device-logs', body, init)
       if (['update-user', 'import-users', 'sync-google-sheet', 'staff-sync-now', 'staff-source-status', 'staff-source-configure', 'password-reset-mail-capability', 'upload-log', 'download-log', 'upload-web-log', 'list-web-logs', 'download-web-log', 'user-upsert', 'user-disable'].includes(action)) {
         return worker(action, body, init)
       }

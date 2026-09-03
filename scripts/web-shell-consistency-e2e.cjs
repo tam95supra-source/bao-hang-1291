@@ -57,11 +57,51 @@ async function verifyShell(page,role,stable=true){
 }
 async function loginPw(page,u,pw){await page.goto(SITE,{waitUntil:'domcontentloaded'});await page.locator('#employeeCode').fill(u.code);await page.locator('#password').fill(pw);await page.locator('#loginForm button').first().click();await page.waitForFunction(role=>{try{return document.querySelector('.app-shell')&&JSON.parse(sessionStorage.getItem('bao-hang-1291-web-session')||'null')?.profile?.role===role}catch{return false}},u.role,{timeout:20000});}
 async function loginAdmin(page,session){await page.goto(SITE,{waitUntil:'domcontentloaded'});await page.evaluate(({k,s})=>sessionStorage.setItem(k,JSON.stringify(s)),{k:SESSION_KEY,s:session});await page.reload({waitUntil:'domcontentloaded'});await page.waitForSelector('.app-shell');}
+const UI_TEXT_SELECTOR='h1,h2,h3,.tabs button,.heading button,.ops-form-actions button,.ops-row-actions button,.ops-save-bar button,.wv2-tabs button,.wv2-actions button,.wv2-report-actions button,.fast-tabs button,#fastDetail button,#reportShortage,#refreshMine,#catalogSearchBtn,#createFullLog,#refreshLogs,label,dt,th,.eyebrow,.nav-section-label,.muted,.ops-page-heading p,.ops-panel-title p,.ops-note,.ops-setting-card p,.ops-status-strip span,.wv2-panel>h3,.wv2-detail-title,.fast-facts dt,.alert-modal p,.bh-language-switcher span,.bh-language-switcher option';
+async function auditEnglishUi(page,role,route){
+  const switcher=page.locator('.bh-language-switcher select');
+  await switcher.selectOption('en');
+  await page.waitForFunction(()=>document.documentElement.lang==='en',{timeout:8000});
+  await sleep(900);
+  const residual=await page.evaluate(({selector})=>{
+    const vi=/[ÀÁÂÃÈÉÊÌÍÒÓÔÕÙÚĂĐĨŨƠƯàáâãèéêìíòóôõùúăđĩũơưẠ-ỹ]/;
+    const rows=[],seen=new Set();
+    for(const el of document.querySelectorAll(selector)){
+      if(!el.offsetParent&&getComputedStyle(el).position!=='fixed')continue;
+      const values=[(el.textContent||'').replace(/\s+/g,' ').trim()];
+      for(const name of ['placeholder','title','aria-label'])if(el.hasAttribute?.(name))values.push((el.getAttribute(name)||'').trim());
+      for(const value of values){
+        if(!value||!vi.test(value)||/BÁO HÀNG 1291/i.test(value)||seen.has(value))continue;
+        seen.add(value);rows.push(value.slice(0,260));
+      }
+    }
+    return rows;
+  },{selector:UI_TEXT_SELECTOR});
+  if(residual.length)throw new Error('I18N_VI_RESIDUAL_'+role+'_'+route+':'+safe(JSON.stringify(residual.slice(0,12))));
+  const switchState=await page.evaluate(()=>({
+    label:document.querySelector('.bh-language-switcher span')?.textContent?.trim()||'',
+    vi:document.querySelector('.bh-language-switcher option[value="vi"]')?.textContent?.trim()||'',
+    en:document.querySelector('.bh-language-switcher option[value="en"]')?.textContent?.trim()||'',
+  }));
+  if(switchState.label!=='Language'||switchState.vi!=='Vietnamese'||switchState.en!=='English')throw new Error('I18N_SWITCHER_PARTIAL_'+JSON.stringify(switchState));
+  await switcher.selectOption('vi');
+  await page.waitForFunction(()=>document.documentElement.lang==='vi',{timeout:8000});
+  console.log('WEB_I18N_ROUTE=PASS role='+role+' route='+route);
+}
 async function directLoads(page,role){
-  for(const route of EXPECTED[role].tabs){await page.goto(SITE+'#/'+route,{waitUntil:'domcontentloaded'});await page.waitForFunction(r=>location.hash==='#/'+r,r,{timeout:10000});await verifyShell(page,role,true);}
+  for(const route of EXPECTED[role].tabs){
+    await page.goto(SITE+'#/'+route,{waitUntil:'domcontentloaded'});
+    await page.waitForFunction(r=>location.hash==='#/'+r,route,{timeout:10000});
+    await verifyShell(page,role,true);
+    await auditEnglishUi(page,role,route);
+  }
   console.log('WEB_SHELL_DIRECT_LOAD_ROLE=PASS role='+role+' routes='+EXPECTED[role].tabs.length);
 }
-async function clickRoute(page,route,role){await page.locator('.tabs button[data-tab="'+route+'"]').click();await page.waitForFunction(r=>location.hash==='#/'+r,r,{timeout:10000});await verifyShell(page,role,false)}
+async function clickRoute(page,route,role){
+  await page.locator('.tabs button[data-tab="'+route+'"]').click();
+  await page.waitForFunction(r=>location.hash==='#/'+r,route,{timeout:10000});
+  await verifyShell(page,role,false);
+}
 async function navigationStability(page){
   for(const route of ['events','reports','events','overview','users','services','reports'])await clickRoute(page,route,'ADMIN');
   console.log('WEB_SHELL_NAV_STABILITY=PASS');
@@ -86,6 +126,7 @@ async function i18n(page){
       const ctx=await browser.newContext({viewport:role==='PICKER'?{width:390,height:844}:{width:1280,height:900}}),page=await ctx.newPage();guard(page,role);
       try{if(role==='ADMIN')await loginAdmin(page,admin);else await loginPw(page,USERS.find(u=>u.role===role),pw);await verifyShell(page,role,true);await directLoads(page,role);if(role==='ADMIN'){await navigationStability(page);await i18n(page);}}finally{await ctx.close().catch(()=>{})}
     }
+    console.log('WEB_I18N_ALL_ROUTES=PASS roles=4 routes='+roles.reduce((n,r)=>n+EXPECTED[r].tabs.length,0));
     console.log('WEB_SHELL_ROLE_MATRIX=PASS roles=4');
     console.log('WEB_SHELL_DIRECT_LOAD=PASS');
     console.log('WEB_SHELL_RUNTIME_CONSISTENCY=PASS generation=canonical-v2');

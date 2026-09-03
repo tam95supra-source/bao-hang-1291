@@ -36,7 +36,7 @@ function fmt(value) {
 }
 
 function statusLabel(status) {
-  return ({ OPEN:'Chờ nhận', CLAIMED:'Đang xử lý', SEARCHING:'Đang xử lý', REPLENISHING:'Đang xử lý', AVAILABLE:'Đã có hàng', SKIP_ALLOWED:'Được phép SKIP', CLOSED:'Đã đóng', WITHDRAWN:'Đã thu hồi' })[status] || status || '—';
+  return ({ OPEN:'Chờ nhận', CLAIMED:'Đang xử lý', SEARCHING:'Đang xử lý', REPLENISHING:'Đang xử lý', AVAILABLE:'Đã có hàng', SKIP_ALLOWED:'Được phép bỏ qua', CLOSED:'Đã đóng', WITHDRAWN:'Đã thu hồi' })[status] || status || '—';
 }
 
 function issueMarkup(issue) {
