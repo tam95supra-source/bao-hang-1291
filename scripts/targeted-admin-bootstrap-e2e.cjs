@@ -153,15 +153,26 @@ async function main() {
   try {
     const customToken = await stage('ADMIN_CREATE_CUSTOM_TOKEN', () => auth.createCustomToken(ADMIN_UID), 10000);
     const exchanged = await stage('ADMIN_EXCHANGE_CUSTOM_TOKEN', () => exchangeCustomToken(customToken), 15000);
-    const adminProfile = await stage('ADMIN_PROFILE_EXCHANGED_TOKEN', () => profile(exchanged.idToken, 'custom_exchange'), 15000);
+    let adminPair = exchanged;
+    let adminProfile;
+    try {
+      adminProfile = await stage('ADMIN_PROFILE_EXCHANGED_TOKEN', () => profile(adminPair.idToken, 'custom_exchange'), 15000);
+    } catch (error) {
+      if (!/AUTH_REQUIRED/.test(String(error?.message || error))) throw error;
+      console.log('ADMIN_PROFILE_AUTH_RECOVERY=BEGIN reason=AUTH_REQUIRED');
+      await sleep(1800);
+      adminPair = await stage('ADMIN_AUTH_RECOVERY_REFRESH', () => refreshToken(adminPair.refreshToken), 15000);
+      adminProfile = await stage('ADMIN_PROFILE_RECOVERED_TOKEN', () => profile(adminPair.idToken, 'recovered_refresh'), 15000);
+      console.log('ADMIN_PROFILE_AUTH_RECOVERY=PASS');
+    }
 
-    const sourceStatus = await stage('STAFF_SOURCE_STATUS', () => gasAction(exchanged.idToken, 'staff-source-status', {}, 30000), 32000);
+    const sourceStatus = await stage('STAFF_SOURCE_STATUS', () => gasAction(adminPair.idToken, 'staff-source-status', {}, 30000), 32000);
     if (sourceStatus.sheet_id !== '1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78' || sourceStatus.sheet_name !== 'DANH SÁCH NHÂN SỰ' || sourceStatus.fallback_only !== false) {
       throw new Error(`STAFF_SOURCE_STATUS_MISMATCH:${safe(JSON.stringify(sourceStatus))}`);
     }
     console.log('STAFF_SOURCE_STATUS=PASS current_source=true');
 
-    const sourceValidate = await stage('STAFF_SOURCE_NO_CHANGE_VALIDATE', () => gasAction(exchanged.idToken, 'staff-source-configure', {
+    const sourceValidate = await stage('STAFF_SOURCE_NO_CHANGE_VALIDATE', () => gasAction(adminPair.idToken, 'staff-source-configure', {
       sheet_url: sourceStatus.sheet_url,
       sheet_name: sourceStatus.sheet_name,
     }, 60000), 62000);
@@ -177,7 +188,7 @@ async function main() {
     }
     console.log('STAFF_SOURCE_NO_CHANGE_VALIDATION=PASS eligible_rows=502 changed=false cleanup_skipped=true');
 
-    const refreshDiag = await diagnosticStage('ADMIN_REFRESH_NODE', () => refreshToken(exchanged.refreshToken), 15000);
+    const refreshDiag = await diagnosticStage('ADMIN_REFRESH_NODE', () => refreshToken(adminPair.refreshToken), 15000);
     if (refreshDiag.ok) await diagnosticStage('ADMIN_PROFILE_REFRESHED_TOKEN', () => profile(refreshDiag.value.idToken, 'node_refresh'), 15000);
 
     browser = await stage('BROWSER_LAUNCH', () => chromium.launch({ executablePath: CHROME, headless: true, timeout: 20000, args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] }), 22000);
@@ -202,7 +213,7 @@ async function main() {
       sessionStorage.setItem(key, JSON.stringify(session));
       const read = JSON.parse(sessionStorage.getItem(key) || 'null');
       return Boolean(read?.access_token && read?.refresh_token && read?.profile?.role === 'ADMIN');
-    }, { key: SESSION_KEY, session: { access_token: exchanged.idToken, refresh_token: exchanged.refreshToken, expires_at: Math.floor(Date.now()/1000) + exchanged.expiresIn, profile: adminProfile } }), 8000).then((ok) => { if (!ok) throw new Error('SESSION_SEED_READBACK_FAILED'); });
+    }, { key: SESSION_KEY, session: { access_token: adminPair.idToken, refresh_token: adminPair.refreshToken, expires_at: Math.floor(Date.now()/1000) + adminPair.expiresIn, profile: adminProfile } }), 8000).then((ok) => { if (!ok) throw new Error('SESSION_SEED_READBACK_FAILED'); });
     console.log('ADMIN_SESSION_STORAGE_BEFORE_RELOAD=PASS');
 
     phase = 'reload';
