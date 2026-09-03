@@ -188,6 +188,40 @@ async function main() {
     }
     console.log('STAFF_SOURCE_NO_CHANGE_VALIDATION=PASS eligible_rows=250 changed=false cleanup_skipped=true');
 
+    const retiredWatchers = await stage('STAFF_LEGACY_WATCHERS_RETIRE', () => gasAction(adminPair.idToken, 'staff-source-retire-legacy-watchers', {}, 30000), 32000);
+    if (Number(retiredWatchers.legacy_trigger_count_after || 0) !== 0) {
+      throw new Error(`STAFF_LEGACY_WATCHERS_REMAIN:${safe(JSON.stringify(retiredWatchers))}`);
+    }
+    console.log(`STAFF_LEGACY_WATCHERS_RETIRED=PASS removed=${Number(retiredWatchers.removed || 0)} remaining=0`);
+
+    const bridgeStatus = await stage('STAFF_SOURCE_BRIDGE_STATUS', () => gasAction(adminPair.idToken, 'staff-source-bridge-status', {}, 30000), 32000);
+    if (bridgeStatus.mode !== 'SOURCE_DRIVEN_DELTA_V1' ||
+        bridgeStatus.source_id !== sourceStatus.sheet_id ||
+        bridgeStatus.source_tab !== sourceStatus.sheet_name ||
+        Number(bridgeStatus.legacy_trigger_count || 0) !== 0) {
+      throw new Error(`STAFF_SOURCE_BRIDGE_STATUS_MISMATCH:${safe(JSON.stringify(bridgeStatus))}`);
+    }
+    console.log('STAFF_SOURCE_BRIDGE_STATUS=PASS source=canonical legacy_triggers=0');
+
+    const syncFirst = await stage('STAFF_SOURCE_RECONCILE_FIRST', () => gasAction(adminPair.idToken, 'staff-sync-now', {}, 60000), 62000);
+    if (!['SUCCEEDED','NO_CHANGE'].includes(String(syncFirst.status || '')) ||
+        Number(syncFirst.eligible_rows || 0) !== 250 ||
+        Number(syncFirst.created || 0) !== 0 ||
+        Number(syncFirst.deactivated || 0) !== 0 ||
+        Number(syncFirst.failed || 0) !== 0) {
+      throw new Error(`STAFF_SOURCE_RECONCILE_FIRST_MISMATCH:${safe(JSON.stringify(syncFirst))}`);
+    }
+    const syncSecond = await stage('STAFF_SOURCE_RECONCILE_IDEMPOTENT', () => gasAction(adminPair.idToken, 'staff-sync-now', {}, 60000), 62000);
+    if (syncSecond.status !== 'NO_CHANGE' ||
+        Number(syncSecond.eligible_rows || 0) !== 250 ||
+        Number(syncSecond.created || 0) !== 0 ||
+        Number(syncSecond.updated || 0) !== 0 ||
+        Number(syncSecond.deactivated || 0) !== 0 ||
+        Number(syncSecond.failed || 0) !== 0) {
+      throw new Error(`STAFF_SOURCE_RECONCILE_IDEMPOTENT_MISMATCH:${safe(JSON.stringify(syncSecond))}`);
+    }
+    console.log(`STAFF_SOURCE_RECONCILE=PASS first_status=${syncFirst.status} first_updated=${Number(syncFirst.updated || 0)} second_status=NO_CHANGE eligible_rows=250 deactivated=0 failed=0`);
+
     const refreshDiag = await diagnosticStage('ADMIN_REFRESH_NODE', () => refreshToken(adminPair.refreshToken), 15000);
     if (refreshDiag.ok) await diagnosticStage('ADMIN_PROFILE_REFRESHED_TOKEN', () => profile(refreshDiag.value.idToken, 'node_refresh'), 15000);
 
