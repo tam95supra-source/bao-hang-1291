@@ -1,68 +1,26 @@
-name: Guarded Staff Baseline Recovery
+name: Guarded Staff Baseline Recovery (retired)
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'ops/staff-recovery-current-source.request'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: bao-hang-1291-staff-baseline-recovery
-  cancel-in-progress: false
-
 jobs:
-  recover:
+  verify-retired:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      NEON_DATA_API: https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1
-      GOOGLE_SHEET_WEBHOOK_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v6
-
-      - name: Scope and zero-cost guard
-        shell: bash
-        env:
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-        run: |
-          set -euo pipefail
-          test "$GITHUB_REPOSITORY" = 'tam95supra-source/bao-hang-1291'
-          test "$NEON_DATA_API" = 'https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1'
-          case "$GOOGLE_SHEET_WEBHOOK_URL" in https://script.google.com/macros/s/*/exec) ;; *) echo 'GAS_URL_INVALID' >&2; exit 1;; esac
-          node <<'NODE'
-          const crypto=require('crypto');
-          const sa=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT||'{}');
-          if(!sa.client_email||!sa.private_key||sa.project_id!=='bao-hang-1291')throw new Error('FIREBASE_SCOPE_INVALID');
-          const enc=v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url');
-          const now=Math.floor(Date.now()/1000),h=enc({alg:'RS256',typ:'JWT'}),p=enc({iss:sa.client_email,scope:'https://www.googleapis.com/auth/cloud-platform',aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+900}),u=`${h}.${p}`,sig=crypto.sign('RSA-SHA256',Buffer.from(u),sa.private_key).toString('base64url');
-          (async()=>{const tr=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:`${u}.${sig}`}),signal:AbortSignal.timeout(15000)});if(!tr.ok)throw new Error(`OAUTH_${tr.status}`);const access=(await tr.json()).access_token;const br=await fetch('https://cloudbilling.googleapis.com/v1/projects/bao-hang-1291/billingInfo',{headers:{Authorization:`Bearer ${access}`},signal:AbortSignal.timeout(15000)});if(!br.ok)throw new Error(`BILLING_${br.status}`);const b=await br.json();if(b.billingEnabled===true)throw new Error('COST_GUARD_STOP');console.log('COST_GUARD=PASS billingEnabled=false')})().catch(e=>{console.error(e.message);process.exitCode=3});
-          NODE
-
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
           package-manager-cache: false
-
-      - name: Restore pre-validation staff baseline
-        shell: bash
-        env:
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-        run: |
-          set -euo pipefail
-          node ops/staff_recover_current_source.cjs 2>&1 | tee "$RUNNER_TEMP/staff-recovery.log"
-          grep -F 'STAFF_RECOVERY_PRE_VALIDATION_BASELINE=PASS' "$RUNNER_TEMP/staff-recovery.log" >/dev/null
-          grep -F 'STAFF_RECOVERY_FINAL_COUNTS active_gsheet=502 inactive_gsheet=97 active_manual=3' "$RUNNER_TEMP/staff-recovery.log" >/dev/null
-          echo 'STAFF_BASELINE_RECOVERY=PASS'
-
-      - name: Verify no secret material in recovery log
-        if: always()
+      - name: Verify canonical staff contract and retired 502 recovery
         shell: bash
         run: |
           set -euo pipefail
-          if [ -f "$RUNNER_TEMP/staff-recovery.log" ] && grep -Ei 'refresh_token|access_token|private_key|BEGIN PRIVATE KEY' "$RUNNER_TEMP/staff-recovery.log"; then
-            echo 'SECRET_MATERIAL_DETECTED' >&2
-            exit 1
-          fi
+          node ops/staff_recover_current_source.cjs 2>&1 | tee "$RUNNER_TEMP/staff-recovery-retired.log"
+          grep -F 'STAFF_SOURCE_CONTRACT=1291_HY1' "$RUNNER_TEMP/staff-recovery-retired.log" >/dev/null
+          grep -F 'LEGACY_502_RECOVERY_RETIRED=PASS' "$RUNNER_TEMP/staff-recovery-retired.log" >/dev/null
+          echo 'STAFF_BASELINE_RECOVERY_RETIRED=PASS'
