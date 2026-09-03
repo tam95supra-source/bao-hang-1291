@@ -213,7 +213,7 @@ jobs:
         run: |
           set -euo pipefail
           CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"; test -n "$CHROME_BIN"
-          CHROME_BIN="$CHROME_BIN" node scripts/web-shell-consistency-e2e.cjs 2>&1 | tee .acceptance-evidence/targeted/shell-consistency.log
+          NODE_OPTIONS="--require ./scripts/web-shell-cold-goto-shim.cjs" CHROME_BIN="$CHROME_BIN" node scripts/web-shell-consistency-e2e.cjs 2>&1 | tee .acceptance-evidence/targeted/shell-consistency.log
           grep -F 'WEB_SHELL_RUNTIME_CONSISTENCY=PASS' .acceptance-evidence/targeted/shell-consistency.log >/dev/null
           grep -F 'WEB_SHELL_DIRECT_LOAD=PASS' .acceptance-evidence/targeted/shell-consistency.log >/dev/null
           grep -F 'WEB_SHELL_NAV_STABILITY=PASS' .acceptance-evidence/targeted/shell-consistency.log >/dev/null
