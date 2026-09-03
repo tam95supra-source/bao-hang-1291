@@ -45,6 +45,9 @@ function assertWorker(source) {
   if (!source.includes("const realtime = drainRealtime_(token);")) throw new Error('REALTIME_DRAIN_MISSING');
   if (!source.includes("source === 'CLIENT_KICK' ? {count:0,skipped:'CLIENT_KICK'} : drainSheet_(token)")) throw new Error('CLIENT_KICK_SHEET_BYPASS_MISSING');
   if (!source.includes("if (source !== 'CLIENT_KICK') maybeCleanup_(token);")) throw new Error('CLIENT_KICK_CLEANUP_BYPASS_MISSING');
+  if (!source.includes("if (action === 'list-device-logs') return json_(listDeviceLogs_(body));")) throw new Error('DRIVE_DEVICE_LOG_ROUTE_MISSING');
+  if (!source.includes("storage:'GOOGLE_DRIVE_ONLY'")) throw new Error('DRIVE_ONLY_LOG_STORAGE_MARKER_MISSING');
+  if (source.includes('diagnostic_log_register_rpc') || source.includes('diagnostic_log_download_meta_rpc')) throw new Error('SERVICE_DIAGNOSTIC_METADATA_STORAGE_STILL_ACTIVE');
   const tickStart = source.indexOf('function workerTick_(source)');
   const tickEnd = source.indexOf('function installWorkerTriggers_', tickStart);
   if (tickStart < 0 || tickEnd < 0) throw new Error('WORKER_TICK_FUNCTION_MISSING');
@@ -318,7 +321,7 @@ async function main() {
     canonical_hash:canonicalHash, head_before_hash:liveBeforeHash, deployed_before_hash:deployedBeforeHash,
     deployed_after_hash:deployedAfterHash, old_version:oldVersion, live_version:versionNumber,
     head_changed:changedHead, existing_deployment_updated:deploymentUpdated,
-    contract:{realtime_before_sheet:true,client_kick_sheet_bypass:true,client_kick_cleanup_bypass:true},
+    contract:{realtime_before_sheet:true,client_kick_sheet_bypass:true,client_kick_cleanup_bypass:true,diagnostic_logs_drive_only:true},
     webapp_ping:'PASS'
   };
   fs.writeFileSync(`${outDir}/apps-script-worker-deploy.json`, JSON.stringify(evidence,null,2));
