@@ -1,4 +1,5 @@
 'use strict';
+// Keep login navigation timing aligned with the production shell acceptance shim.
 
 const fs = require('fs');
 const path = require('path');
