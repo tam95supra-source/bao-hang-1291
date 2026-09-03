@@ -194,7 +194,7 @@ BEGIN
 
       UPDATE public.notification_events
       SET acknowledged_at=coalesce(acknowledged_at,now())
-      WHERE issue_id=changed.id
+      WHERE public.notification_events.issue_id=changed.id
         AND critical=true
         AND acknowledged_at IS NULL
         AND (issue_version<>changed.issue_version OR status::text<>'SKIP_ALLOWED');
@@ -210,7 +210,7 @@ BEGIN
              'SKU '||changed.sku||' đã chờ quá thời gian quy định. Bạn được phép bỏ qua SKU này và tiếp tục công việc.',
              true,
              now()+interval '24 hours'
-      FROM (SELECT DISTINCT reporter_id FROM public.issue_reports WHERE issue_id=changed.id) r
+      FROM (SELECT DISTINCT ir.reporter_id FROM public.issue_reports ir WHERE ir.issue_id=changed.id) r
       ON CONFLICT(target_user_id,issue_id,issue_version,status)
       WHERE critical=true AND issue_id IS NOT NULL
       DO NOTHING;
