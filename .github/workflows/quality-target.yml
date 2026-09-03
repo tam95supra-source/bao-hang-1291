@@ -81,6 +81,19 @@ jobs:
           node --check ops/apps_script_deploy_worker.mjs
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
+          for (const path of ['ops/apps_script_deploy_staff.mjs','ops/apps_script_deploy_worker.mjs']) {
+            const source = fs.readFileSync(path, 'utf8');
+            if (!source.includes('APPS_SCRIPT_OAUTH_ALT') || !source.includes('CLASPRC_JSON') || !source.includes('APPS_SCRIPT_USER_OAUTH_REAUTH_REQUIRED')) {
+              throw new Error('APPS_SCRIPT_MULTI_USER_OAUTH_FALLBACK_MISSING:' + path);
+            }
+            if (source.includes('serviceAccountScriptAccessToken') || source.includes('APPS_SCRIPT_AUTH_MODE=SERVICE_ACCOUNT')) {
+              throw new Error('UNSUPPORTED_APPS_SCRIPT_SERVICE_ACCOUNT_AUTH_PRESENT:' + path);
+            }
+          }
+          console.log('APPS_SCRIPT_USER_OAUTH_AUTHORITY_GATE=PASS');
+          NODE
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
           import path from 'node:path';
           import zlib from 'node:zlib';
 
