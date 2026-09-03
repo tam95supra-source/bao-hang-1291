@@ -4,7 +4,7 @@ name: Target quality gate
 on:
   pull_request:
     branches: [main]
-    paths: ['web-admin/**','app/**','ops/neon/**','ops/apps_script_deploy_staff.mjs','ops/apps_script_deploy_worker.mjs','ops/staff_cleanup_orphans.mjs','ops/staff_cleanup_orphans_direct.cjs','google-apps-script/**','docs/**','.github/workflows/quality-target.yml']
+    paths: ['web-admin/**','app/**','ops/neon/**','ops/apps_script_deploy_staff.mjs','ops/apps_script_deploy_worker.mjs','ops/configure_password_recovery_mail.cjs','ops/staff_cleanup_orphans.mjs','ops/staff_cleanup_orphans_direct.cjs','google-apps-script/**','docs/**','.github/workflows/quality-target.yml']
   push:
     branches: [main]
     paths: ['web-admin/**','app/**','ops/neon/**','ops/apps_script_deploy_staff.mjs','ops/apps_script_deploy_worker.mjs','ops/staff_cleanup_orphans.mjs','ops/staff_cleanup_orphans_direct.cjs','google-apps-script/**','docs/**','.github/workflows/quality-target.yml']
