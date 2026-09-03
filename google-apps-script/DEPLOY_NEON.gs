@@ -4,6 +4,9 @@
  * No secret is stored in source. Secrets are bootstrapped into Script Properties.
  */
 const BH_PROJECT = 'bao-hang-1291';
+const BH_PASSWORD_RECOVERY_EMAIL = 'tam95.supra@gmail.com';
+const BH_TEMP_PASSWORD_PREFIX = 'R!';
+const BH_PASSWORD_RESET_COOLDOWN_MS = 5 * 60 * 1000;
 const BH_NEON_PROJECT = 'tiny-boat-19315489';
 const BH_NEON_BRANCH = 'br-broad-resonance-aznwrpea';
 const BH_NEON_DATA_API = 'https://ep-morning-bread-az3w94qb.apirest.c-3.ap-southeast-1.aws.neon.tech/neondb/rest/v1';
@@ -56,6 +59,9 @@ function doPost(e) {
     if (!action) return json_({ok:false,error:'ACTION_REQUIRED'});
     if (action === 'ping') { const source=staffSourceConfig_(); return json_({ok:true,project:BH_PROJECT,provider:'NEON_FIREBASE_GOOGLE',staff_sheet_id:source.sheetId,staff_sheet_name:source.sheetName}); }
     if (action === 'staff-source-ping' || action === 'staff-source-structure-ping') return json_(staffSourceBridgeReceive_(body));
+    if (action === 'password-reset-preview') return json_(passwordResetPreview_(body));
+    if (action === 'password-reset-request') return json_(passwordResetRequest_(body));
+    if (action === 'password-reset-mail-capability') return json_(passwordResetMailCapability_(body));
     if (action === 'bootstrap-config') return json_(bootstrapConfig_(body));
     if (action === 'realtime-kick') {
       requireRealtimeCaller_(String(body.id_token || ''));
@@ -665,6 +671,99 @@ function runStaffSync_(triggerSource, callerProfile, preloadedSource) {
   const result = neonRpc_('worker_staff_run_finish_rpc',{p_run_id:runId,p_status:finalStatus,p_source_hash:source.sourceHash,p_source_rows:source.staff.length,p_eligible_rows:source.staff.length,p_created:created,p_updated:updated,p_deactivated:deactivated,p_failed:failed,p_error_summary:errors.slice(0,20).join('; ').slice(0,2000),p_source_response_bytes:source.responseBytes},token);
   PropertiesService.getScriptProperties().setProperty('LAST_STAFF_SYNC_AT_MS', String(Date.now()));
   return {status:finalStatus,changed:true,run_id:runId,created:created,updated:updated,deactivated:deactivated,purged:purged,failed:failed,run:result};
+}
+
+function passwordResetProfile_(employeeCode) {
+  const code=String(employeeCode||'').trim();
+  if(!/^[a-z0-9._-]+$/i.test(code))throw new Error('INVALID_EMPLOYEE_CODE');
+  const token=workerAdminIdToken_();
+  const profiles=neonRpc_('worker_profiles_snapshot_rpc',{},token)||[];
+  const target=profiles.find(function(p){return p&&p.active===true&&String(p.employee_code||'').toLowerCase()===code.toLowerCase();});
+  if(!target)throw new Error('USER_NOT_FOUND_OR_INACTIVE');
+  return target;
+}
+
+function passwordResetPreview_(body) {
+  const target=passwordResetProfile_(body.employee_code);
+  return {
+    ok:true,
+    employee_code:String(target.employee_code||''),
+    full_name:String(target.full_name||''),
+    recovery_email:BH_PASSWORD_RECOVERY_EMAIL
+  };
+}
+
+function passwordResetCode4_() {
+  const hex=sha256Hex_(Utilities.getUuid()+':'+Date.now()+':'+Math.random());
+  return String(parseInt(hex.slice(0,8),16)%10000).padStart(4,'0');
+}
+
+function passwordResetMailCapability_(body) {
+  requireUser_(String(body.id_token||''),['ADMIN']);
+  const quota=Number(MailApp.getRemainingDailyQuota()||0);
+  return {ok:quota>0,recovery_email:BH_PASSWORD_RECOVERY_EMAIL,remaining_daily_quota:quota};
+}
+
+function passwordResetRequest_(body) {
+  const target=passwordResetProfile_(body.employee_code);
+  const employeeCode=String(target.employee_code||'');
+  const fullName=String(target.full_name||'');
+  const key='PWD_RESET_MS_'+sha256Hex_(employeeCode.toLowerCase()).slice(0,24);
+  const lock=LockService.getScriptLock();
+  if(!lock.tryLock(10000))throw new Error('RESET_BUSY_TRY_AGAIN');
+  try {
+    const props=PropertiesService.getScriptProperties();
+    const now=Date.now();
+    const last=Number(props.getProperty(key)||0);
+    if(last&&now-last<BH_PASSWORD_RESET_COOLDOWN_MS) {
+      return {
+        ok:false,
+        error:'RESET_COOLDOWN',
+        retry_after_seconds:Math.ceil((BH_PASSWORD_RESET_COOLDOWN_MS-(now-last))/1000),
+        employee_code:employeeCode,
+        full_name:fullName,
+        recovery_email:BH_PASSWORD_RECOVERY_EMAIL
+      };
+    }
+    const quota=Number(MailApp.getRemainingDailyQuota()||0);
+    if(quota<1)throw new Error('PASSWORD_RESET_MAIL_QUOTA_EXHAUSTED');
+    props.setProperty(key,String(now));
+    const code4=passwordResetCode4_();
+    const subject='[Báo hàng 1291] Mật khẩu tạm cho '+employeeCode;
+    const bodyText=[
+      'BÁO HÀNG 1291',
+      '',
+      'Yêu cầu lấy lại mật khẩu đã được xác nhận.',
+      'Mã nhân viên: '+employeeCode,
+      'Họ tên: '+fullName,
+      'Mật khẩu tạm 4 số: '+code4,
+      '',
+      'Đăng nhập Web bằng mã nhân viên và 4 số trên, sau đó đổi sang mật khẩu mới.',
+      'Nếu không yêu cầu thao tác này, vui lòng bỏ qua email và liên hệ quản trị.'
+    ].join('\n');
+    MailApp.sendEmail({
+      to:BH_PASSWORD_RECOVERY_EMAIL,
+      subject:subject,
+      body:bodyText,
+      name:'Báo hàng 1291'
+    });
+    try {
+      firebaseAdminUpdate_(String(target.id||''),{password:BH_TEMP_PASSWORD_PREFIX+code4,disableUser:false});
+    } catch(error) {
+      props.deleteProperty(key);
+      throw error;
+    }
+    return {
+      ok:true,
+      sent:true,
+      employee_code:employeeCode,
+      full_name:fullName,
+      recovery_email:BH_PASSWORD_RECOVERY_EMAIL,
+      cooldown_seconds:Math.floor(BH_PASSWORD_RESET_COOLDOWN_MS/1000)
+    };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function importUsers_(body) {
