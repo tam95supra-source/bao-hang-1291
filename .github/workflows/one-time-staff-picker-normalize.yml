@@ -1,117 +1,24 @@
-name: One-time normalize staff source to Picker
+name: One-time staff picker normalize (retired)
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'ops/staff-picker-normalize.trigger'
+  workflow_dispatch:
 
 permissions:
-  contents: write
-
-concurrency:
-  group: staff-source-picker-normalize
-  cancel-in-progress: true
+  contents: read
 
 jobs:
-  normalize:
+  verify-retired:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    env:
-      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-      GOOGLE_SHEET_WEBHOOK_URL: ${{ secrets.GOOGLE_SHEET_WEBHOOK_URL }}
-      STAFF_SHEET_ID: 1E7ZWz-4eMcBliQxDYBVoogIoeSYyiaXGwj0I6mbMm78
-      STAFF_SHEET_NAME: DANH SÁCH NHÂN SỰ
-      STAFF_CREATE_CONCURRENCY: 8
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           package-manager-cache: false
-
-      - name: Patch canonical staff-role paths
+      - name: Verify canonical staff contract only
         shell: bash
         run: |
           set -euo pipefail
-          python3 ops/patch_staff_source_picker.py
-          cp google-apps-script/DEPLOY_NEON.gs "$RUNNER_TEMP/deploy-neon.js"
-          cp google-apps-script/STAFF_SOURCE_BRIDGE_RECEIVER.gs "$RUNNER_TEMP/staff-bridge.js"
-          cp google-apps-script/STAFF_EVENT_SYNC_V2.gs "$RUNNER_TEMP/staff-event-v2.js"
-          node --check "$RUNNER_TEMP/deploy-neon.js"
-          node --check "$RUNNER_TEMP/staff-bridge.js"
-          node --check "$RUNNER_TEMP/staff-event-v2.js"
-          node --check ops/full_staff_sync.mjs
-          grep -F "function staffRole_(position,department,code)" google-apps-script/DEPLOY_NEON.gs >/dev/null
-          grep -F "return 'PICKER';" google-apps-script/DEPLOY_NEON.gs >/dev/null
-          grep -F "function staffSourceBridgeRole_(position, department, code)" google-apps-script/STAFF_SOURCE_BRIDGE_RECEIVER.gs >/dev/null
-          grep -F "role='PICKER'" .github/workflows/staff-sync.yml >/dev/null
-          grep -F "map(item => ({...item, role:'PICKER'}))" ops/full_staff_sync.mjs >/dev/null
-          git diff --check
-
-      - name: Read exact staff source as Picker-only
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "${FIREBASE_SERVICE_ACCOUNT:-}"
-          case "$GOOGLE_SHEET_WEBHOOK_URL" in https://script.google.com/macros/s/*/exec) ;; *) echo 'Invalid Apps Script worker URL' >&2; exit 11;; esac
-          mkdir -p "$RUNNER_TEMP/staff"
-          URL=$(python3 - <<'PY'
-          import os,urllib.parse
-          base='https://docs.google.com/spreadsheets/d/'+os.environ['STAFF_SHEET_ID']+'/gviz/tq'
-          print(base+'?'+urllib.parse.urlencode({'tqx':'out:csv','sheet':os.environ['STAFF_SHEET_NAME'],'tq':'select A,B,D,E,F'}))
-          PY
-          )
-          curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 "$URL" -o "$RUNNER_TEMP/staff/source.csv"
-          python3 - <<'PY'
-          import csv,json,os
-          rows=list(csv.reader(open(os.environ['RUNNER_TEMP']+'/staff/source.csv',encoding='utf-8-sig',newline='')))
-          by={}
-          for r in rows[1:]:
-              if len(r)<5: continue
-              code,name,position,contractor,department=[str(x or '').strip() for x in r[:5]]
-              if not code or not name or code=='6281280': continue
-              key=code.lower()
-              if key in by: raise SystemExit('DUPLICATE_EMPLOYEE_CODE:'+code)
-              by[key]={'employee_code':code,'full_name':name,'contractor':contractor,'source_position':position,'department':department,'role':'PICKER'}
-          staff=[by[k] for k in sorted(by)]
-          if not (350 <= len(staff) <= 500): raise SystemExit('FULL_SOURCE_COUNT_SUSPICIOUS:'+str(len(staff)))
-          json.dump({'staff':staff},open(os.environ['RUNNER_TEMP']+'/staff/source.json','w'),ensure_ascii=False)
-          print('SOURCE_COUNT='+str(len(staff)))
-          PY
-
-      - name: Normalize Firebase claims and Neon profiles
-        shell: bash
-        env:
-          STAFF_SOURCE_JSON: ${{ runner.temp }}/staff/source.json
-        run: |
-          set -euo pipefail
-          node ops/full_staff_sync.mjs
-          jq -e '.status == "PASS" and .gsheet_elevated == 0' ops/full-staff-sync-last.json >/dev/null
-          echo 'STAFF_PICKER_NORMALIZATION=PASS'
-          cat ops/full-staff-sync-last.json
-
-      - name: Commit validated canonical changes
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -- \
-            google-apps-script/DEPLOY_NEON.gs \
-            google-apps-script/STAFF_SOURCE_BRIDGE_RECEIVER.gs \
-            .github/workflows/staff-sync.yml \
-            ops/full_staff_sync.mjs \
-            ops/full-staff-sync-last.json
-          git diff --cached --quiet && { echo 'No canonical changes to commit' >&2; exit 1; }
-          git commit -m 'fix(staff): keep Sheet personnel as Picker only'
-          git pull --rebase origin main
-          git push origin HEAD:main
-
-      - name: Cleanup runtime temp files
-        if: always()
-        shell: bash
-        run: rm -rf "$RUNNER_TEMP/staff" "$RUNNER_TEMP/deploy-neon.js" "$RUNNER_TEMP/staff-bridge.js" "$RUNNER_TEMP/staff-event-v2.js"
+          node ops/staff_recover_current_source.cjs
+          echo 'LEGACY_STAFF_MUTATION_WORKFLOW_RETIRED=PASS'
