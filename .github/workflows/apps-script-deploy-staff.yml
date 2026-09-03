@@ -32,6 +32,7 @@ jobs:
           fetch-depth: 0
 
       - name: Verify authority and deploy canonical Apps Script sources
+        id: canonical_deploy
         shell: bash
         run: |
           set -euo pipefail
@@ -40,6 +41,7 @@ jobs:
           git diff --check
 
       - name: Purge history-free inactive staff
+        id: orphan_cleanup
         shell: bash
         run: |
           set -euo pipefail
@@ -94,3 +96,46 @@ jobs:
           echo "APPS_SCRIPT_STAFF_DEPLOY_ACCEPTANCE=PASS"
           echo "APPS_SCRIPT_WORKER_DEPLOY_ACCEPTANCE=PASS"
           echo "STAFF_ORPHAN_CLEANUP=PASS"
+
+      - name: Publish sanitized run receipt
+        if: always()
+        shell: bash
+        env:
+          CANONICAL_DEPLOY_OUTCOME: ${{ steps.canonical_deploy.outcome }}
+          ORPHAN_CLEANUP_OUTCOME: ${{ steps.orphan_cleanup.outcome }}
+          EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git reset --hard origin/main
+          mkdir -p ops/status
+          python3 - <<'PY'
+          import json, os
+          outcomes={
+            "canonical_deploy":os.environ.get("CANONICAL_DEPLOY_OUTCOME",""),
+            "orphan_cleanup":os.environ.get("ORPHAN_CLEANUP_OUTCOME",""),
+            "evidence":os.environ.get("EVIDENCE_OUTCOME",""),
+          }
+          ok=all(v=="success" for v in outcomes.values())
+          payload={
+            "workflow":"Apps Script canonical deploy",
+            "run_id":int(os.environ["GITHUB_RUN_ID"]),
+            "run_attempt":int(os.environ.get("GITHUB_RUN_ATTEMPT","1")),
+            "trigger_sha":os.environ["GITHUB_SHA"],
+            "status":"PASS" if ok else "FAIL",
+            "outcomes":outcomes,
+          }
+          with open("ops/status/apps-script-last.json","w",encoding="utf-8") as fh:
+            json.dump(payload,fh,ensure_ascii=False,indent=2)
+            fh.write("\n")
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ops/status/apps-script-last.json
+          if git diff --cached --quiet; then
+            echo 'APPS_SCRIPT_RUN_RECEIPT=UNCHANGED'
+          else
+            git commit -m 'chore(ops): record Apps Script deployment receipt'
+            git push origin HEAD:main
+            echo 'APPS_SCRIPT_RUN_RECEIPT=RECORDED'
+          fi
