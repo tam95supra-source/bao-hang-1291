@@ -71,6 +71,27 @@ async function readRetry(label, fn, attempts = 3) {
   throw last;
 }
 
+async function readUntil(label, fn, accept, attempts = 8) {
+  let lastValue = null;
+  let lastError = null;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      const value = await fn();
+      lastValue = value;
+      if (accept(value)) return value;
+      lastError = new Error(`${label}_NOT_PROPAGATED`);
+    } catch (err) {
+      lastError = err;
+    }
+    if (i < attempts) {
+      console.log(`${label}_WAIT=${i}`);
+      await sleep(Math.min(10000, 1500 * i));
+    }
+  }
+  if (lastError) throw lastError;
+  throw new Error(`${label}_FAILED:${JSON.stringify(lastValue).slice(0,200)}`);
+}
+
 const envValue = (name) => String(process.env[name] || '').trim();
 
 function oauthCandidate(label, clientId, clientSecret, refreshToken) {
@@ -271,7 +292,11 @@ async function main() {
   if (deployedAfterHash !== canonicalHash) throw new Error('DEPLOYED_SOURCE_HASH_MISMATCH');
   assertCanonical(versionTarget.source || '');
 
-  const deploymentAfter = await readRetry('APPS_SCRIPT_FINAL_DEPLOYMENT_READBACK', () => jsonFetch(`${apiBase}/projects/${encodeURIComponent(scriptId)}/deployments/${encodeURIComponent(deploymentId)}`, {headers:authHeaders(token)}, 30000));
+  const deploymentAfter = await readUntil(
+    'APPS_SCRIPT_FINAL_DEPLOYMENT_READBACK',
+    () => jsonFetch(`${apiBase}/projects/${encodeURIComponent(scriptId)}/deployments/${encodeURIComponent(deploymentId)}`, {headers:authHeaders(token)}, 30000),
+    value => value.deploymentId === deploymentId && Number(value.deploymentConfig?.versionNumber || 0) === versionNumber
+  );
   if (deploymentAfter.deploymentId !== deploymentId) throw new Error('FINAL_DEPLOYMENT_ID_MISMATCH');
   if (Number(deploymentAfter.deploymentConfig?.versionNumber || 0) !== versionNumber) throw new Error('FINAL_DEPLOYMENT_VERSION_MISMATCH');
 
