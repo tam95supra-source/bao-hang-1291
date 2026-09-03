@@ -1,8 +1,8 @@
 {
   "action": "publish",
   "channel": "beta",
-  "versionName": "1.6.18",
-  "versionCode": 27,
+  "versionName": "1.6.19",
+  "versionCode": 28,
   "mandatory": true,
-  "releaseNotes": "Beta 1.6.18: bấm BÁO HÀNG 1291 ở đầu ứng dụng để mở QR tải trực tiếp APK mới nhất từ GitHub theo đúng kênh BETA/STABLE; có nút tải trực tiếp trên máy và kiểm tra link GitHub tin cậy."
+  "releaseNotes": "Beta 1.6.19: sửa kiểm tra cập nhật OTA. Chạm vào phiên bản luôn hiển thị thông tin bản đang cài và bản mới nhất; tự kiểm tra khi mở ứng dụng và định kỳ 5 phút khi ứng dụng đang hoạt động, không còn bị im lặng do giới hạn 6 giờ."
 }
