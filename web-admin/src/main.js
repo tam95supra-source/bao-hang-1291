@@ -787,9 +787,9 @@ async function renderLogs() {
   try{
     const [logs,audit,webLogs]=await Promise.all([api('list-logs',{limit:100}),api('audit-history',{limit:150}),api('list-web-logs',{})]);
     $('#webLogs').innerHTML=(webLogs.logs||[]).length?(webLogs.logs||[]).map(l=>`<article class="card log"><div><strong>${escapeHtml(l.file_name)}</strong><span>${formatTime(l.created_at)}</span><small>${Number(l.compressed_bytes||0).toLocaleString(getLocale())} bytes · lưu trực tiếp Google Drive · tự dọn sau ${Number(webLogs.retention_days||14)} ngày</small></div><button class="secondary" data-web-log="${l.id}">TẢI</button></article>`).join(''):'<div class="card muted">Chưa có log web.</div>';
-    $('[data-web-log]').forEach(b=>b.onclick=()=>downloadWebLog(b.dataset.webLog));
+    document.querySelectorAll('[data-web-log]').forEach(b=>b.onclick=()=>downloadWebLog(b.dataset.webLog));
     $('#logs').innerHTML=logs.logs.length?logs.logs.map(l=>`<article class="card log"><div><strong>${escapeHtml(l.employee_code)} · ${escapeHtml(l.device_name)}</strong><span>${escapeHtml(l.app_version)} · ${formatTime(l.created_at)}</span><small>${Number(l.compressed_bytes||0).toLocaleString(getLocale())} bytes · SHA ${escapeHtml(String(l.sha256).slice(0,12))}</small></div><button class="secondary" data-log="${l.id}">TẢI</button></article>`).join(''):'<div class="card muted">Chưa có log.</div>';
-    $('[data-log]').forEach(b=>b.onclick=()=>downloadLog(b.dataset.log));
+    document.querySelectorAll('[data-log]').forEach(b=>b.onclick=()=>downloadLog(b.dataset.log));
     $('#audit').innerHTML=audit.audit.length?audit.audit.map(a=>`<article class="card"><strong>${escapeHtml(a.action)}</strong><p>${escapeHtml(a.from_status||'—')} → ${escapeHtml(a.to_status||'—')}</p><small>${formatTime(a.created_at)} · issue ${escapeHtml(String(a.issue_id).slice(0,8))}</small></article>`).join(''):'<div class="card muted">Chưa có lịch sử.</div>';
   }catch(error){const target=$('#webLogs')||$('#logs');if(target)target.innerHTML=`<div class="message" data-type="error">${escapeHtml(safeMessage(error))}</div>`;}
 }
