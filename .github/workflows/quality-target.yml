@@ -81,6 +81,16 @@ jobs:
           node --check ops/apps_script_deploy_worker.mjs
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
+          const deploy = fs.readFileSync('google-apps-script/DEPLOY_NEON.gs', 'utf8');
+          const bridge = fs.readFileSync('google-apps-script/STAFF_SOURCE_BRIDGE_RECEIVER.gs', 'utf8');
+          const filter = "String(row[6] || '').trim() !== '1291' || String(row[7] || '').trim().toUpperCase() !== 'HY1'";
+          if (!deploy.includes(filter)) throw new Error('STAFF_CONTRACT_DEPLOY_FILTER_MISSING');
+          if (!bridge.includes(filter)) throw new Error('STAFF_CONTRACT_BRIDGE_FILTER_MISSING');
+          if (!deploy.includes("if (action === 'staff-recovery-current-source') throw new Error('STAFF_RECOVERY_RETIRED_CANONICAL_HY1')")) throw new Error('LEGACY_502_RECOVERY_ROUTE_ACTIVE');
+          console.log('STAFF_SOURCE_CONTRACT_GATE=PASS canonical=1291/HY1 legacy_502_recovery=retired');
+          NODE
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
           import path from 'node:path';
           import zlib from 'node:zlib';
 
