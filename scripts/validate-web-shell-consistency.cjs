@@ -1,0 +1,44 @@
+'use strict';
+const fs = require('fs');
+
+const main = fs.readFileSync('web-admin/src/main.js', 'utf8');
+const ops = fs.readFileSync('web-admin/src/ops-console.js', 'utf8');
+const style = fs.readFileSync('web-admin/src/style.css', 'utf8');
+const i18n = fs.readFileSync('web-admin/src/i18n.js', 'utf8');
+
+const requiredMain = [
+  "['overview','Tổng quan hôm nay','VẬN HÀNH']",
+  "['events','Xử lý báo thiếu','VẬN HÀNH']",
+  "['reports','Báo cáo vận hành','VẬN HÀNH']",
+  "['users','Nhân sự & tài khoản','QUẢN LÝ']",
+  "['services','Hạ tầng & chi phí','HẠ TẦNG']",
+  "['server','Hạ tầng & chi phí','HẠ TẦNG']",
+  "['logs','Nhật ký hệ thống','HẠ TẦNG']",
+  "['config','Thời gian nghiệp vụ','THIẾT LẬP']",
+  "['sla','Thời gian nghiệp vụ','THIẾT LẬP']",
+  "['versions','Phiên bản ứng dụng','THIẾT LẬP']",
+  'data-shell-generation="canonical-v2"',
+  'renderNavigation(tabs)',
+  "['users','services','server','sla','config'].includes(tab)",
+  "server: () => requireRenderer(ops.server, 'Hạ tầng & chi phí')()",
+];
+for (const marker of requiredMain) if (!main.includes(marker)) throw new Error('CANONICAL_SHELL_MARKER_MISSING:' + marker);
+
+const forbiddenMain = [
+  "__BH_OPS_NORMALIZE__",
+  "['overview','Tổng quan']",
+  "['events','Sự kiện']",
+  "['reports','Báo cáo']",
+  "['users','Nhân sự & quyền']",
+  "['services','Hệ thống & dung lượng']",
+  "['logs','Nhật ký & kiểm tra']",
+  "['config','Cấu hình']",
+  "['versions','Phiên bản']",
+];
+for (const marker of forbiddenMain) if (main.includes(marker)) throw new Error('LEGACY_SHELL_MARKER_PRESENT:' + marker);
+for (const marker of ['normalizeNavigation','__BH_OPS_NORMALIZE__','data-ops-tab']) if (ops.includes(marker)) throw new Error('LAZY_NAV_MUTATION_PRESENT:' + marker);
+for (const marker of ['.nav-section-label', '.tabs button::before', 'content: none !important']) if (!style.includes(marker)) throw new Error('CANONICAL_NAV_STYLE_MISSING:' + marker);
+for (const marker of ["['VẬN HÀNH','OPERATIONS']", "['QUẢN LÝ','MANAGEMENT']", "['HẠ TẦNG','INFRASTRUCTURE']", "['THIẾT LẬP','SETTINGS']", "['Phiên bản ứng dụng','App versions']"]) {
+  if (!i18n.includes(marker)) throw new Error('CANONICAL_NAV_I18N_MISSING:' + marker);
+}
+console.log('WEB_SHELL_STATIC_CONSISTENCY=PASS generation=canonical-v2 lazy_nav_mutation=false legacy_labels=false');
