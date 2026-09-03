@@ -3,12 +3,17 @@ const STORE = 'events';
 const MAX_EVENTS = 500;
 const MAX_BATCH = 120;
 const FLUSH_INTERVAL_MS = 15 * 60 * 1000;
+const ERROR_FLUSH_DEBOUNCE_MS = 30 * 1000;
+const HIDDEN_FLUSH_MIN_INTERVAL_MS = 5 * 60 * 1000;
 const SLOW_REQUEST_MS = 3000;
 const WORKER_URL = (globalThis.__BAO_HANG_WORKER_URL__ || '').trim();
 const SESSION_ID_KEY = 'bao-hang-1291-web-log-session-id';
 
 let dbPromise;
 let flushTimer;
+let urgentFlushTimer;
+let flushInFlight;
+let lastSuccessfulFlushAt = 0;
 let installed = false;
 let baseFetch;
 let sessionId = sessionStorage.getItem(SESSION_ID_KEY);
@@ -90,7 +95,7 @@ async function addEvent(event) {
     tx.onerror = resolve;
   });
   void trimDb();
-  if (event.level === 'error') setTimeout(() => void flush(), 1000);
+  if (event.level === 'error') scheduleUrgentFlush();
 }
 
 async function trimDb() {
@@ -131,7 +136,15 @@ async function deleteIds(ids) {
   });
 }
 
-async function flush() {
+function scheduleUrgentFlush(delay = ERROR_FLUSH_DEBOUNCE_MS) {
+  if (urgentFlushTimer) return;
+  urgentFlushTimer = setTimeout(() => {
+    urgentFlushTimer = null;
+    void flush();
+  }, Math.max(0, delay));
+}
+
+async function flushOnce() {
   if (!WORKER_URL || !navigator.onLine) return;
   const auth = globalThis.__BH_AUTH__?.getSession?.();
   if (!auth?.access_token) return;
@@ -155,7 +168,14 @@ async function flush() {
     try { result = text ? JSON.parse(text) : {}; } catch {}
     if (!response.ok || result.ok !== true) throw new Error(result.error || 'WEB_LOG_UPLOAD_FAILED');
     await deleteIds(rows.map(x => x.id));
+    lastSuccessfulFlushAt = Date.now();
   } catch {}
+}
+
+async function flush() {
+  if (flushInFlight) return flushInFlight;
+  flushInFlight = flushOnce().finally(() => { flushInFlight = null; });
+  return flushInFlight;
 }
 
 function safeTarget(target) {
@@ -232,11 +252,11 @@ export function installWebLogger() {
   });
 
   window.addEventListener('hashchange', () => void addEvent({ type:'route_change', message:location.hash || '#/' }));
-  window.addEventListener('online', () => { void addEvent({ type:'network_online', message:'Browser online' }); void flush(); });
+  window.addEventListener('online', () => { void addEvent({ type:'network_online', message:'Browser online' }); scheduleUrgentFlush(5000); });
   window.addEventListener('offline', () => void addEvent({ level:'warn', type:'network_offline', message:'Browser offline' }));
   document.addEventListener('visibilitychange', () => {
     void addEvent({ type:'visibility_change', message:document.visibilityState });
-    if (document.visibilityState === 'hidden') void flush();
+    if (document.visibilityState === 'hidden' && Date.now() - lastSuccessfulFlushAt >= HIDDEN_FLUSH_MIN_INTERVAL_MS) scheduleUrgentFlush(0);
   });
   document.addEventListener('click', (event) => {
     const target = safeTarget(event.target);
