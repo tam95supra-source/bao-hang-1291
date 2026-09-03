@@ -163,72 +163,6 @@ function modal({ title, body, confirmText = 'Xác nhận', danger = false, onCon
   setTimeout(() => $('input,select,button', wrap)?.focus(), 0);
 }
 
-function addSection(tabs, before, label) {
-  if (!before) return;
-  const section = document.createElement('span');
-  section.className = 'nav-section-label';
-  section.textContent = label;
-  tabs.insertBefore(section, before);
-}
-function normalizeNavigation() {
-  const tabs = $('.tabs');
-  if (!tabs || !readSession()) return;
-  const buttons = $$('button[data-tab]', tabs);
-  if (!buttons.length) return;
-  const byId = new Map(buttons.map((button) => [button.dataset.tab, button]));
-  const labels = {
-    overview: 'Tổng quan hôm nay',
-    events: 'Xử lý báo thiếu',
-    sku: 'Danh mục SKU',
-    reports: 'Báo cáo vận hành',
-    users: 'Nhân sự & tài khoản',
-    devices: 'Thiết bị & thông báo',
-    services: 'Hạ tầng & chi phí',
-    logs: 'Nhật ký hệ thống',
-    config: 'Thời gian nghiệp vụ',
-    sla: 'Thời gian nghiệp vụ',
-    versions: 'Phiên bản ứng dụng',
-  };
-  for (const [id, label] of Object.entries(labels)) if (byId.has(id)) byId.get(id).textContent = label;
-
-  $$('.nav-section-label', tabs).forEach((el) => el.remove());
-  const isAdmin = byId.has('versions') || byId.has('services');
-  const isAdminEvent = !isAdmin && byId.has('users') && byId.has('sla');
-  if (isAdminEvent && !tabs.querySelector('[data-ops-tab="server"]')) {
-    const button = document.createElement('button');
-    button.dataset.opsTab = 'server';
-    button.textContent = 'Hạ tầng & chi phí';
-    const logButton = byId.get('logs');
-    tabs.insertBefore(button, logButton || null);
-    button.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      ui.customView = 'server';
-      history.replaceState(null, '', '#/server');
-      $$('button', tabs).forEach((item) => item.classList.toggle('active', item === button));
-      renderServerView();
-    });
-  }
-  const first = (id) => byId.get(id) || tabs.querySelector(`[data-ops-tab="${id}"]`);
-  addSection(tabs, first('overview'), 'VẬN HÀNH');
-  addSection(tabs, first('users'), 'QUẢN LÝ');
-  addSection(tabs, first(isAdmin ? 'config' : 'sla'), 'THIẾT LẬP');
-  addSection(tabs, first(isAdmin ? 'services' : 'server'), 'HẠ TẦNG');
-
-  if (location.hash === '#/server' && tabs.querySelector('[data-ops-tab="server"]')) {
-    ui.customView = 'server';
-    const button = tabs.querySelector('[data-ops-tab="server"]');
-    $$('button', tabs).forEach((item) => item.classList.toggle('active', item === button));
-  }
-  if (!tabs.dataset.opsBound) {
-    tabs.dataset.opsBound = '1';
-    tabs.addEventListener('click', (event) => {
-      const button = event.target.closest('button[data-tab]');
-      if (button) ui.customView = '';
-    }, true);
-  }
-}
-
 function pageHeading(title, subtitle = '', right = '') {
   return `<div class="ops-page-heading"><div><h2>${escapeHtml(title)}</h2>${subtitle ? `<p>${escapeHtml(subtitle)}</p>` : ''}</div>${right}</div>`;
 }
@@ -635,11 +569,9 @@ function confirmRestoreSkip(issue) {
 }
 
 function activeTabId() {
-  if (ui.customView) return ui.customView;
   return $('.tabs button[data-tab].active')?.dataset?.tab || '';
 }
 function enhanceCurrentPage() {
-  normalizeNavigation();
   if (!readSession() || !$('#content')) return;
   const tab = activeTabId();
   const content = $('#content');
@@ -657,4 +589,4 @@ window.__BH_OPS_RENDER__ = {
   services: renderServerView,
   server: renderServerView,
 };
-window.__BH_OPS_NORMALIZE__ = normalizeNavigation;
+
