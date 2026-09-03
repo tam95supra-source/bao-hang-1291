@@ -5,8 +5,8 @@ const SESSION_KEY = 'bao-hang-1291-web-session';
 const BACKEND = 'https://backend.bao-hang-1291.invalid';
 const API = `${BACKEND}/api/web-api`;
 const ROLE_LABELS = {
-  ADMIN: 'Admin hệ thống',
-  ADMIN_INVENT: 'Admin Event',
+  ADMIN: 'Quản trị hệ thống',
+  ADMIN_INVENT: 'Quản trị báo thiếu',
   INVENT: 'Người báo hàng',
   PICKER: 'Người lấy hàng',
 };
