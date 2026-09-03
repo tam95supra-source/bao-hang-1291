@@ -144,11 +144,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 https://bao-hang-1291.web.app/ -o "$RUNNER_TEMP/web-index.html"
+          site='https://bao-hang-1291.web.app'
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -H 'Cache-Control: no-cache' "$site/?deploy=$GITHUB_SHA" -o "$RUNNER_TEMP/web-index.html"
           grep -q 'Báo hàng 1291' "$RUNNER_TEMP/web-index.html"
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 https://bao-hang-1291.web.app/__deployed_sha.txt -o "$RUNNER_TEMP/deployed-sha.txt"
-          grep -Fx "$GITHUB_SHA" "$RUNNER_TEMP/deployed-sha.txt" >/dev/null
-          curl -fsSI --retry 5 --retry-all-errors --retry-delay 2 https://bao-hang-1291.web.app/ -o "$RUNNER_TEMP/web-headers.txt"
+
+          marker_ok=false
+          for attempt in $(seq 1 15); do
+            if curl -fsSL --retry 2 --retry-all-errors --retry-delay 1 -H 'Cache-Control: no-cache' "$site/__deployed_sha.txt?deploy=$GITHUB_SHA-$attempt" -o "$RUNNER_TEMP/deployed-sha.txt"; then
+              live_sha="$(tr -d '\r\n' < "$RUNNER_TEMP/deployed-sha.txt")"
+              if [ "$live_sha" = "$GITHUB_SHA" ]; then
+                marker_ok=true
+                echo "DEPLOYED_SHA_LIVE=PASS attempt=$attempt sha=$live_sha"
+                break
+              fi
+              echo "DEPLOYED_SHA_PROPAGATING attempt=$attempt live=$live_sha expected=$GITHUB_SHA"
+            fi
+            sleep 2
+          done
+          [ "$marker_ok" = true ] || { echo "DEPLOYED_SHA_LIVE=FAIL expected=$GITHUB_SHA" >&2; exit 1; }
+
+          curl -fsSI --retry 5 --retry-all-errors --retry-delay 2 "$site/?headers=$GITHUB_SHA" -o "$RUNNER_TEMP/web-headers.txt"
           grep -qi '^content-security-policy:' "$RUNNER_TEMP/web-headers.txt"
           grep -qi '^x-content-type-options: nosniff' "$RUNNER_TEMP/web-headers.txt"
           echo 'WEB_ADMIN_LIVE_SMOKE=PASS'
