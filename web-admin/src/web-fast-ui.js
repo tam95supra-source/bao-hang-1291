@@ -1,4 +1,5 @@
 import './web-fast-ui.css';
+import { getLocale } from './i18n.js';
 
 const SESSION_KEY = 'bao-hang-1291-web-session';
 const BACKEND = 'https://backend.bao-hang-1291.invalid';
@@ -85,7 +86,7 @@ function fmtTime(value) {
   if (!value) return '—';
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return String(value);
-  return d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false });
+  return d.toLocaleTimeString(getLocale(), { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
 function age(value) {
