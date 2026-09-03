@@ -56,6 +56,7 @@ async function refreshVisibleConfig() {
       setValue('reminderMin', config.reminder_minutes);
       setValue('replenishMin', config.replenish_minutes);
       setValue('pickerAckMin', config.picker_ack_reminder_minutes);
+      setValue('foundItemReminderMin', config.found_item_reminder_minutes || 5);
       setChecked('autoSkipEnabled', config.auto_skip_enabled);
       setValue('autoSkipAfter', config.auto_skip_after_minutes);
     }
