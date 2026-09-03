@@ -1,11 +1,11 @@
 {
   "channel": "beta",
-  "versionCode": 26,
-  "versionName": "1.6.17",
-  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.17/bao-hang-1291-beta-1.6.17.apk",
-  "sha256": "11e6080236d955749f798af29d36981cb0464c6b84fd660a393a7e0149979d2f",
+  "versionCode": 27,
+  "versionName": "1.6.18",
+  "apkUrl": "https://github.com/tam95supra-source/bao-hang-1291/releases/download/beta-v1.6.18/bao-hang-1291-beta-1.6.18.apk",
+  "sha256": "e9a08fd17eadfecab21c7dc2555f092c57802c49d6203fef2e4668294ac18214",
   "mandatory": true,
-  "releaseNotes": "Beta 1.6.17: sửa gửi log chẩn đoán bị báo Worker Google lỗi dù server đã nhận; Picker nhận xác nhận từ Invent bằng realtime card update (đổi trạng thái/màu/thời gian trên đúng SKU), không reload toàn màn hình.",
+  "releaseNotes": "Beta 1.6.18: bấm BÁO HÀNG 1291 ở đầu ứng dụng để mở QR tải trực tiếp APK mới nhất từ GitHub theo đúng kênh BETA/STABLE; có nút tải trực tiếp trên máy và kiểm tra link GitHub tin cậy.",
   "signerSha256": "2811931445e7d175c13492ae15ab0f85bf609bbbd49b67cdc655e65e93a0f8c0",
-  "sourceSha": "4f08066b524f32b525b0ce68a1aba4b56f4e3f99"
+  "sourceSha": "cb8232a0e7a6010bf8cc935bd87a275d1a6609a3"
 }
