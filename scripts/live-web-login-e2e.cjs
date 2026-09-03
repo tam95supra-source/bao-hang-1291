@@ -1,5 +1,5 @@
 'use strict';
-// Keep login navigation timing aligned with the production shell acceptance shim.
+// Keep login timing and stage deadlines aligned with the production shell acceptance harness.
 
 const fs = require('fs');
 const path = require('path');
