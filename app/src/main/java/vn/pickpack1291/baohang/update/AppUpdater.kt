@@ -99,6 +99,8 @@ class AppUpdater(
         }
     }
 
+    suspend fun latestRelease(): Release = withContext(Dispatchers.IO) { fetchManifest() }
+
     private fun fetchManifest(): Release {
         val connection = URI(BuildConfig.UPDATE_MANIFEST_URL).toURL().openConnection().apply {
             connectTimeout = 10_000
@@ -109,11 +111,13 @@ class AppUpdater(
         val json = JSONObject(connection.getInputStream().bufferedReader().use { it.readText() })
         val channel = json.getString("channel").trim().lowercase()
         require(channel in setOf("stable", "beta")) { "Manifest OTA thiếu channel hợp lệ" }
+        val apkUrl = json.getString("apkUrl").trim()
+        require(isTrustedGitHubApkUrl(apkUrl, channel)) { "Link APK GitHub không hợp lệ" }
         return Release(
             channel = channel,
             versionCode = json.getInt("versionCode"),
             versionName = json.getString("versionName"),
-            apkUrl = json.getString("apkUrl"),
+            apkUrl = apkUrl,
             sha256 = json.getString("sha256").lowercase(),
             mandatory = json.optBoolean("mandatory", false),
             notes = json.optString("releaseNotes")
@@ -172,6 +176,16 @@ class AppUpdater(
     }
 
     companion object {
+        internal fun isTrustedGitHubApkUrl(url: String, channel: String): Boolean {
+            val uri = runCatching { URI(url) }.getOrNull() ?: return false
+            if (!uri.scheme.equals("https", true) || !uri.host.equals("github.com", true)) return false
+            val expectedPrefix = "/tam95supra-source/bao-hang-1291/releases/download/${channel.lowercase()}-v"
+            val path = uri.path.orEmpty()
+            return path.startsWith(expectedPrefix) &&
+                path.endsWith(".apk", ignoreCase = true) &&
+                !path.contains("..")
+        }
+
         private const val OTA_CHANNEL_META = "vn.pickpack1291.baohang.OTA_CHANNEL"
         private const val KEY_LAST_ATTEMPT_MS = "last_attempt_ms"
         private const val KEY_LAST_SUCCESS_MS = "last_success_ms"
