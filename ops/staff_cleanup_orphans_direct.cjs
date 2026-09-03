@@ -24,8 +24,20 @@ async function adminToken(sa){
   return x.idToken;
 }
 async function rpc(token,name,payload={}){
-  const data=await req(`${NEON}/rpc/${encodeURIComponent(name)}`,{method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${token}`},body:JSON.stringify(payload)},30000);
-  return Array.isArray(data)&&data.length===1&&typeof data[0]==='object'&&data[0]!==null&&Object.keys(data[0]).length===1?Object.values(data[0])[0]:data;
+  let last;
+  for(let attempt=1;attempt<=6;attempt++){
+    try{
+      const data=await req(`${NEON}/rpc/${encodeURIComponent(name)}`,{method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${token}`},body:JSON.stringify(payload)},30000);
+      return Array.isArray(data)&&data.length===1&&typeof data[0]==='object'&&data[0]!==null&&Object.keys(data[0]).length===1?Object.values(data[0])[0]:data;
+    }catch(e){
+      last=e;
+      const m=String(e?.message||e);
+      const retryable=/HTTP_(400:WORKER_ADMIN_REQUIRED|404:Could not find the function|429:|5\d\d:)/.test(m);
+      if(!retryable||attempt===6)throw e;
+      await new Promise(r=>setTimeout(r,attempt*700));
+    }
+  }
+  throw last||new Error('RPC_RETRY_EXHAUSTED');
 }
 async function pool(items,limit,fn){
   let index=0;
@@ -44,10 +56,10 @@ async function pool(items,limit,fn){
   const auth=getAuth(app);
   const result={checked:0,purged:0,retained_history:0,failed:0,errors:[]};
   try{
-    await pool(candidates,6,async(profile)=>{
+    await pool(candidates,1,async(profile)=>{
       try{
         const id=String(profile.id||'');
-        const dryRaw=await rpc(token,'worker_profile_purge_if_orphan_rpc',{p_id:id,p_execute:false});
+        const dryRaw=await rpc(token,'worker_profile_purge_if_orphan_rpc',{p_id:id});
         const dry=Array.isArray(dryRaw)?dryRaw[0]:dryRaw;
         result.checked++;
         if(!dry?.eligible){result.retained_history++;return;}
