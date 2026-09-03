@@ -211,9 +211,7 @@ BEGIN
              true,
              now()+interval '24 hours'
       FROM (SELECT DISTINCT ir.reporter_id FROM public.issue_reports ir WHERE ir.issue_id=changed.id) r
-      ON CONFLICT(target_user_id,issue_id,issue_version,status)
-      WHERE critical=true AND issue_id IS NOT NULL
-      DO NOTHING;
+      ON CONFLICT DO NOTHING;
 
       issue_id:=changed.id;
       event_status:=changed.status;
