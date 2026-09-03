@@ -137,6 +137,9 @@ window.__BH_AUTH__ = {
 };
 async function responseNeedsAuthRefresh(response) {
   if (response.status === 401) return true;
+  // Normal 2xx responses are consumed exactly once by parseResponse().
+  // Only inspect an error body when the server did not already use HTTP 401.
+  if (response.ok) return false;
   const text = await response.clone().text().catch(() => '');
   return /(^|[^A-Z_])AUTH_REQUIRED([^A-Z_]|$)/.test(text);
 }
@@ -354,6 +357,7 @@ function setHash(id) {
   if (location.hash !== `#/${id}`) history.replaceState(null, '', `#/${id}`);
 }
 function healthChip(label, value, kind = '', displayLabel = label) { return `<span class="health-chip ${kind}" data-health="${label}"><b>${escapeHtml(displayLabel)}</b><em>${escapeHtml(value)}</em></span>`; }
+let renderEpoch = 0;
 const tabModulePromises = new Map();
 async function ensureTabModule(tab) {
   const currentRole = role();
@@ -371,6 +375,40 @@ async function ensureTabModule(tab) {
   if (!loader) return;
   if (!tabModulePromises.has(key)) tabModulePromises.set(key, loader());
   await tabModulePromises.get(key);
+}
+
+function routeIsActive(tab, epoch = null) {
+  const content = $('#content');
+  return Boolean(
+    content &&
+    state.activeTab === tab &&
+    content.dataset.route === tab &&
+    (epoch == null || renderEpoch === epoch)
+  );
+}
+globalThis.__BH_ROUTE_ACTIVE__ = routeIsActive;
+globalThis.__BH_ROUTE_TOKEN__ = () => renderEpoch;
+
+function prepareRoute(tab) {
+  const content = $('#content');
+  if (!content) return null;
+  const changed = content.dataset.route !== tab;
+  if (changed) {
+    content.dataset.route = tab;
+    delete content.dataset.opsRender;
+    delete content.dataset.warehouseView;
+    content.innerHTML = '<div class="route-loading" role="status"><span class="spinner"></span><strong>Đang tải dữ liệu…</strong></div>';
+  }
+  return content;
+}
+
+function warmTabModules(tabs) {
+  const warm = () => {
+    const uniqueTabs = [...new Set(tabs.map(([id]) => id))];
+    for (const tab of uniqueTabs) void ensureTabModule(tab).catch(() => {});
+  };
+  if ('requestIdleCallback' in window) window.requestIdleCallback(warm, { timeout: 1800 });
+  else setTimeout(warm, 700);
 }
 
 function renderApp() {
@@ -392,14 +430,36 @@ function renderApp() {
   $('#logout').onclick = () => { clearSession(); renderLogin(); };
   $('#exitTest')?.addEventListener('click', () => { state.testRole = null; state.activeTab = null; renderApp(); });
   $$('[data-test]').forEach((button) => button.onclick = () => { state.testRole = button.dataset.test; state.activeTab = null; renderApp(); });
-  $$('[data-tab]').forEach((button) => button.onclick = () => { state.activeTab = button.dataset.tab; setHash(state.activeTab); void renderTab(); });
+  document.querySelectorAll('[data-tab]').forEach((button) => button.onclick = () => {
+    const nextTab = button.dataset.tab;
+    if (nextTab === state.activeTab && routeIsActive(nextTab)) return;
+    state.activeTab = nextTab;
+    setHash(state.activeTab);
+    void renderTab();
+  });
   void renderTab();
+  warmTabModules(tabs);
   startRealtime();
   globalThis.__BH_FAST_ENHANCE__?.();
 }
 async function renderTab() {
-  await ensureTabModule(state.activeTab).catch((error) => console.warn('lazy tab module failed', error?.message || error));
-  $$('[data-tab]').forEach((button) => button.classList.toggle('active', button.dataset.tab === state.activeTab));
+  const tab = state.activeTab;
+  const epoch = ++renderEpoch;
+  const content = prepareRoute(tab);
+  if (!content) return;
+
+  // Active navigation changes immediately; the lazy module may still be downloading.
+  document.querySelectorAll('[data-tab]').forEach((button) => button.classList.toggle('active', button.dataset.tab === tab));
+  window.__BH_OPS_NORMALIZE__?.();
+
+  try {
+    await ensureTabModule(tab);
+  } catch (error) {
+    console.warn('lazy tab module failed', error?.message || error);
+  }
+  if (!routeIsActive(tab, epoch)) return;
+
+  // A lazy-loaded module can install navigation labels/renderers, so normalize once more.
   window.__BH_OPS_NORMALIZE__?.();
   const wv2 = window.__BH_WV2_RENDER__ || {};
   const ops = window.__BH_OPS_RENDER__ || {};
@@ -417,7 +477,13 @@ async function renderTab() {
     config: () => (ops.config ? ops.config() : renderConfig()),
     versions: renderVersions,
   };
-  handlers[state.activeTab]?.();
+  try {
+    await handlers[tab]?.();
+  } catch (error) {
+    if (routeIsActive(tab, epoch)) {
+      content.innerHTML = `<div class="message" data-type="error">${escapeHtml(safeMessage(error))}</div>`;
+    }
+  }
 }
 let realtimeNoticeTimer = null;
 function showRealtimeNotice(text) {
@@ -490,7 +556,11 @@ function ensureFallbackPolling() {
   if (state.fallbackTimer || document.hidden || !state.session) return;
   state.fallbackTimer = setInterval(() => {
     if (document.hidden) return;
-    if (['events','picker','sku','overview','users'].includes(state.activeTab)) void renderTab();
+    if (state.activeTab === 'events' && typeof globalThis.__BH_FAST_REFRESH__ === 'function') {
+      void globalThis.__BH_FAST_REFRESH__();
+      return;
+    }
+    if (['picker','sku','overview','users'].includes(state.activeTab)) void renderTab();
   }, 30_000);
 }
 document.addEventListener('visibilitychange', () => {
