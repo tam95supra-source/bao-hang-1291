@@ -1,12 +1,12 @@
 {
   "workflow": "Apps Script canonical deploy",
-  "run_id": 33710662837,
-  "run_attempt": 2,
-  "trigger_sha": "38ecc2c46fecb7d1cbd110c9b4928fec09706c02",
+  "run_id": 33720410293,
+  "run_attempt": 1,
+  "trigger_sha": "998a06e61797808cc1a19a3cfd1039546109e336",
   "status": "FAIL",
   "outcomes": {
-    "canonical_deploy": "failure",
-    "orphan_cleanup": "skipped",
+    "canonical_deploy": "success",
+    "orphan_cleanup": "failure",
     "evidence": "skipped"
   }
 }
