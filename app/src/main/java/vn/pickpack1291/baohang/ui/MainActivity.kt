@@ -69,6 +69,7 @@ import java.time.format.DateTimeFormatter
 
 class MainActivity : AppCompatActivity() {
     private val app by lazy { application as BaoHangApplication }
+    private val appUpdater by lazy { AppUpdater(this, app.diagnostics) }
     private lateinit var container: FrameLayout
     private var searchJob: Job? = null
     private var realtimeAuthJob: Job? = null
@@ -148,7 +149,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.btnLog).setOnClickListener { showDiagnosticsDialog() }
         findViewById<TextView>(R.id.tvAppVersion).apply {
             text = "v${BuildConfig.VERSION_NAME} • ${BuildConfig.OTA_CHANNEL.uppercase()}"
-            setOnClickListener { AppUpdater(this@MainActivity, app.diagnostics).check(showUpToDate = false) }
+            setOnClickListener { appUpdater.check(showUpToDate = true) }
         }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() { if (isRoleRoot()) finish() else renderForRole() }
@@ -202,7 +203,7 @@ class MainActivity : AppCompatActivity() {
             runCatching { checkPendingAlerts() }
                 .onFailure { app.diagnostics.warn("pending_alert_startup_failed", mapOf("error" to it.message.orEmpty())) }
         }
-        AppUpdater(this, app.diagnostics).check()
+        appUpdater.check()
         lifecycleScope.launch(Dispatchers.IO) {
             if (app.repository.outboxCount() > 0) runCatching { app.repository.flushOutbox() }
             runCatching { app.repository.syncCatalogIfStale() }
@@ -222,7 +223,8 @@ class MainActivity : AppCompatActivity() {
                         realtime.updateAccessToken(app.session.accessToken)
                     }
                 }.onFailure { app.diagnostics.warn("realtime_auth_refresh_failed", mapOf("error" to it.message.orEmpty())) }
-                delay(5 * 60_000L)
+                appUpdater.check()
+                delay(AppUpdater.AUTO_CHECK_INTERVAL_MS)
             }
         }
     }
@@ -1391,7 +1393,7 @@ class MainActivity : AppCompatActivity() {
         content.addView(downloadButton)
 
         lifecycleScope.launch {
-            val release = runCatching { AppUpdater(this@MainActivity, app.diagnostics).latestRelease() }
+            val release = runCatching { appUpdater.latestRelease() }
                 .getOrElse { error ->
                     if (currentScreen == SCREEN_DOWNLOAD) {
                         status.text = "Không lấy được bản APK mới nhất: ${error.message ?: "Lỗi kết nối"}"
