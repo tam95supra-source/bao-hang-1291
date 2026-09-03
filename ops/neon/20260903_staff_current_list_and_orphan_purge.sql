@@ -74,7 +74,7 @@ AS $function$
 DECLARE
   actor uuid;
   x public.profiles%rowtype;
-  ref record;
+  rref record;
   has_ref boolean;
 BEGIN
   actor := public.worker_require_admin();
@@ -98,11 +98,11 @@ BEGIN
     RETURN jsonb_build_object('eligible', false, 'purged', false, 'reason', 'PROTECTED');
   END IF;
 
-  FOR ref IN
+  FOR rref IN
     SELECT c.conrelid::regclass::text AS table_name, a.attname AS column_name
     FROM pg_constraint c
-    JOIN LATERAL unnest(c.conkey) WITH ORDINALITY ck(attnum, ord) ON true
-    JOIN LATERAL unnest(c.confkey) WITH ORDINALITY fk(attnum, ord) ON fk.ord = ck.ord
+    JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS ck(attnum, ord) ON true
+    JOIN LATERAL unnest(c.confkey) WITH ORDINALITY AS fk(attnum, ord) ON fk.ord = ck.ord
     JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ck.attnum
     JOIN pg_attribute ra ON ra.attrelid = c.confrelid AND ra.attnum = fk.attnum
     WHERE c.contype = 'f'
@@ -112,17 +112,17 @@ BEGIN
   LOOP
     EXECUTE format(
       'SELECT EXISTS (SELECT 1 FROM %s WHERE %I = $1)',
-      ref.table_name,
-      ref.column_name
+      rref.table_name,
+      rref.column_name
     ) INTO has_ref USING p_id;
 
     IF has_ref THEN
       RETURN jsonb_build_object(
         'eligible', false,
         'purged', false,
-        'reason', 'REFERENCED',
-        'reference_table', ref.table_name,
-        'reference_column', ref.column_name
+        'reason', 'HAS_REFERENCE',
+        'reference_table', rref.table_name,
+        'reference_column', rref.column_name
       );
     END IF;
   END LOOP;
