@@ -1,8 +1,8 @@
 {
   "action": "publish",
   "channel": "beta",
-  "versionName": "1.6.17",
-  "versionCode": 26,
+  "versionName": "1.6.18",
+  "versionCode": 27,
   "mandatory": true,
-  "releaseNotes": "Beta 1.6.17: sửa gửi log chẩn đoán bị báo Worker Google lỗi dù server đã nhận; Picker nhận xác nhận từ Invent bằng realtime card update (đổi trạng thái/màu/thời gian trên đúng SKU), không reload toàn màn hình."
+  "releaseNotes": "Beta 1.6.18: bấm BÁO HÀNG 1291 ở đầu ứng dụng để mở QR tải trực tiếp APK mới nhất từ GitHub theo đúng kênh BETA/STABLE; có nút tải trực tiếp trên máy và kiểm tra link GitHub tin cậy."
 }
