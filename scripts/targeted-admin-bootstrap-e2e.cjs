@@ -176,7 +176,7 @@ async function main() {
       sheet_url: sourceStatus.sheet_url,
       sheet_name: sourceStatus.sheet_name,
     }, 60000), 62000);
-    if (Number(sourceValidate.eligible_rows || 0) !== 502 ||
+    if (Number(sourceValidate.eligible_rows || 0) !== 250 ||
         sourceValidate.status !== 'NO_CHANGE' ||
         sourceValidate.changed !== false ||
         sourceValidate.validation_only !== true ||
@@ -186,7 +186,7 @@ async function main() {
         sourceValidate.cleanup?.skipped !== 'SAME_SOURCE_VALIDATION') {
       throw new Error(`STAFF_SOURCE_NO_CHANGE_MISMATCH:${safe(JSON.stringify(sourceValidate))}`);
     }
-    console.log('STAFF_SOURCE_NO_CHANGE_VALIDATION=PASS eligible_rows=502 changed=false cleanup_skipped=true');
+    console.log('STAFF_SOURCE_NO_CHANGE_VALIDATION=PASS eligible_rows=250 changed=false cleanup_skipped=true');
 
     const refreshDiag = await diagnosticStage('ADMIN_REFRESH_NODE', () => refreshToken(adminPair.refreshToken), 15000);
     if (refreshDiag.ok) await diagnosticStage('ADMIN_PROFILE_REFRESHED_TOKEN', () => profile(refreshDiag.value.idToken, 'node_refresh'), 15000);
