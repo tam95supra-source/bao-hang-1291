@@ -1,5 +1,6 @@
 name: Patch dashboard V5 runtime authority
 
+# one-shot branch patch; remove after commit
 on:
   push:
     branches: [fix/dashboard-v5-runtime-authority]
