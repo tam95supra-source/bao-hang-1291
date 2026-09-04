@@ -88,11 +88,30 @@ async function auditEnglishUi(page,role,route){
   await page.waitForFunction(()=>document.documentElement.lang==='vi',{timeout:8000});
   console.log('WEB_I18N_ROUTE=PASS role='+role+' route='+route);
 }
+async function assertDashboardRenderer(page,route){
+  if(route==='overview'){
+    await page.waitForSelector('.v5-root.v5-overview',{timeout:12000});
+    const old=await page.locator('.workflow-v3-dashboard,.v4-report').count();
+    if(old)throw new Error('DASHBOARD_RENDERER_REGRESSION_overview_old_renderer='+old);
+    const text=(await page.locator('#content').innerText()).replace(/\s+/g,' ');
+    if(!/Cần xử lý|Needs action/.test(text)||!/SKU ưu tiên|Priority SKUs/.test(text))throw new Error('DASHBOARD_V5_OVERVIEW_MARKERS_MISSING:'+safe(text));
+    console.log('DASHBOARD_V5_RUNTIME=PASS route=overview');
+  }
+  if(route==='reports'){
+    await page.waitForSelector('.v5-root.v5-report',{timeout:12000});
+    const old=await page.locator('.workflow-v3-dashboard,.v4-report').count();
+    if(old)throw new Error('DASHBOARD_RENDERER_REGRESSION_reports_old_renderer='+old);
+    const text=(await page.locator('#content').innerText()).replace(/\s+/g,' ');
+    if(!/Tổng hợp|Summary/.test(text)||!/Tốc độ & SLA|Speed & SLA/.test(text)||!/Cơ cấu kết quả|Outcome mix/.test(text))throw new Error('DASHBOARD_V5_REPORT_MARKERS_MISSING:'+safe(text));
+    console.log('DASHBOARD_V5_RUNTIME=PASS route=reports');
+  }
+}
 async function directLoads(page,role){
   for(const route of EXPECTED[role].tabs){
     await page.goto(SITE+'#/'+route,{waitUntil:'domcontentloaded'});
     await page.waitForFunction(r=>location.hash==='#/'+r,route,{timeout:10000});
     await verifyShell(page,role,true);
+    await assertDashboardRenderer(page,route);
     await auditEnglishUi(page,role,route);
   }
   console.log('WEB_SHELL_DIRECT_LOAD_ROLE=PASS role='+role+' routes='+EXPECTED[role].tabs.length);
@@ -101,6 +120,7 @@ async function clickRoute(page,route,role){
   await page.locator('.tabs button[data-tab="'+route+'"]').click();
   await page.waitForFunction(r=>location.hash==='#/'+r,route,{timeout:10000});
   await verifyShell(page,role,false);
+  await assertDashboardRenderer(page,route);
 }
 async function navigationStability(page){
   for(const route of ['events','reports','events','overview','users','services','reports'])await clickRoute(page,route,'ADMIN');

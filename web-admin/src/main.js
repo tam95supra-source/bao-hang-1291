@@ -1,4 +1,5 @@
 import './style.css';
+import './workflow-dashboard-v5.js';
 // Deployment trigger: active-staff preservation guard verified.
 import { createClient } from './backend-runtime.js';
 import { installI18n, getLocale } from './i18n.js';
