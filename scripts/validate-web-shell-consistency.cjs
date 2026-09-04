@@ -5,6 +5,8 @@ const main = fs.readFileSync('web-admin/src/main.js', 'utf8');
 const ops = fs.readFileSync('web-admin/src/ops-console.js', 'utf8');
 const style = fs.readFileSync('web-admin/src/style.css', 'utf8');
 const i18n = fs.readFileSync('web-admin/src/i18n.js', 'utf8');
+const index = fs.readFileSync('web-admin/index.html', 'utf8');
+const lazyPolicy = fs.readFileSync('web-admin/src/lazy-route-policy.js', 'utf8');
 
 const requiredMain = [
   "['overview','Tổng quan hôm nay','VẬN HÀNH']",
@@ -41,4 +43,13 @@ for (const marker of ['.nav-section-label', '.tabs button::before', 'content: no
 for (const marker of ["['VẬN HÀNH','OPERATIONS']", "['QUẢN LÝ','MANAGEMENT']", "['HẠ TẦNG','INFRASTRUCTURE']", "['THIẾT LẬP','SETTINGS']", "['Phiên bản ứng dụng','App versions']"]) {
   if (!i18n.includes(marker)) throw new Error('CANONICAL_NAV_I18N_MISSING:' + marker);
 }
-console.log('WEB_SHELL_STATIC_CONSISTENCY=PASS generation=canonical-v2 lazy_nav_mutation=false legacy_labels=false');
+
+const policyPos = index.indexOf('/src/lazy-route-policy.js');
+const mainPos = index.indexOf('/src/main.js');
+if (policyPos < 0 || mainPos < 0 || policyPos >= mainPos) throw new Error('ACTIVE_ROUTE_LAZY_POLICY_ORDER_INVALID');
+for (const marker of ["mode: 'active-route-only'", 'speculativeWarm: false', 'blockedIdleTimeoutMs: 1800', 'Number(options?.timeout || 0) === 1800']) {
+  if (!lazyPolicy.includes(marker)) throw new Error('ACTIVE_ROUTE_LAZY_POLICY_MISSING:' + marker);
+}
+if (!main.includes("window.requestIdleCallback(warm, { timeout: 1800 })")) throw new Error('SPECULATIVE_WARM_SIGNATURE_CHANGED_REVIEW_REQUIRED');
+
+console.log('WEB_SHELL_STATIC_CONSISTENCY=PASS generation=canonical-v2 lazy_nav_mutation=false legacy_labels=false active_route_lazy=PASS speculative_warm=false');
