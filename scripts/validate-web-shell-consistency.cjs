@@ -7,6 +7,7 @@ const style = fs.readFileSync('web-admin/src/style.css', 'utf8');
 const i18n = fs.readFileSync('web-admin/src/i18n.js', 'utf8');
 const index = fs.readFileSync('web-admin/index.html', 'utf8');
 const lazyPolicy = fs.readFileSync('web-admin/src/lazy-route-policy.js', 'utf8');
+const eventsLanguageGuard = fs.readFileSync('web-admin/src/events-languagechange-stability.js', 'utf8');
 
 const requiredMain = [
   "['overview','Tổng quan hôm nay','VẬN HÀNH']",
@@ -52,4 +53,19 @@ for (const marker of ["mode: 'active-route-only'", 'speculativeWarm: false', 'bl
 }
 if (!main.includes("window.requestIdleCallback(warm, { timeout: 1800 })")) throw new Error('SPECULATIVE_WARM_SIGNATURE_CHANGED_REVIEW_REQUIRED');
 
-console.log('WEB_SHELL_STATIC_CONSISTENCY=PASS generation=canonical-v2 lazy_nav_mutation=false legacy_labels=false active_route_lazy=PASS speculative_warm=false');
+const eventsGuardPos = index.indexOf('/src/events-languagechange-stability.js');
+const workflowPos = index.indexOf('/src/workflow-v3-overrides.js');
+if (eventsGuardPos < 0 || workflowPos < 0 || eventsGuardPos >= workflowPos) throw new Error('EVENTS_LANGUAGE_GUARD_ORDER_INVALID');
+for (const marker of [
+  "event?.type === 'bh:languagechange'",
+  "document.querySelector('.tabs button[data-tab=\"events\"].active')",
+  'nativeDispatchEvent.call(this, event)',
+  "__BH_EVENTS_LANGUAGECHANGE_STABILITY__ = 'dom-translated-before-event-v1'",
+]) {
+  if (!eventsLanguageGuard.includes(marker)) throw new Error('EVENTS_LANGUAGE_GUARD_MISSING:' + marker);
+}
+const translatePos = i18n.indexOf('translateTree(document.body);');
+const languageEventPos = i18n.indexOf("window.dispatchEvent(new CustomEvent('bh:languagechange'");
+if (translatePos < 0 || languageEventPos < 0 || translatePos >= languageEventPos) throw new Error('I18N_TRANSLATE_BEFORE_LANGUAGE_EVENT_REQUIRED');
+
+console.log('WEB_SHELL_STATIC_CONSISTENCY=PASS generation=canonical-v2 lazy_nav_mutation=false legacy_labels=false active_route_lazy=PASS speculative_warm=false events_languagechange_guard=PASS');
