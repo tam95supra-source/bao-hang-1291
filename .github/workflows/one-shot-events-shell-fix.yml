@@ -1,0 +1,62 @@
+name: One-shot Events shell reference fix
+
+on:
+  push:
+    branches:
+      - fix/events-language-rerender-shell-reference
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/events-language-rerender-shell-reference
+      - name: Patch stale Events shell reference and regression gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          src = Path('web-admin/src/workflow-v3-overrides.js')
+          text = src.read_text(encoding='utf-8')
+          old = "  </section>`;\n  $('#wv3EventsRefresh').onclick = () => void loadEventsBoard(true);"
+          new = "  </section>`;\n  shell = $('#workflowV3Events'); if (!shell) return null;\n  $('#wv3EventsRefresh').onclick = () => void loadEventsBoard(true);"
+          if text.count(old) != 1:
+              raise SystemExit(f'EVENTS_SHELL_PATCH_SIGNATURE_COUNT={text.count(old)}')
+          src.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          gate = Path('scripts/validate-web-shell-consistency.cjs')
+          g = gate.read_text(encoding='utf-8')
+          anchor = "const lazyPolicy = fs.readFileSync('web-admin/src/lazy-route-policy.js', 'utf8');\n"
+          if "const workflowV3 = fs.readFileSync('web-admin/src/workflow-v3-overrides.js', 'utf8');" not in g:
+              if anchor not in g:
+                  raise SystemExit('EVENTS_SHELL_GATE_IMPORT_ANCHOR_MISSING')
+              g = g.replace(anchor, anchor + "const workflowV3 = fs.readFileSync('web-admin/src/workflow-v3-overrides.js', 'utf8');\n", 1)
+          check_anchor = "if (!main.includes(\"window.requestIdleCallback(warm, { timeout: 1800 })\")) throw new Error('SPECULATIVE_WARM_SIGNATURE_CHANGED_REVIEW_REQUIRED');\n"
+          check = """
+const eventsBuildPos = workflowV3.indexOf('content.innerHTML = `<section id=\\\"workflowV3Events\\\"');
+const eventsRequeryPos = workflowV3.indexOf("shell = $('#workflowV3Events'); if (!shell) return null;", eventsBuildPos);
+const eventsScopedQueryPos = workflowV3.indexOf("$$('[data-wv3-bucket]', shell)", eventsBuildPos);
+if (eventsBuildPos < 0 || eventsRequeryPos < 0 || eventsScopedQueryPos < 0 || !(eventsBuildPos < eventsRequeryPos && eventsRequeryPos < eventsScopedQueryPos)) {
+  throw new Error('EVENTS_SHELL_REFERENCE_REQUERY_GUARD_MISSING');
+}
+"""
+          if 'EVENTS_SHELL_REFERENCE_REQUERY_GUARD_MISSING' not in g:
+              if check_anchor not in g:
+                  raise SystemExit('EVENTS_SHELL_GATE_CHECK_ANCHOR_MISSING')
+              g = g.replace(check_anchor, check_anchor + check, 1)
+          gate.write_text(g, encoding='utf-8')
+          PY
+          rm -f .github/workflows/one-shot-events-shell-fix.yml
+          git diff --check
+          node scripts/validate-web-shell-consistency.cjs
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add web-admin/src/workflow-v3-overrides.js scripts/validate-web-shell-consistency.cjs .github/workflows/one-shot-events-shell-fix.yml
+          git commit -m 'fix(web): refresh Events shell reference after render'
+          git push origin HEAD:fix/events-language-rerender-shell-reference
