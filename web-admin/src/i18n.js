@@ -743,20 +743,28 @@ export function translateTree(root = document.body) {
   }
 }
 
+function setTextIfChanged(node, value) {
+  if (node && node.textContent !== value) node.textContent = value;
+}
+
+function setAttributeIfChanged(node, name, value) {
+  if (node && node.getAttribute(name) !== value) node.setAttribute(name, value);
+}
+
 function updateSwitcherLabels() {
   const wrap = document.querySelector('.bh-language-switcher');
   if (!wrap) return;
   const english = language === 'en';
   const label = wrap.querySelector('span');
   const select = wrap.querySelector('select');
-  if (label) label.textContent = english ? 'Language' : 'Ngôn ngữ';
+  setTextIfChanged(label, english ? 'Language' : 'Ngôn ngữ');
   if (select) {
-    select.setAttribute('aria-label', english ? 'Interface language' : 'Ngôn ngữ giao diện');
+    setAttributeIfChanged(select, 'aria-label', english ? 'Interface language' : 'Ngôn ngữ giao diện');
     const vi = select.querySelector('option[value="vi"]');
     const en = select.querySelector('option[value="en"]');
-    if (vi) vi.textContent = english ? 'Vietnamese' : 'Tiếng Việt Nam';
-    if (en) en.textContent = english ? 'English' : 'Tiếng Anh';
-    select.value = language;
+    setTextIfChanged(vi, english ? 'Vietnamese' : 'Tiếng Việt Nam');
+    setTextIfChanged(en, english ? 'English' : 'Tiếng Anh');
+    if (select.value !== language) select.value = language;
   }
 }
 
