@@ -514,10 +514,10 @@ async function renderTab() {
     overview: () => requireRenderer(wv2.overview, 'Tổng quan hôm nay')(),
     events: () => requireRenderer(wv2.events, 'Xử lý báo thiếu')(),
     picker: renderPicker,
-    reports: () => requireRenderer(wv2.reports, 'Báo cáo vận hành')(),
+    reports: () => requireRenderer(globalThis.__BH_REPORT_V4_RENDER__ || wv2.reports, 'Báo cáo vận hành')(),
     sku: renderSku,
     users: () => requireRenderer(ops.users, 'Nhân sự & tài khoản')(),
-    devices: renderDevices,
+    devices: () => requireRenderer(globalThis.__BH_DEVICE_V4_RENDER__ || renderDevices, 'Thiết bị & thông báo')(),
     services: () => requireRenderer(ops.services, 'Hạ tầng & chi phí')(),
     server: () => requireRenderer(ops.server, 'Hạ tầng & chi phí')(),
     logs: renderLogs,
@@ -829,7 +829,7 @@ async function renderLogs() {
     <div id="logPageMessage" class="message" hidden></div>
     <article class="card"><strong>Lưu trữ log chẩn đoán</strong><p>File log Web và thiết bị được lưu trực tiếp trong thư mục Google Drive của Báo hàng 1291. Hệ thống không lưu bản sao hoặc chỉ mục log mới trên Neon/service. Log tự động chỉ tạo khi có lỗi đáng chú ý và được gộp theo chu kỳ để tránh tạo quá nhiều file.</p><p class="muted">Nút “Tạo file log đầy đủ” gom thông tin chẩn đoán của phiên Web hiện tại thành một file, lưu lên Google Drive và đồng thời tải file về máy.</p></article>
     <div class="panel-grid"><section><h3>Log Web</h3><div id="webLogs"><div class="card muted">Đang tải…</div></div></section><section><h3>Log thiết bị</h3><div id="logs"><div class="card muted">Đang tải…</div></div></section><section><h3>Lịch sử thao tác</h3><div id="audit"><div class="card muted">Đang tải…</div></div></section></div>`;
-  $('#refreshLogs').onclick = () => void renderLogs();
+  $('#refreshLogs').onclick = () => { const pager=globalThis.__BH_WORKFLOW_V3_LOG_PAGER__; if(pager?.refresh) void pager.refresh(); else void renderLogs(); };
   $('#createFullLog').onclick = async () => {
     const button = $('#createFullLog');
     button.disabled = true;
@@ -837,6 +837,7 @@ async function renderLogs() {
     try {
       const result = await createWebDiagnosticLog();
       await renderLogs();
+      await globalThis.__BH_WORKFLOW_V3_LOG_PAGER__?.refresh?.();
       message('#logPageMessage', `Đã tạo file log đầy đủ: ${result.file_name || 'Google Drive'}.`, 'good');
       if (result.file_id) await downloadWebLog(result.file_id);
     } catch (error) {
@@ -847,6 +848,10 @@ async function renderLogs() {
       if (nextButton) nextButton.disabled = false;
     }
   };
+
+  // Workflow V4 makes the server-paged module the single owner of log-list reads.
+  // This removes duplicate Drive/App Script requests while keeping manual log creation in main.js.
+  if (globalThis.__BH_WORKFLOW_V4_LOG_PAGER_PENDING__) return;
 
   const [deviceResult, auditResult, webResult] = await Promise.allSettled([
     api('list-logs',{limit:100}),

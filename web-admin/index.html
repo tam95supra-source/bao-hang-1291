@@ -14,6 +14,8 @@
     <script type="module" src="/src/auth-stability.js"></script>
     <!-- Workflow V3 owns active shortage handling, operational timing, overview and reports. -->
     <script type="module" src="/src/workflow-v3-overrides.js"></script>
+    <!-- Business-first performance/report UX. Loaded before main so route delegates are ready on cold auth restore. -->
+    <script type="module" src="/src/workflow-v4-ux.js"></script>
     <!-- Active-route-only lazy policy prevents speculative modules from touching unrelated route DOM. -->
     <script type="module" src="/src/lazy-route-policy.js"></script>
     <script type="module" src="/src/main.js"></script>
