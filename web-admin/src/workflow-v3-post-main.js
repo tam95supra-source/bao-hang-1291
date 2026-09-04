@@ -198,6 +198,9 @@ async function loadSection(kind) {
   state.loading = true;
   const root = $(SECTION_CONFIG[kind].root);
   if (root) root.innerHTML = `<div class="wv3-server-page"><div class="card muted">${esc(tr('Đang tải…','Loading…'))}</div></div>`;
+  const slowTimer = kind === 'audit' ? null : setTimeout(() => {
+    if (root && routeActive() && state.loading) root.innerHTML = `<div class="wv3-server-page"><div class="card muted"><b>${esc(tr('Google Drive đang phản hồi chậm','Google Drive is responding slowly'))}</b><p>${esc(tr('Trang vẫn dùng được. Có thể tiếp tục chờ hoặc bấm Làm mới để thử lại.','The page remains usable. Keep waiting or press Refresh to retry.'))}</p></div></div>`;
+  }, 5000);
   try {
     let data;
     if (kind === 'audit') {
@@ -219,6 +222,7 @@ async function loadSection(kind) {
   } catch (error) {
     if (root && routeActive()) root.innerHTML = `<div class="wv3-server-page"><div class="message" data-type="error">${esc(error?.message || String(error))}</div></div>`;
   } finally {
+    if (slowTimer) clearTimeout(slowTimer);
     state.loading = false;
   }
 }
@@ -260,7 +264,8 @@ function scheduleInstall() {
       const root = $(cfg.root);
       if (!root) continue;
       const ours = root.firstElementChild?.classList?.contains('wv3-server-page');
-      if (!ours || !pagerState[kind].loaded) void loadSection(kind);
+      if (!ours && pagerState[kind].loaded) { renderSection(kind); continue; }
+      if (!pagerState[kind].loaded) void loadSection(kind);
     }
   });
 }
