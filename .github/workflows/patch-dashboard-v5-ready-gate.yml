@@ -1,0 +1,85 @@
+name: Patch dashboard V5 ready-state gate
+
+on:
+  push:
+    branches: [fix/dashboard-v5-ready-state-gate]
+    paths:
+      - '.github/workflows/patch-dashboard-v5-ready-gate.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/dashboard-v5-ready-state-gate
+          fetch-depth: 0
+      - name: Wait for completed V5 content, not skeleton only
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('scripts/web-shell-consistency-e2e.cjs')
+          s=p.read_text()
+          old="""async function assertDashboardRenderer(page,route){
+  if(route==='overview'){
+    await page.waitForSelector('.v5-root.v5-overview',{timeout:12000});
+    const old=await page.locator('.workflow-v3-dashboard,.v4-report').count();
+    if(old)throw new Error('DASHBOARD_RENDERER_REGRESSION_overview_old_renderer='+old);
+    const text=(await page.locator('#content').innerText()).replace(/\\s+/g,' ');
+    if(!/Cần xử lý|Needs action/.test(text)||!/SKU ưu tiên|Priority SKUs/.test(text))throw new Error('DASHBOARD_V5_OVERVIEW_MARKERS_MISSING:'+safe(text));
+    console.log('DASHBOARD_V5_RUNTIME=PASS route=overview');
+  }
+  if(route==='reports'){
+    await page.waitForSelector('.v5-root.v5-report',{timeout:12000});
+    const old=await page.locator('.workflow-v3-dashboard,.v4-report').count();
+    if(old)throw new Error('DASHBOARD_RENDERER_REGRESSION_reports_old_renderer='+old);
+    const text=(await page.locator('#content').innerText()).replace(/\\s+/g,' ');
+    if(!/Tổng hợp|Summary/.test(text)||!/Tốc độ & SLA|Speed & SLA/.test(text)||!/Cơ cấu kết quả|Outcome mix/.test(text))throw new Error('DASHBOARD_V5_REPORT_MARKERS_MISSING:'+safe(text));
+    console.log('DASHBOARD_V5_RUNTIME=PASS route=reports');
+  }
+}
+"""
+          new="""async function assertDashboardRenderer(page,route){
+  if(route==='overview'){
+    await page.waitForSelector('.v5-root.v5-overview',{timeout:12000});
+    await page.waitForFunction(()=>{const root=document.querySelector('.v5-root.v5-overview'),text=(document.querySelector('#content')?.innerText||'').replace(/\\s+/g,' ');return Boolean(root)&&!/Đang tải|Loading/.test(text)&&(/Cần xử lý|Needs action/.test(text))&&(/SKU ưu tiên|Priority SKUs/.test(text));},null,{timeout:12000});
+    const old=await page.locator('.workflow-v3-dashboard,.v4-report').count();
+    if(old)throw new Error('DASHBOARD_RENDERER_REGRESSION_overview_old_renderer='+old);
+    const skeleton=await page.locator('.v5-root.v5-overview .v5-skeleton').count();
+    if(skeleton)throw new Error('DASHBOARD_V5_OVERVIEW_STILL_LOADING='+skeleton);
+    console.log('DASHBOARD_V5_RUNTIME=PASS route=overview ready=true legacy=false');
+  }
+  if(route==='reports'){
+    await page.waitForSelector('.v5-root.v5-report',{timeout:12000});
+    await page.waitForFunction(()=>{const root=document.querySelector('.v5-root.v5-report'),text=(document.querySelector('#content')?.innerText||'').replace(/\\s+/g,' ');return Boolean(root)&&!/Đang tải|Loading/.test(text)&&(/Tổng hợp|Summary/.test(text))&&(/Tốc độ & SLA|Speed & SLA/.test(text))&&(/Cơ cấu kết quả|Outcome mix/.test(text));},null,{timeout:12000});
+    const old=await page.locator('.workflow-v3-dashboard,.v4-report').count();
+    if(old)throw new Error('DASHBOARD_RENDERER_REGRESSION_reports_old_renderer='+old);
+    const skeleton=await page.locator('.v5-root.v5-report .v5-skeleton').count();
+    if(skeleton)throw new Error('DASHBOARD_V5_REPORT_STILL_LOADING='+skeleton);
+    console.log('DASHBOARD_V5_RUNTIME=PASS route=reports ready=true legacy=false');
+  }
+}
+"""
+          assert s.count(old)==1
+          p.write_text(s.replace(old,new,1))
+          p=Path('web-admin/index.html')
+          s=p.read_text()
+          old='    <!-- Overview + Reports V5 is imported directly by main.js to guarantee renderer authority. -->\n'
+          new='    <!-- Overview + Reports V5 is imported directly by main.js; production acceptance waits for the fully rendered V5 ready state. -->\n'
+          assert s.count(old)==1
+          p.write_text(s.replace(old,new,1))
+          PY
+          node --check scripts/web-shell-consistency-e2e.cjs
+          git diff --check
+      - name: Commit patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/web-shell-consistency-e2e.cjs web-admin/index.html
+          git diff --cached --quiet && exit 0
+          git commit -m 'test(web): require fully rendered dashboard V5 in production'
+          git push origin HEAD:fix/dashboard-v5-ready-state-gate
