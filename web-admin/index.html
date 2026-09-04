@@ -16,7 +16,7 @@
     <script type="module" src="/src/workflow-v3-overrides.js"></script>
     <!-- V4 keeps devices/log performance behavior already accepted by OWNER. -->
     <script type="module" src="/src/workflow-v4-ux.js"></script>
-    <!-- Overview + Reports V5 is imported directly by main.js to guarantee renderer authority. -->
+    <!-- Overview + Reports V5 is imported directly by main.js; production acceptance waits for fully rendered V5 content. -->
     <!-- Active-route-only lazy policy prevents speculative modules from touching unrelated route DOM. -->
     <script type="module" src="/src/lazy-route-policy.js"></script>
     <script type="module" src="/src/main.js"></script>
