@@ -12,16 +12,20 @@
     <noscript>Cần bật JavaScript để sử dụng Web vận hành Báo hàng 1291.</noscript>
     <!-- i18n DOM observers must remain idempotent; enforced by the production Web gate. -->
     <script type="module" src="/src/auth-stability.js"></script>
-    <!-- Workflow V3 owns active shortage handling, operational timing, overview and reports. -->
+    <!-- Workflow V3 owns active shortage handling and operational timing. -->
     <script type="module" src="/src/workflow-v3-overrides.js"></script>
-    <!-- Business-first performance/report UX. Loaded before main so route delegates are ready on cold auth restore. -->
+    <!-- V4 keeps devices/log performance behavior already accepted by OWNER. -->
     <script type="module" src="/src/workflow-v4-ux.js"></script>
+    <!-- V5 owns only Overview + Reports visual hierarchy and business-density. -->
+    <script type="module" src="/src/workflow-dashboard-v5.js"></script>
     <!-- Active-route-only lazy policy prevents speculative modules from touching unrelated route DOM. -->
     <script type="module" src="/src/lazy-route-policy.js"></script>
     <script type="module" src="/src/main.js"></script>
     <!-- Final boundary: removed receive/claim actions + server-paged diagnostics. -->
     <script type="module" src="/src/workflow-v3-post-main.js"></script>
-    <!-- Loaded last so V4 remains authoritative after legacy language-change timers settle. -->
+    <!-- V4 stays authoritative for Devices after legacy language-change timers settle. -->
     <script type="module" src="/src/workflow-v4-i18n-guard.js"></script>
+    <!-- Loaded last so Overview/Reports V5 wins after V3/V4 language rerenders. -->
+    <script type="module" src="/src/workflow-dashboard-v5-i18n-guard.js"></script>
   </body>
 </html>

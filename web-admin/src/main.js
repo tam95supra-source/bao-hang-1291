@@ -511,10 +511,10 @@ async function renderTab() {
     return renderer;
   };
   const handlers = {
-    overview: () => requireRenderer(wv2.overview, 'Tổng quan hôm nay')(),
+    overview: () => requireRenderer(globalThis.__BH_OVERVIEW_V5_RENDER__ || wv2.overview, 'Tổng quan hôm nay')(),
     events: () => requireRenderer(wv2.events, 'Xử lý báo thiếu')(),
     picker: renderPicker,
-    reports: () => requireRenderer(globalThis.__BH_REPORT_V4_RENDER__ || wv2.reports, 'Báo cáo vận hành')(),
+    reports: () => requireRenderer(globalThis.__BH_REPORT_V5_RENDER__ || globalThis.__BH_REPORT_V4_RENDER__ || wv2.reports, 'Báo cáo vận hành')(),
     sku: renderSku,
     users: () => requireRenderer(ops.users, 'Nhân sự & tài khoản')(),
     devices: () => requireRenderer(globalThis.__BH_DEVICE_V4_RENDER__ || renderDevices, 'Thiết bị & thông báo')(),
