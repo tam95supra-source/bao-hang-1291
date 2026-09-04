@@ -1,12 +1,16 @@
 'use strict';
 const fs=require('fs');
+const path=require('path');
 const {execFileSync}=require('child_process');
-const index=fs.readFileSync('web-admin/index.html','utf8');
-const main=fs.readFileSync('web-admin/src/main.js','utf8');
-const v4=fs.readFileSync('web-admin/src/workflow-v4-ux.js','utf8');
-const css=fs.readFileSync('web-admin/src/workflow-v4-ux.css','utf8');
-const pager=fs.readFileSync('web-admin/src/workflow-v3-post-main.js','utf8');
-execFileSync(process.execPath,['--check','web-admin/src/workflow-v4-ux.js'],{stdio:'inherit'});
+const root=path.resolve(__dirname,'..');
+const file=(p)=>path.join(root,p);
+const read=(p)=>fs.readFileSync(file(p),'utf8');
+const index=read('web-admin/index.html');
+const main=read('web-admin/src/main.js');
+const v4=read('web-admin/src/workflow-v4-ux.js');
+const css=read('web-admin/src/workflow-v4-ux.css');
+const pager=read('web-admin/src/workflow-v3-post-main.js');
+execFileSync(process.execPath,['--check',file('web-admin/src/workflow-v4-ux.js')],{stdio:'inherit'});
 const v4Pos=index.indexOf('/src/workflow-v4-ux.js'), mainPos=index.indexOf('/src/main.js');
 if(v4Pos<0||mainPos<0||v4Pos>=mainPos)throw new Error('V4_LOAD_ORDER_INVALID');
 for(const marker of [
