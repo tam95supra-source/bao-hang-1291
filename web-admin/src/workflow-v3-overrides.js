@@ -164,6 +164,7 @@ function ensureEventsShell() {
     </div>
     <div id="wv3InventoryAlert" class="fast-warning wv3-inventory-alert" hidden></div><div class="fast-workspace"><div class="fast-list" id="wv3EventsList" aria-live="polite"><div class="fast-empty-row">${esc(tr('Đang tải yêu cầu báo thiếu…','Loading shortage requests…'))}</div></div><aside class="fast-detail" id="wv3EventsDetail"><div class="fast-empty"><strong>${esc(tr('Chọn một SKU','Select an SKU'))}</strong><span>${esc(tr('Chi tiết và thao tác sẽ hiển thị tại đây.','Details and actions appear here.'))}</span></div></aside></div>
   </section>`;
+  shell = $('#workflowV3Events'); if (!shell) return null;
   $('#wv3EventsRefresh').onclick = () => void loadEventsBoard(true);
   $$('[data-wv3-bucket]', shell).forEach((b) => b.onclick = () => {
     eventsState.bucket = b.dataset.wv3Bucket; eventsState.selectedId='';
