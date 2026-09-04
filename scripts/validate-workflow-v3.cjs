@@ -1,0 +1,22 @@
+const fs = require('fs');
+const path = require('path');
+const root = path.resolve(__dirname, '..');
+const index = fs.readFileSync(path.join(root, 'web-admin/index.html'), 'utf8');
+const ui = fs.readFileSync(path.join(root, 'web-admin/src/workflow-v3-overrides.js'), 'utf8');
+const sql = fs.readFileSync(path.join(root, 'ops/neon/20260904_workflow_v3_no_claim.sql'), 'utf8');
+function must(condition, message) { if (!condition) { console.error(`WORKFLOW_V3_GUARD=FAIL ${message}`); process.exit(1); } }
+const overridePos = index.indexOf('/src/workflow-v3-overrides.js');
+const mainPos = index.indexOf('/src/main.js');
+must(overridePos >= 0 && mainPos >= 0 && overridePos < mainPos, 'override must load before main.js');
+for (const label of ['Đang xử lý','Đã có hàng','Đã bỏ qua','Picker thu hồi']) must(ui.includes(label), `missing app-matched tab: ${label}`);
+for (const removed of ['data-wv3-action="claim"','data-wv3-action="reassign"','Nhận xử lý</button>','Điều phối lại</button>']) must(!ui.includes(removed), `removed receive-flow UI returned: ${removed}`);
+for (const timing of ['Tự động cho phép bỏ qua','Nhắc team Inventory xử lý','Nhắc Picker xác nhận']) must(ui.includes(timing), `missing timing control: ${timing}`);
+must(ui.includes('api_issue_history_page_rpc'), 'report history must use server pagination');
+must(ui.includes('[25,50,100]'), 'pagination page sizes missing');
+must(ui.includes('__BH_FAST_ISSUE_SIGNAL__'), 'card-only realtime protection missing');
+must(sql.includes('RECEIVE_FLOW_REMOVED'), 'backend receive-flow guard missing');
+must(sql.includes('Đã quá hạn Inventory xử lí lúc '), 'auto-skip deadline note missing');
+must(sql.includes('api_reports_summary_v2_rpc'), 'operations report v2 missing');
+must(sql.includes('api_issue_history_page_rpc'), 'history pagination RPC missing');
+must(sql.includes('api_audit_history_page_rpc'), 'audit pagination RPC missing');
+console.log('WORKFLOW_V3_GUARD=PASS tabs=4 timings=3 claim_ui=0 server_pagination=PASS realtime=PASS');
