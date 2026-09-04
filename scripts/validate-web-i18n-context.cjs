@@ -55,11 +55,23 @@ const required=[
   "const PHRASE_EN = new Map([",
   "if (EN.has(core)) return leading + EN.get(core) + trailing;",
   "getMissingTranslations: () => [...missingSeen]",
-  "label.textContent = english ? 'Language' : 'Ngôn ngữ'",
+  "function setTextIfChanged(node, value)",
+  "node.textContent !== value",
+  "function setAttributeIfChanged(node, name, value)",
+  "node.getAttribute(name) !== value",
+  "setTextIfChanged(label, english ? 'Language' : 'Ngôn ngữ')",
   "'Vietnamese' : 'Tiếng Việt Nam'",
   "'English' : 'Tiếng Anh'",
+  "if (select.value !== language) select.value = language",
 ];
 for(const marker of required)if(!i18n.includes(marker))throw new Error('I18N_ENGINE_MARKER_MISSING:'+marker);
+
+const mutationLoopRisks=[
+  "if (label) label.textContent = english ? 'Language' : 'Ngôn ngữ'",
+  "if (vi) vi.textContent = english ? 'Vietnamese' : 'Tiếng Việt Nam'",
+  "if (en) en.textContent = english ? 'English' : 'Tiếng Anh'",
+];
+for(const marker of mutationLoopRisks)if(i18n.includes(marker))throw new Error('I18N_MUTATION_LOOP_RISK_PRESENT:'+marker);
 
 const logger=fs.readFileSync('web-admin/src/web-logger.js','utf8');
 for(const forbidden of ['route_change','visibility_change','ui_click','console.warn =','page_start'])if(logger.includes(forbidden))throw new Error('WEB_LOG_SPAM_PATH_PRESENT:'+forbidden);
@@ -75,5 +87,5 @@ for(const marker of ['TẠO FILE LOG ĐẦY ĐỦ','createWebDiagnosticLog()','P
 if(main.includes('setTimeout(() => void flushWebLogs(), 1500)'))throw new Error('LOGIN_LOG_SPAM_FLUSH_PRESENT');
 
 console.log('WEB_I18N_STATIC_COVERAGE=PASS files='+files.length+' missing=0');
-console.log('WEB_I18N_CONTEXT_GATE=PASS bad_context=0');
+console.log('WEB_I18N_CONTEXT_GATE=PASS bad_context=0 mutation_loop_risk=0');
 console.log('WEB_LOG_POLICY_GATE=PASS sparse_auto=true manual=true malformed_html_guard=true drive_list=true');
