@@ -1,0 +1,49 @@
+name: Patch dashboard V5 runtime authority
+
+on:
+  push:
+    branches: [fix/dashboard-v5-runtime-authority]
+    paths:
+      - '.github/workflows/patch-dashboard-v5-runtime.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/dashboard-v5-runtime-authority
+          fetch-depth: 0
+      - name: Patch deterministic V5 runtime and production assertions
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('web-admin/src/main.js');s=p.read_text();marker="import './style.css';\n";inject="import './style.css';\nimport './workflow-dashboard-v5.js';\n"
+          if "import './workflow-dashboard-v5.js';" not in s:
+              assert s.count(marker)==1;s=s.replace(marker,inject,1)
+          p.write_text(s)
+          p=Path('web-admin/index.html');s=p.read_text();old='    <!-- V5 owns only Overview + Reports visual hierarchy and business-density. -->\n    <script type="module" src="/src/workflow-dashboard-v5.js"></script>\n';assert s.count(old)==1;s=s.replace(old,'    <!-- Overview + Reports V5 is imported directly by main.js to guarantee renderer authority. -->\n',1);p.write_text(s)
+          p=Path('scripts/validate-dashboard-v5.cjs');s=p.read_text();old="const modulePos=index.indexOf('/src/workflow-dashboard-v5.js'),mainPos=index.indexOf('/src/main.js'),v4Guard=index.indexOf('/src/workflow-v4-i18n-guard.js'),v5Guard=index.indexOf('/src/workflow-dashboard-v5-i18n-guard.js');if(modulePos<0||mainPos<0||modulePos>=mainPos)throw new Error('DASHBOARD_V5_MODULE_ORDER_INVALID');if(v5Guard<=v4Guard)throw new Error('DASHBOARD_V5_I18N_ORDER_INVALID');";new="const mainPos=index.indexOf('/src/main.js'),v4Guard=index.indexOf('/src/workflow-v4-i18n-guard.js'),v5Guard=index.indexOf('/src/workflow-dashboard-v5-i18n-guard.js');if(mainPos<0)throw new Error('DASHBOARD_V5_MAIN_ENTRY_MISSING');if(index.includes('/src/workflow-dashboard-v5.js'))throw new Error('DASHBOARD_V5_DUPLICATE_TOP_LEVEL_ENTRY');if(!main.includes(\"import './workflow-dashboard-v5.js';\"))throw new Error('DASHBOARD_V5_DIRECT_IMPORT_MISSING');if(v5Guard<=v4Guard)throw new Error('DASHBOARD_V5_I18N_ORDER_INVALID');";assert s.count(old)==1;s=s.replace(old,new,1);p.write_text(s)
+          p=Path('scripts/web-shell-consistency-e2e.cjs');s=p.read_text();anchor="async function directLoads(page,role){\n";fn="""async function assertDashboardRenderer(page,route){\n  if(route==='overview'){\n    await page.waitForSelector('.v5-root.v5-overview',{timeout:12000});\n    const old=await page.locator('.workflow-v3-dashboard,.v4-report').count();\n    if(old)throw new Error('DASHBOARD_RENDERER_REGRESSION_overview_old_renderer='+old);\n    const text=(await page.locator('#content').innerText()).replace(/\\s+/g,' ');\n    if(!/Cần xử lý|Needs action/.test(text)||!/SKU ưu tiên|Priority SKUs/.test(text))throw new Error('DASHBOARD_V5_OVERVIEW_MARKERS_MISSING:'+safe(text));\n    console.log('DASHBOARD_V5_RUNTIME=PASS route=overview');\n  }\n  if(route==='reports'){\n    await page.waitForSelector('.v5-root.v5-report',{timeout:12000});\n    const old=await page.locator('.workflow-v3-dashboard,.v4-report').count();\n    if(old)throw new Error('DASHBOARD_RENDERER_REGRESSION_reports_old_renderer='+old);\n    const text=(await page.locator('#content').innerText()).replace(/\\s+/g,' ');\n    if(!/Tổng hợp|Summary/.test(text)||!/Tốc độ & SLA|Speed & SLA/.test(text)||!/Cơ cấu kết quả|Outcome mix/.test(text))throw new Error('DASHBOARD_V5_REPORT_MARKERS_MISSING:'+safe(text));\n    console.log('DASHBOARD_V5_RUNTIME=PASS route=reports');\n  }\n}\n""";
+          if 'async function assertDashboardRenderer' not in s:
+              assert s.count(anchor)==1;s=s.replace(anchor,fn+anchor,1)
+          old="    await verifyShell(page,role,true);\n    await auditEnglishUi(page,role,route);";new="    await verifyShell(page,role,true);\n    await assertDashboardRenderer(page,route);\n    await auditEnglishUi(page,role,route);";assert s.count(old)==1;s=s.replace(old,new,1)
+          old2="  await verifyShell(page,role,false);\n}";new2="  await verifyShell(page,role,false);\n  await assertDashboardRenderer(page,route);\n}";assert s.count(old2)==1;s=s.replace(old2,new2,1);p.write_text(s)
+          PY
+          node --check web-admin/src/main.js
+          node --check web-admin/src/workflow-dashboard-v5.js
+          node --check scripts/web-shell-consistency-e2e.cjs
+          node scripts/validate-dashboard-v5.cjs
+          git diff --check
+      - name: Commit patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add web-admin/src/main.js web-admin/index.html scripts/validate-dashboard-v5.cjs scripts/web-shell-consistency-e2e.cjs
+          git diff --cached --quiet && exit 0
+          git commit -m 'fix(web): make dashboard v5 renderer authoritative at runtime'
+          git push origin HEAD:fix/dashboard-v5-runtime-authority
