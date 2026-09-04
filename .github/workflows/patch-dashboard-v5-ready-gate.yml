@@ -1,5 +1,6 @@
 name: Patch dashboard V5 ready-state gate
 
+# registered on default branch; this branch edit triggers the one-shot patch
 on:
   push:
     branches: [fix/dashboard-v5-ready-state-gate]
@@ -66,8 +67,6 @@ jobs:
 """
           assert s.count(old)==1
           p.write_text(s.replace(old,new,1))
-
-          # Trigger a fresh exact production deploy so the strengthened acceptance is tied to a new SHA.
           p=Path('web-admin/index.html')
           s=p.read_text()
           old='    <!-- Overview + Reports V5 is imported directly by main.js to guarantee renderer authority. -->\n'
