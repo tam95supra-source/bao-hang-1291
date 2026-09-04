@@ -40,7 +40,7 @@ must(sql.includes('api_reports_summary_v2_rpc'), 'operations report v2 missing')
 must(sql.includes('api_issue_history_page_rpc'), 'history pagination RPC missing');
 must(sql.includes('api_audit_history_page_rpc'), 'audit pagination RPC missing');
 
-must(follow.includes('resolved_at=deadline_at'), 'auto-skip resolved_at must equal business deadline');
+must(follow.includes('resolved_at=d.deadline_at'), 'auto-skip resolved_at must equal business deadline');
 must(follow.includes("p.role IN ('ADMIN','ADMIN_INVENT','INVENT')"), 'Inventory reminder must include ADMIN, ADMIN_INVENT and INVENT');
 must(follow.includes("'CẦN XỬ LÝ • SKU '"), 'Inventory reminder title contract missing');
 must(follow.includes('reminder_interval_minutes') && follow.includes('next_inventory_at') && follow.includes('next_auto_skip_at'), 'reminder/scheduler interval corrections missing');
