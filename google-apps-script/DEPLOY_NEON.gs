@@ -927,7 +927,9 @@ function uploadLog_(body) {
 
 function listDeviceLogs_(body) {
   requireUser_(String(body.id_token||''),['ADMIN','ADMIN_INVENT']);
-  const limit=Math.min(100,Math.max(1,Number(body.limit||100)));
+  const requested=Number(body.page_size||body.limit||25);
+  const pageSize=[25,50,100].indexOf(requested)>=0?requested:25;
+  const page=Math.max(1,Math.floor(Number(body.page||1)));
   const files=getLogFolder_().getFiles();
   const rows=[];
   while(files.hasNext()){
@@ -947,7 +949,22 @@ function listDeviceLogs_(body) {
     });
   }
   rows.sort(function(a,b){return String(b.created_at).localeCompare(String(a.created_at));});
-  return {ok:true,logs:rows.slice(0,limit),retention_days:BH_DEVICE_LOG_RETENTION_DAYS,storage:'GOOGLE_DRIVE_ONLY'};
+  const total=rows.length;
+  const totalPages=Math.max(1,Math.ceil(total/pageSize));
+  const safePage=Math.min(page,totalPages);
+  const offset=(safePage-1)*pageSize;
+  return {
+    ok:true,
+    logs:rows.slice(offset,offset+pageSize),
+    total:total,
+    page:safePage,
+    page_size:pageSize,
+    total_pages:totalPages,
+    has_previous:safePage>1,
+    has_next:safePage<totalPages,
+    retention_days:BH_DEVICE_LOG_RETENTION_DAYS,
+    storage:'GOOGLE_DRIVE_ONLY'
+  };
 }
 
 function downloadLog_(body) {
@@ -1039,6 +1056,9 @@ function uploadWebLog_(body) {
 
 function listWebLogs_(body) {
   requireUser_(String(body.id_token||''),['ADMIN','ADMIN_INVENT']);
+  const requested=Number(body.page_size||body.limit||25);
+  const pageSize=[25,50,100].indexOf(requested)>=0?requested:25;
+  const page=Math.max(1,Math.floor(Number(body.page||1)));
   const files=getLogFolder_().getFiles();
   const rows=[];
   while(files.hasNext()){
@@ -1049,7 +1069,22 @@ function listWebLogs_(body) {
     rows.push({id:file.getId(),file_name:name,created_at:file.getDateCreated().toISOString(),updated_at:file.getLastUpdated().toISOString(),compressed_bytes:file.getSize(),mode:String(meta.mode||(name.indexOf('web_manual_')===0?'manual':'auto')),storage:'GOOGLE_DRIVE_ONLY'});
   }
   rows.sort(function(a,b){return String(b.created_at).localeCompare(String(a.created_at));});
-  return {ok:true,logs:rows.slice(0,100),retention_days:BH_WEB_LOG_RETENTION_DAYS,storage:'GOOGLE_DRIVE_ONLY'};
+  const total=rows.length;
+  const totalPages=Math.max(1,Math.ceil(total/pageSize));
+  const safePage=Math.min(page,totalPages);
+  const offset=(safePage-1)*pageSize;
+  return {
+    ok:true,
+    logs:rows.slice(offset,offset+pageSize),
+    total:total,
+    page:safePage,
+    page_size:pageSize,
+    total_pages:totalPages,
+    has_previous:safePage>1,
+    has_next:safePage<totalPages,
+    retention_days:BH_WEB_LOG_RETENTION_DAYS,
+    storage:'GOOGLE_DRIVE_ONLY'
+  };
 }
 
 function downloadWebLog_(body) {
