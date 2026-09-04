@@ -21,5 +21,7 @@
     <script type="module" src="/src/main.js"></script>
     <!-- Final boundary: removed receive/claim actions + server-paged diagnostics. -->
     <script type="module" src="/src/workflow-v3-post-main.js"></script>
+    <!-- Loaded last so V4 remains authoritative after legacy language-change timers settle. -->
+    <script type="module" src="/src/workflow-v4-i18n-guard.js"></script>
   </body>
 </html>
